@@ -4,6 +4,7 @@ pub mod filter;
 pub mod fs_watcher;
 pub mod hierarchy;
 pub mod push;
+pub mod reconcile;
 pub mod relationships;
 pub mod sse_listener;
 pub mod watcher;
