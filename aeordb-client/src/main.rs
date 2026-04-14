@@ -27,6 +27,10 @@ enum Commands {
     /// Port to listen on
     #[arg(short, long, default_value_t = 9400)]
     port: u16,
+
+    /// Path to local state database
+    #[arg(long, env = "AEORDB_CLIENT_DB")]
+    database: Option<String>,
   },
 
   /// Show status of the running instance
@@ -39,6 +43,11 @@ enum Commands {
     #[arg(long)]
     json: bool,
   },
+}
+
+fn default_database_path() -> String {
+  let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+  format!("{}/.aeordb-client/state.aeordb", home)
 }
 
 #[tokio::main]
@@ -54,16 +63,25 @@ async fn main() -> anyhow::Result<()> {
 
   match cli.command {
     None | Some(Commands::Start { .. }) => {
-      let (headless, host, port) = match cli.command {
-        Some(Commands::Start { headless, host, port }) => (headless, host, port),
-        _ => (false, "127.0.0.1".to_string(), 9400),
+      let (headless, host, port, database) = match cli.command {
+        Some(Commands::Start { headless, host, port, database }) => {
+          (headless, host, port, database)
+        }
+        _ => (false, "127.0.0.1".to_string(), 9400, None),
       };
 
       if headless {
         tracing::info!("starting in headless mode");
       }
 
-      let config = ServerConfig { host, port };
+      let database_path = database.unwrap_or_else(default_database_path);
+
+      let config = ServerConfig {
+        host,
+        port,
+        database_path,
+      };
+
       start_server(config).await?;
     }
 
@@ -76,8 +94,12 @@ async fn main() -> anyhow::Result<()> {
           } else {
             let body: serde_json::Value = response.json().await?;
             println!(
-              "Status:  {}\nVersion: {}\nUptime:  {}s",
-              body["status"], body["version"], body["uptime"]
+              "Status:  {}\nVersion: {}\nUptime:  {}s\nClient:  {} ({})",
+              body["status"],
+              body["version"],
+              body["uptime"],
+              body["client_id"].as_str().unwrap_or("unknown"),
+              body["client_name"].as_str().unwrap_or("unknown"),
             );
           }
         }

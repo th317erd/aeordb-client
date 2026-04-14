@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Instant;
 
 use axum::Router;
@@ -7,22 +8,28 @@ use tokio::net::TcpListener;
 
 use crate::api::routes::status::get_status;
 use crate::error::{ClientError, Result};
+use crate::state::StateStore;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppState {
-  pub started_at: Instant,
+  pub started_at:  Instant,
+  pub state_store: Arc<StateStore>,
 }
 
 pub struct ServerConfig {
-  pub host: String,
-  pub port: u16,
+  pub host:          String,
+  pub port:          u16,
+  pub database_path: String,
 }
 
 impl Default for ServerConfig {
   fn default() -> Self {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+
     Self {
-      host: "127.0.0.1".to_string(),
-      port: 9400,
+      host:          "127.0.0.1".to_string(),
+      port:          9400,
+      database_path: format!("{}/.aeordb-client/state.aeordb", home),
     }
   }
 }
@@ -36,11 +43,20 @@ pub fn build_router(state: AppState) -> Router {
     .with_state(state)
 }
 
-pub async fn start_server(config: ServerConfig) -> Result<()> {
-  let state = AppState {
-    started_at: Instant::now(),
-  };
+fn create_app_state(database_path: &str) -> Result<AppState> {
+  let state_store = StateStore::open_or_create(database_path)?;
+  let identity    = state_store.get_or_create_identity()?;
 
+  tracing::info!("client identity: {} ({})", identity.id, identity.name);
+
+  Ok(AppState {
+    started_at:  Instant::now(),
+    state_store: Arc::new(state_store),
+  })
+}
+
+pub async fn start_server(config: ServerConfig) -> Result<()> {
+  let state    = create_app_state(&config.database_path)?;
   let router   = build_router(state);
   let address  = format!("{}:{}", config.host, config.port);
   let listener = TcpListener::bind(&address).await.map_err(|error| {
@@ -61,10 +77,7 @@ pub async fn start_server(config: ServerConfig) -> Result<()> {
 pub async fn start_server_with_handle(
   config: ServerConfig,
 ) -> Result<(SocketAddr, tokio::task::JoinHandle<Result<()>>)> {
-  let state = AppState {
-    started_at: Instant::now(),
-  };
-
+  let state    = create_app_state(&config.database_path)?;
   let router   = build_router(state);
   let address  = format!("{}:{}", config.host, config.port);
   let listener = TcpListener::bind(&address).await.map_err(|error| {
