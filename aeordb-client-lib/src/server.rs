@@ -6,6 +6,7 @@ use axum::Router;
 use axum::routing::{get, post};
 use tokio::net::TcpListener;
 
+use crate::api::routes::conflicts;
 use crate::api::routes::connections;
 use crate::api::routes::status::get_status;
 use crate::api::routes::sync;
@@ -46,7 +47,10 @@ pub fn build_router(state: AppState) -> Router {
     .route("/sync/{id}", get(sync::get_relationship).patch(sync::update_relationship).delete(sync::delete_relationship))
     .route("/sync/{id}/enable", post(sync::enable_relationship))
     .route("/sync/{id}/disable", post(sync::disable_relationship))
-    .route("/sync/{id}/trigger", post(sync::trigger_sync));
+    .route("/sync/{id}/trigger", post(sync::trigger_sync))
+    .route("/conflicts", get(conflicts::list_conflicts))
+    .route("/conflicts/{id}/resolve", post(conflicts::resolve_conflict))
+    .route("/conflicts/resolve-all", post(conflicts::resolve_all_conflicts));
 
   Router::new()
     .nest("/api/v1", api_routes)

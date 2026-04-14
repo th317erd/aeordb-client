@@ -1,3 +1,4 @@
+pub mod conflicts;
 pub mod engine;
 pub mod fs_watcher;
 pub mod push;
