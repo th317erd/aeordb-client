@@ -9,48 +9,22 @@ import { AeorConflicts } from './aeor-conflicts.js';
 class AeorApp extends HTMLElement {
   constructor() {
     super();
-    this.attachShadow({ mode: 'open' });
     this._currentPage = 'dashboard';
   }
 
   connectedCallback() {
     this.render();
-    this.shadowRoot.querySelector('aeor-nav')
-      .addEventListener('navigate', (event) => {
-        this._currentPage = event.detail.page;
-        this.render();
-      });
   }
 
   render() {
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host {
-          display: flex;
-          height: 100vh;
-          width: 100%;
-        }
-
-        aeor-nav {
-          width: 220px;
-          flex-shrink: 0;
-        }
-
-        .content {
-          flex: 1;
-          overflow-y: auto;
-          padding: 24px;
-        }
-      </style>
-
+    this.innerHTML = `
       <aeor-nav active="${this._currentPage}"></aeor-nav>
-      <div class="content">
+      <div class="app-content">
         ${this._renderPage()}
       </div>
     `;
 
-    // Re-attach navigation listener after render
-    this.shadowRoot.querySelector('aeor-nav')
+    this.querySelector('aeor-nav')
       .addEventListener('navigate', (event) => {
         this._currentPage = event.detail.page;
         this.render();

@@ -31,6 +31,107 @@ html, body {
   line-height: 1.5;
 }
 
+/* ==========================================================================
+   App Layout
+   ========================================================================== */
+
+aeor-app {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+}
+
+aeor-nav {
+  width: 220px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  height: 100%;
+}
+
+.app-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+/* ==========================================================================
+   Navigation
+   ========================================================================== */
+
+.nav-logo {
+  padding: 20px 16px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border);
+  letter-spacing: -0.02em;
+}
+
+.nav-logo span {
+  color: var(--accent);
+}
+
+.nav-items {
+  flex: 1;
+  padding: 8px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.15s, color 0.15s;
+  margin-bottom: 2px;
+}
+
+.nav-item:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.nav-item.active {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.nav-icon {
+  width: 16px;
+  text-align: center;
+  font-size: 14px;
+}
+
+.nav-version {
+  padding: 12px 16px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+}
+
+/* ==========================================================================
+   Typography
+   ========================================================================== */
+
+h1 {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+
 a {
   color: var(--accent);
   text-decoration: none;
@@ -41,6 +142,24 @@ a:hover {
   text-decoration: underline;
 }
 
+.mono {
+  font-family: var(--font-mono);
+}
+
+.muted {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.loading {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ==========================================================================
+   Buttons
+   ========================================================================== */
+
 button {
   font-family: var(--font-sans);
   font-size: 14px;
@@ -50,6 +169,7 @@ button {
   background-color: var(--bg-tertiary);
   color: var(--text-primary);
   cursor: pointer;
+  font-weight: 500;
   transition: background-color 0.15s;
 }
 
@@ -67,20 +187,93 @@ button.primary:hover {
   background-color: var(--accent-hover);
 }
 
+button.secondary {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+button.secondary:hover {
+  background-color: var(--border);
+}
+
+button.success {
+  background-color: var(--success);
+  border-color: var(--success);
+  color: #000;
+}
+
+button.danger {
+  background-color: var(--error);
+  border-color: var(--error);
+  color: #fff;
+}
+
+button.danger:hover {
+  opacity: 0.9;
+}
+
+button.small {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* ==========================================================================
+   Forms
+   ========================================================================== */
+
 input, select {
   font-family: var(--font-sans);
   font-size: 14px;
-  padding: 6px 12px;
+  padding: 8px 12px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-tertiary);
   color: var(--text-primary);
   outline: none;
+  width: 100%;
 }
 
 input:focus, select:focus {
   border-color: var(--accent);
 }
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+}
+
+.form-panel {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.form-row {
+  margin-bottom: 12px;
+}
+
+.form-row label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* ==========================================================================
+   Tables
+   ========================================================================== */
 
 table {
   width: 100%;
@@ -103,6 +296,82 @@ td {
   border-bottom: 1px solid var(--bg-tertiary);
 }
 
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   Cards (Dashboard)
+   ========================================================================== */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin: 24px 0;
+}
+
+.card {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.card-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.card-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.card-value.success { color: var(--success); }
+.card-value.warning { color: var(--warning); }
+.card-value.error   { color: var(--error); }
+
+/* ==========================================================================
+   Info Sections
+   ========================================================================== */
+
+.info-section {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--bg-tertiary);
+}
+
+.info-row:last-child {
+  border-bottom: none;
+}
+
+.info-label {
+  color: var(--text-secondary);
+}
+
+.info-value {
+  color: var(--text-primary);
+}
+
+/* ==========================================================================
+   Badges
+   ========================================================================== */
+
 .badge {
   display: inline-block;
   padding: 2px 8px;
@@ -115,3 +384,30 @@ td {
 .badge.warning { background-color: rgba(210, 153, 34, 0.15); color: var(--warning); }
 .badge.error   { background-color: rgba(248, 81, 73, 0.15); color: var(--error); }
 .badge.info    { background-color: rgba(249, 115, 22, 0.15); color: var(--accent); }
+
+/* ==========================================================================
+   Empty States
+   ========================================================================== */
+
+.empty-state {
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 40px;
+  text-align: center;
+}
+
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+
+/* ==========================================================================
+   Page Layout
+   ========================================================================== */
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}

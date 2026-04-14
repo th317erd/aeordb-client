@@ -3,7 +3,6 @@
 class AeorConnections extends HTMLElement {
   constructor() {
     super();
-    this.attachShadow({ mode: 'open' });
     this._connections = [];
     this._showAddForm = false;
   }
@@ -14,103 +13,21 @@ class AeorConnections extends HTMLElement {
   }
 
   render() {
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host { display: block; }
-
-        h1 {
-          font-size: 24px;
-          font-weight: 600;
-          margin-bottom: 24px;
-          color: var(--text-primary, #e6edf3);
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        button {
-          font-size: 14px;
-          padding: 6px 16px;
-          border-radius: 6px;
-          border: 1px solid var(--border, #30363d);
-          background-color: var(--accent, #58a6ff);
-          color: #000;
-          cursor: pointer;
-          font-weight: 500;
-        }
-
-        button:hover { background-color: var(--accent-hover, #79c0ff); }
-        button.secondary { background-color: var(--bg-tertiary, #21262d); color: var(--text-primary, #e6edf3); }
-        button.secondary:hover { background-color: var(--border, #30363d); }
-        button.danger { background-color: var(--error, #f85149); border-color: var(--error, #f85149); }
-        button.danger:hover { opacity: 0.9; }
-
-        table { width: 100%; border-collapse: collapse; }
-        th { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border, #30363d); color: var(--text-secondary, #8b949e); font-weight: 600; font-size: 12px; text-transform: uppercase; }
-        td { padding: 8px 12px; border-bottom: 1px solid var(--bg-tertiary, #21262d); color: var(--text-primary, #e6edf3); }
-
-        .empty { color: var(--text-muted, #484f58); font-style: italic; padding: 40px; text-align: center; }
-
-        .actions { display: flex; gap: 8px; }
-
-        .form-overlay {
-          background-color: var(--bg-secondary, #161b22);
-          border: 1px solid var(--border, #30363d);
-          border-radius: 8px;
-          padding: 20px;
-          margin-bottom: 20px;
-        }
-
-        .form-overlay h2 { font-size: 16px; margin-bottom: 16px; }
-
-        .form-row {
-          margin-bottom: 12px;
-        }
-
-        .form-row label {
-          display: block;
-          font-size: 12px;
-          color: var(--text-secondary, #8b949e);
-          margin-bottom: 4px;
-        }
-
-        .form-row input,
-        .form-row select {
-          width: 100%;
-          padding: 8px 12px;
-          border-radius: 6px;
-          border: 1px solid var(--border, #30363d);
-          background-color: var(--bg-tertiary, #21262d);
-          color: var(--text-primary, #e6edf3);
-          font-size: 14px;
-          font-family: inherit;
-        }
-
-        .form-row input:focus,
-        .form-row select:focus { border-color: var(--accent, #f97316); outline: none; }
-        .form-actions { display: flex; gap: 8px; margin-top: 16px; }
-
-        .id-cell {
-          font-family: var(--font-mono, monospace);
-          font-size: 12px;
-          color: var(--text-secondary, #8b949e);
-        }
-      </style>
-
-      <h1>
-        Connections
-        <button id="add-btn" class="${(this._showAddForm) ? 'secondary' : ''}">${(this._showAddForm) ? 'Cancel' : 'Add Connection'}</button>
-      </h1>
+    this.innerHTML = `
+      <div class="page-header">
+        <h1>Connections</h1>
+        <button id="add-btn" class="${(this._showAddForm) ? 'secondary' : 'primary'}">${(this._showAddForm) ? 'Cancel' : 'Add Connection'}</button>
+      </div>
 
       ${(this._showAddForm) ? this._renderAddForm() : ''}
 
       ${(this._connections.length === 0)
-        ? '<div class="empty">No connections configured. Add one to get started.</div>'
+        ? '<div class="empty-state">No connections configured. Add one to get started.</div>'
         : this._renderTable()
       }
     `;
 
-    this.shadowRoot.querySelector('#add-btn')
+    this.querySelector('#add-btn')
       .addEventListener('click', () => {
         this._showAddForm = !this._showAddForm;
         this.render();
@@ -124,7 +41,7 @@ class AeorConnections extends HTMLElement {
 
   _renderAddForm() {
     return `
-      <div class="form-overlay">
+      <div class="form-panel">
         <h2>New Connection</h2>
         <div class="form-row">
           <label>Name</label>
@@ -139,7 +56,7 @@ class AeorConnections extends HTMLElement {
           <input type="text" id="form-api-key" placeholder="aeor_...">
         </div>
         <div class="form-actions">
-          <button id="form-submit">Create</button>
+          <button class="primary" id="form-submit">Create</button>
           <button class="secondary" id="form-cancel">Cancel</button>
         </div>
       </div>
@@ -149,13 +66,13 @@ class AeorConnections extends HTMLElement {
   _renderTable() {
     const rows = this._connections.map((connection) => `
       <tr>
-        <td class="id-cell">${connection.id.substring(0, 8)}...</td>
+        <td class="mono muted">${connection.id.substring(0, 8)}...</td>
         <td>${connection.name}</td>
         <td>${connection.url}</td>
         <td>${connection.auth_type}</td>
         <td class="actions">
-          <button class="secondary test-btn" data-id="${connection.id}">Test</button>
-          <button class="danger delete-btn" data-id="${connection.id}">Delete</button>
+          <button class="secondary small test-btn" data-id="${connection.id}">Test</button>
+          <button class="danger small delete-btn" data-id="${connection.id}">Delete</button>
         </td>
       </tr>
     `).join('');
@@ -171,32 +88,24 @@ class AeorConnections extends HTMLElement {
   }
 
   _bindFormEvents() {
-    const submitButton = this.shadowRoot.querySelector('#form-submit');
-    const cancelButton = this.shadowRoot.querySelector('#form-cancel');
-
-    if (submitButton)
-      submitButton.addEventListener('click', () => this._submitForm());
-
-    if (cancelButton)
-      cancelButton.addEventListener('click', () => {
-        this._showAddForm = false;
-        this.render();
-      });
+    const submitButton = this.querySelector('#form-submit');
+    const cancelButton = this.querySelector('#form-cancel');
+    if (submitButton) submitButton.addEventListener('click', () => this._submitForm());
+    if (cancelButton) cancelButton.addEventListener('click', () => { this._showAddForm = false; this.render(); });
   }
 
   _bindTableEvents() {
-    this.shadowRoot.querySelectorAll('.test-btn').forEach((button) => {
+    this.querySelectorAll('.test-btn').forEach((button) => {
       button.addEventListener('click', () => this._testConnection(button.dataset.id));
     });
-
-    this.shadowRoot.querySelectorAll('.delete-btn').forEach((button) => {
+    this.querySelectorAll('.delete-btn').forEach((button) => {
       button.addEventListener('click', () => this._deleteConnection(button.dataset.id));
     });
   }
 
   async _fetchConnections() {
     try {
-      const response = await fetch('/api/v1/connections');
+      const response    = await fetch('/api/v1/connections');
       this._connections = await response.json();
       this.render();
     } catch (error) {
@@ -205,27 +114,24 @@ class AeorConnections extends HTMLElement {
   }
 
   async _submitForm() {
-    const name    = this.shadowRoot.querySelector('#form-name').value;
-    const url     = this.shadowRoot.querySelector('#form-url').value;
-    const apiKey  = this.shadowRoot.querySelector('#form-api-key').value;
+    const name   = this.querySelector('#form-name').value;
+    const url    = this.querySelector('#form-url').value;
+    const apiKey = this.querySelector('#form-api-key').value;
 
     if (!name || !url)
       return;
-
-    const body = {
-      name,
-      url,
-      auth_type: (apiKey) ? 'api_key' : 'none',
-      api_key:   (apiKey) ? apiKey : null,
-    };
 
     try {
       await fetch('/api/v1/connections', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(body),
+        body:    JSON.stringify({
+          name,
+          url,
+          auth_type: (apiKey) ? 'api_key' : 'none',
+          api_key:   (apiKey) ? apiKey : null,
+        }),
       });
-
       this._showAddForm = false;
       await this._fetchConnections();
     } catch (error) {

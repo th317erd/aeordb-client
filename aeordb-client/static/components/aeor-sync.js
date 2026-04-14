@@ -3,10 +3,9 @@
 class AeorSync extends HTMLElement {
   constructor() {
     super();
-    this.attachShadow({ mode: 'open' });
     this._relationships = [];
-    this._connections    = [];
-    this._showAddForm    = false;
+    this._connections   = [];
+    this._showAddForm   = false;
   }
 
   connectedCallback() {
@@ -15,49 +14,21 @@ class AeorSync extends HTMLElement {
   }
 
   render() {
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host { display: block; }
-        h1 { font-size: 24px; font-weight: 600; margin-bottom: 24px; color: var(--text-primary, #e6edf3); display: flex; justify-content: space-between; align-items: center; }
-        button { font-size: 14px; padding: 6px 16px; border-radius: 6px; border: 1px solid var(--border, #30363d); background-color: var(--accent, #58a6ff); color: #000; cursor: pointer; font-weight: 500; }
-        button:hover { background-color: var(--accent-hover, #79c0ff); }
-        button.secondary { background-color: var(--bg-tertiary, #21262d); color: var(--text-primary, #e6edf3); }
-        button.secondary:hover { background-color: var(--border, #30363d); }
-        button.danger { background-color: var(--error, #f85149); border-color: var(--error, #f85149); }
-        button.success { background-color: var(--success, #3fb950); border-color: var(--success, #3fb950); }
-        table { width: 100%; border-collapse: collapse; }
-        th { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border, #30363d); color: var(--text-secondary, #8b949e); font-weight: 600; font-size: 12px; text-transform: uppercase; }
-        td { padding: 8px 12px; border-bottom: 1px solid var(--bg-tertiary, #21262d); color: var(--text-primary, #e6edf3); }
-        .empty { color: var(--text-muted, #484f58); font-style: italic; padding: 40px; text-align: center; }
-        .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-        .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; }
-        .badge.success { background-color: rgba(63, 185, 80, 0.15); color: var(--success, #3fb950); }
-        .badge.warning { background-color: rgba(210, 153, 34, 0.15); color: var(--warning, #d29922); }
-        .form-overlay { background-color: var(--bg-secondary, #161b22); border: 1px solid var(--border, #30363d); border-radius: 8px; padding: 20px; margin-bottom: 20px; }
-        .form-overlay h2 { font-size: 16px; margin-bottom: 16px; }
-        .form-row { margin-bottom: 12px; }
-        .form-row label { display: block; font-size: 12px; color: var(--text-secondary, #8b949e); margin-bottom: 4px; }
-        .form-row input, .form-row select { width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border, #30363d); background-color: var(--bg-tertiary, #21262d); color: var(--text-primary, #e6edf3); font-size: 14px; font-family: inherit; appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M2 4l4 4 4-4'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; }
-        .form-row input { background-image: none; }
-        .form-row input:focus, .form-row select:focus { border-color: var(--accent, #f97316); outline: none; }
-        .form-actions { display: flex; gap: 8px; margin-top: 16px; }
-        .id-cell { font-family: var(--font-mono, monospace); font-size: 12px; color: var(--text-secondary, #8b949e); }
-      </style>
-
-      <h1>
-        Sync Relationships
-        <button id="add-btn" class="${(this._showAddForm) ? 'secondary' : ''}">${(this._showAddForm) ? 'Cancel' : 'Add Sync'}</button>
-      </h1>
+    this.innerHTML = `
+      <div class="page-header">
+        <h1>Sync Relationships</h1>
+        <button id="add-btn" class="${(this._showAddForm) ? 'secondary' : 'primary'}">${(this._showAddForm) ? 'Cancel' : 'Add Sync'}</button>
+      </div>
 
       ${(this._showAddForm) ? this._renderAddForm() : ''}
 
       ${(this._relationships.length === 0)
-        ? '<div class="empty">No sync relationships configured.</div>'
+        ? '<div class="empty-state">No sync relationships configured.</div>'
         : this._renderTable()
       }
     `;
 
-    this.shadowRoot.querySelector('#add-btn')
+    this.querySelector('#add-btn')
       .addEventListener('click', () => {
         this._showAddForm = !this._showAddForm;
         this.render();
@@ -75,7 +46,7 @@ class AeorSync extends HTMLElement {
     ).join('');
 
     return `
-      <div class="form-overlay">
+      <div class="form-panel">
         <h2>New Sync Relationship</h2>
         <div class="form-row">
           <label>Name</label>
@@ -106,7 +77,7 @@ class AeorSync extends HTMLElement {
           <input type="text" id="form-filter" placeholder="*.pdf, !*.tmp">
         </div>
         <div class="form-actions">
-          <button id="form-submit">Create</button>
+          <button class="primary" id="form-submit">Create</button>
           <button class="secondary" id="form-cancel">Cancel</button>
         </div>
       </div>
@@ -116,15 +87,15 @@ class AeorSync extends HTMLElement {
   _renderTable() {
     const rows = this._relationships.map((relationship) => `
       <tr>
-        <td class="id-cell">${relationship.id.substring(0, 8)}...</td>
+        <td class="mono muted">${relationship.id.substring(0, 8)}...</td>
         <td>${relationship.name}</td>
         <td>${relationship.remote_path}</td>
         <td>${relationship.direction}</td>
         <td><span class="badge ${(relationship.enabled) ? 'success' : 'warning'}">${(relationship.enabled) ? 'enabled' : 'disabled'}</span></td>
         <td class="actions">
-          <button class="success trigger-btn" data-id="${relationship.id}">Sync</button>
-          <button class="secondary toggle-btn" data-id="${relationship.id}" data-enabled="${relationship.enabled}">${(relationship.enabled) ? 'Pause' : 'Resume'}</button>
-          <button class="danger delete-btn" data-id="${relationship.id}">Delete</button>
+          <button class="success small trigger-btn" data-id="${relationship.id}">Sync</button>
+          <button class="secondary small toggle-btn" data-id="${relationship.id}" data-enabled="${relationship.enabled}">${(relationship.enabled) ? 'Pause' : 'Resume'}</button>
+          <button class="danger small delete-btn" data-id="${relationship.id}">Delete</button>
         </td>
       </tr>
     `).join('');
@@ -140,20 +111,20 @@ class AeorSync extends HTMLElement {
   }
 
   _bindFormEvents() {
-    const submitButton = this.shadowRoot.querySelector('#form-submit');
-    const cancelButton = this.shadowRoot.querySelector('#form-cancel');
+    const submitButton = this.querySelector('#form-submit');
+    const cancelButton = this.querySelector('#form-cancel');
     if (submitButton) submitButton.addEventListener('click', () => this._submitForm());
     if (cancelButton) cancelButton.addEventListener('click', () => { this._showAddForm = false; this.render(); });
   }
 
   _bindTableEvents() {
-    this.shadowRoot.querySelectorAll('.trigger-btn').forEach((button) => {
+    this.querySelectorAll('.trigger-btn').forEach((button) => {
       button.addEventListener('click', () => this._triggerSync(button.dataset.id));
     });
-    this.shadowRoot.querySelectorAll('.toggle-btn').forEach((button) => {
+    this.querySelectorAll('.toggle-btn').forEach((button) => {
       button.addEventListener('click', () => this._toggleSync(button.dataset.id, button.dataset.enabled === 'true'));
     });
-    this.shadowRoot.querySelectorAll('.delete-btn').forEach((button) => {
+    this.querySelectorAll('.delete-btn').forEach((button) => {
       button.addEventListener('click', () => this._deleteSync(button.dataset.id));
     });
   }
@@ -173,21 +144,21 @@ class AeorSync extends HTMLElement {
   }
 
   async _submitForm() {
-    const name          = this.shadowRoot.querySelector('#form-name').value;
-    const connectionId  = this.shadowRoot.querySelector('#form-connection').value;
-    const remotePath    = this.shadowRoot.querySelector('#form-remote-path').value;
-    const localPath     = this.shadowRoot.querySelector('#form-local-path').value;
-    const direction     = this.shadowRoot.querySelector('#form-direction').value;
-    const filter        = this.shadowRoot.querySelector('#form-filter').value;
+    const name         = this.querySelector('#form-name').value;
+    const connectionId = this.querySelector('#form-connection').value;
+    const remotePath   = this.querySelector('#form-remote-path').value;
+    const localPath    = this.querySelector('#form-local-path').value;
+    const direction    = this.querySelector('#form-direction').value;
+    const filter       = this.querySelector('#form-filter').value;
 
     if (!name || !connectionId || !remotePath || !localPath)
       return;
 
     try {
       await fetch('/api/v1/sync', {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body:    JSON.stringify({
           name,
           remote_connection_id: connectionId,
           remote_path:          remotePath,
