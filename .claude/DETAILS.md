@@ -30,9 +30,9 @@
 - **Step 12**: Offline reconciliation engine ✅
 - **Step 13**: Symlink support — DEFERRED (requires aeordb engine changes)
 - **Steps 14-15**: WebComponent UI shell + management pages ✅
-- **Step 16**: Tauri webview + systray — TODO
+- **Step 16**: Tauri webview + systray — TODO (requires Tauri-specific setup)
 - **Step 17**: Auth infrastructure ✅
-- **Step 18**: Resilience (retry, graceful restart, daemon) — TODO
+- **Step 18**: Graceful shutdown + resilience ✅
 
 ## Test Count: 67 tests passing
 
