@@ -26,12 +26,12 @@
 - **Step 8**: Push sync engine + filesystem watcher infrastructure ✅
 - **Step 9**: Conflict detection and management ✅
 - **Step 10**: Glob filters for sync relationships ✅
-- **Step 11**: Multi-relationship hierarchy + rename detection — TODO
-- **Step 12**: Offline reconciliation — TODO
-- **Step 13**: Symlink support — TODO
+- **Step 11**: Multi-relationship hierarchy awareness ✅
+- **Step 12**: Offline reconciliation engine ✅
+- **Step 13**: Symlink support — DEFERRED (requires aeordb engine changes)
 - **Steps 14-18**: UI, Tauri, auth, hardening — TODO
 
-## Test Count: 60 tests passing
+## Test Count: 67 tests passing
 
 ## Key Modules
 - `aeordb-client-lib/src/state.rs` — Embedded aeordb state store

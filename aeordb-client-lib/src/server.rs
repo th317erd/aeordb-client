@@ -57,7 +57,7 @@ pub fn build_router(state: AppState) -> Router {
     .with_state(state)
 }
 
-fn create_app_state(database_path: &str) -> Result<AppState> {
+pub fn create_app_state(database_path: &str) -> Result<AppState> {
   let state_store = StateStore::open_or_create(database_path)?;
   let identity    = state_store.get_or_create_identity()?;
 

@@ -1,9 +1,10 @@
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use aeordb_client_lib::server::{ServerConfig, start_server};
+use aeordb_client_lib::server::{build_router, create_app_state};
 
 mod cli;
+mod static_files;
 
 #[derive(Parser)]
 #[command(name = "aeordb-client")]
@@ -171,13 +172,20 @@ async fn main() -> anyhow::Result<()> {
 
       let database_path = database.unwrap_or_else(default_database_path);
 
-      let config = ServerConfig {
-        host: bind,
-        port,
-        database_path,
-      };
+      let state = create_app_state(&database_path)
+        .map_err(|error| anyhow::anyhow!("failed to initialize: {}", error))?;
 
-      start_server(config).await?;
+      let api_router    = build_router(state);
+      let static_router = static_files::static_routes();
+      let app           = api_router.merge(static_router);
+
+      let address  = format!("{}:{}", bind, port);
+      let listener = tokio::net::TcpListener::bind(&address).await?;
+
+      tracing::info!("aeordb-client listening on {}", address);
+      tracing::info!("UI available at http://{}", address);
+
+      axum::serve(listener, app).await?;
     }
 
     Some(Commands::Status) => {
