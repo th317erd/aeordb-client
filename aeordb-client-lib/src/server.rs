@@ -3,9 +3,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::Router;
-use axum::routing::get;
+use axum::routing::{get, post};
 use tokio::net::TcpListener;
 
+use crate::api::routes::connections;
 use crate::api::routes::status::get_status;
 use crate::error::{ClientError, Result};
 use crate::state::StateStore;
@@ -36,7 +37,10 @@ impl Default for ServerConfig {
 
 pub fn build_router(state: AppState) -> Router {
   let api_routes = Router::new()
-    .route("/status", get(get_status));
+    .route("/status", get(get_status))
+    .route("/connections", get(connections::list_connections).post(connections::create_connection))
+    .route("/connections/{id}", get(connections::get_connection).patch(connections::update_connection).delete(connections::delete_connection))
+    .route("/connections/{id}/test", post(connections::test_connection));
 
   Router::new()
     .nest("/api/v1", api_routes)
