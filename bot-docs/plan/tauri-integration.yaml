@@ -1,0 +1,96 @@
+feature: tauri_v2_integration
+priority: P1
+status: planning
+spec: docs/superpowers/specs/2026-04-14-tauri-integration-design.md
+
+# =============================================================================
+# CRITICAL CONSTRAINT
+# =============================================================================
+# Tauri v2 MUST own the main thread (macOS requires NSApplication on main).
+# Tokio runtime + HTTP server runs on a background thread.
+# main() is NOT async — it sets up tokio manually, spawns the server,
+# then hands the main thread to Tauri.
+#
+# In --headless mode, we skip Tauri and just block on the tokio runtime.
+# =============================================================================
+
+phases:
+
+  phase_1:
+    name: Tauri scaffolding
+    description: Add Tauri deps, config, build script. Binary compiles with Tauri.
+    tasks:
+      - Add tauri, tauri-build, tauri-plugin-shell to aeordb-client/Cargo.toml
+      - Create aeordb-client/build.rs (tauri_build::build())
+      - Create aeordb-client/tauri.conf.json with window config
+      - Create aeordb-client/icons/ with placeholder icon
+      - Verify: cargo build succeeds
+    test_gate: cargo build succeeds, cargo test passes (all 67 existing)
+
+  phase_2:
+    name: Main thread restructure
+    description: >
+      Rewrite main.rs so main() is NOT async. Tokio runtime created
+      manually. HTTP server spawned on background thread. Desktop mode
+      hands main thread to Tauri. Headless mode blocks on tokio.
+    tasks:
+      - Remove #[tokio::main] from main()
+      - Create tokio::Runtime manually
+      - Spawn HTTP server on the runtime
+      - Wait for HTTP server to be ready (port bound) before Tauri starts
+      - Desktop mode: tauri::Builder::default().run() on main thread
+      - Headless mode: runtime.block_on(shutdown_signal())
+      - CLI subcommands: runtime.block_on(async { ... }) as before
+    test_gate: >
+      All 67 existing tests pass (they don't touch main.rs).
+      Manual test: binary starts in desktop mode, window appears.
+      Manual test: binary starts in --headless mode, no window.
+
+  phase_3:
+    name: Systray
+    description: Add systray icon with menu (Open, Pause/Resume, Quit)
+    tasks:
+      - Create systray with default icon
+      - Menu items: Open AeorDB Client, separator, Pause/Resume All Sync, separator, Quit
+      - "Open" shows/focuses the main window
+      - "Quit" triggers graceful shutdown (notifies tokio runtime + exits Tauri)
+      - "Pause/Resume" calls the API (POST /api/v1/sync/pause or resume)
+    test_gate: Manual test — tray icon appears, menu works, Quit shuts down cleanly.
+
+  phase_4:
+    name: Window behavior
+    description: Close-to-tray, window title, sizing
+    tasks:
+      - Set window title "AeorDB Client"
+      - Set default size 1024x768, min size 800x600
+      - Override close event — hide window instead of quitting
+      - Window can be re-shown from systray "Open" menu item
+    test_gate: Manual test — X hides window, tray "Open" brings it back.
+
+  phase_5:
+    name: Graceful shutdown wiring
+    description: >
+      Ensure all shutdown paths work: CTRL+C, SIGTERM, API /shutdown,
+      tray Quit, and CLI stop command. All paths must shut down both
+      the HTTP server and the Tauri event loop.
+    tasks:
+      - Tray "Quit" sends shutdown signal to tokio runtime AND exits Tauri
+      - API /shutdown endpoint signals tokio AND requests Tauri exit
+      - CTRL+C/SIGTERM signal both
+      - Verify CLI "stop" command works against a desktop instance
+    test_gate: >
+      All shutdown paths tested manually. Existing 67 tests still pass.
+
+risks:
+  - name: Tauri + tokio thread conflict
+    mitigation: >
+      Main thread = Tauri. Separate std::thread for tokio runtime.
+      Never call tokio::spawn from the main thread outside the runtime.
+  - name: Port not ready when webview loads
+    mitigation: >
+      HTTP server signals readiness (via channel) before Tauri window opens.
+      Webview URL set after server is confirmed listening.
+  - name: Linux systray support
+    mitigation: >
+      Tauri v2 uses tray-icon crate which supports libappindicator.
+      Document the system dependency.

@@ -148,8 +148,7 @@ fn default_database_path() -> String {
   format!("{}/.aeordb-client/state.aeordb", home)
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
   let cli = Cli::parse();
 
   match cli.command {
@@ -186,82 +185,157 @@ async fn main() -> anyhow::Result<()> {
       let static_router = static_files::static_routes();
       let app           = api_router.merge(static_router);
 
-      let address  = format!("{}:{}", bind, port);
-      let listener = tokio::net::TcpListener::bind(&address).await?;
+      // Create the tokio runtime manually — Tauri must own the main thread
+      let runtime = tokio::runtime::Runtime::new()?;
 
-      tracing::info!("aeordb-client listening on {}", address);
-      tracing::info!("UI available at http://{}", address);
+      // Start HTTP server on the runtime, signal readiness via channel
+      let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+      let address = format!("{}:{}", bind, port);
 
-      // Shutdown on either OS signal or API request
-      let shutdown_future = async move {
-        tokio::select! {
-          _ = shutdown_signal() => {}
-          _ = api_shutdown.notified() => { tracing::info!("shutdown requested via API"); }
+      runtime.spawn(async move {
+        let listener = match tokio::net::TcpListener::bind(&address).await {
+          Ok(l) => l,
+          Err(error) => {
+            tracing::error!("failed to bind to {}: {}", address, error);
+            let _ = ready_tx.send(Err(anyhow::anyhow!("failed to bind to {}: {}", address, error)));
+            return;
+          }
+        };
+
+        let bound_addr = listener.local_addr().expect("listener has local address");
+        tracing::info!("aeordb-client listening on {}", bound_addr);
+        tracing::info!("UI available at http://{}", bound_addr);
+
+        let _ = ready_tx.send(Ok(bound_addr));
+
+        // Shutdown on either OS signal or API request
+        let shutdown_future = async move {
+          tokio::select! {
+            _ = shutdown_signal() => {}
+            _ = api_shutdown.notified() => { tracing::info!("shutdown requested via API"); }
+          }
+        };
+
+        if let Err(error) = axum::serve(listener, app)
+          .with_graceful_shutdown(shutdown_future)
+          .await
+        {
+          tracing::error!("server error: {}", error);
         }
-      };
 
-      axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_future)
-        .await?;
+        tracing::info!("aeordb-client shut down gracefully");
+      });
 
-      tracing::info!("aeordb-client shut down gracefully");
+      // Wait for the server to be ready (or fail to bind)
+      let bound_addr = ready_rx.recv()??;
+
+      if headless {
+        // Block the main thread until shutdown signal
+        runtime.block_on(async {
+          shutdown_signal().await;
+        });
+      } else {
+        // Run Tauri on the main thread — webview loads from our HTTP server
+        let url = format!("http://{}", bound_addr);
+
+        tauri::Builder::default()
+          .plugin(tauri_plugin_shell::init())
+          .setup(move |app| {
+            // The default window is created from tauri.conf.json but with
+            // visible:false. We grab it and navigate to our HTTP server URL,
+            // then show it.
+            use tauri::Manager;
+            if let Some(window) = app.get_webview_window("main") {
+              let parsed_url: tauri::Url = url.parse().expect("valid localhost URL");
+              window.navigate(parsed_url)?;
+              window.show()?;
+            } else {
+              // Window not created from config — build one manually
+              let parsed_url: tauri::Url = url.parse().expect("valid localhost URL");
+              let _window = tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::External(parsed_url),
+              )
+              .title("AeorDB Client")
+              .inner_size(1024.0, 768.0)
+              .min_inner_size(800.0, 600.0)
+              .build()?;
+            }
+            Ok(())
+          })
+          .run(tauri::generate_context!())
+          .expect("error while running tauri application");
+      }
     }
 
     Some(Commands::Status) => {
-      cli::status::run(&cli.host, cli.json).await?;
+      let runtime = tokio::runtime::Runtime::new()?;
+      runtime.block_on(cli::status::run(&cli.host, cli.json))?;
     }
 
     Some(Commands::Stop) => {
-      match cli::api_post(&cli.host, "/api/v1/shutdown", &serde_json::json!({})).await {
-        Ok(_) => println!("Shutdown initiated."),
-        Err(error) => {
-          eprintln!("Failed to stop instance: {}", error);
-          std::process::exit(1);
+      let runtime = tokio::runtime::Runtime::new()?;
+      runtime.block_on(async {
+        match cli::api_post(&cli.host, "/api/v1/shutdown", &serde_json::json!({})).await {
+          Ok(_) => println!("Shutdown initiated."),
+          Err(error) => {
+            eprintln!("Failed to stop instance: {}", error);
+            std::process::exit(1);
+          }
         }
-      }
+      });
     }
 
     Some(Commands::Connections { action }) => {
-      match action {
-        ConnectionAction::List => {
-          cli::connections::list(&cli.host, cli.json).await?;
+      let runtime = tokio::runtime::Runtime::new()?;
+      runtime.block_on(async {
+        match action {
+          ConnectionAction::List => {
+            cli::connections::list(&cli.host, cli.json).await?;
+          }
+          ConnectionAction::Add { name, url, api_key } => {
+            cli::connections::add(&cli.host, cli.json, &name, &url, api_key.as_deref()).await?;
+          }
+          ConnectionAction::Remove { id } => {
+            cli::connections::remove(&cli.host, &id).await?;
+          }
+          ConnectionAction::Test { id } => {
+            cli::connections::test(&cli.host, cli.json, &id).await?;
+          }
         }
-        ConnectionAction::Add { name, url, api_key } => {
-          cli::connections::add(&cli.host, cli.json, &name, &url, api_key.as_deref()).await?;
-        }
-        ConnectionAction::Remove { id } => {
-          cli::connections::remove(&cli.host, &id).await?;
-        }
-        ConnectionAction::Test { id } => {
-          cli::connections::test(&cli.host, cli.json, &id).await?;
-        }
-      }
+        Ok::<(), anyhow::Error>(())
+      })?;
     }
 
     Some(Commands::Sync { action }) => {
-      match action {
-        SyncAction::List => {
-          cli::sync::list(&cli.host, cli.json).await?;
+      let runtime = tokio::runtime::Runtime::new()?;
+      runtime.block_on(async {
+        match action {
+          SyncAction::List => {
+            cli::sync::list(&cli.host, cli.json).await?;
+          }
+          SyncAction::Add { name, connection, remote_path, local_path, direction, filter } => {
+            cli::sync::add(&cli.host, cli.json, &name, &connection, &remote_path, &local_path, &direction, filter.as_deref()).await?;
+          }
+          SyncAction::Remove { id } => {
+            cli::sync::remove(&cli.host, &id).await?;
+          }
+          SyncAction::Status { id } => {
+            cli::sync::status(&cli.host, cli.json, id.as_deref()).await?;
+          }
+          SyncAction::Trigger { id } => {
+            cli::sync::trigger(&cli.host, cli.json, &id).await?;
+          }
+          SyncAction::Pause { id } => {
+            cli::sync::pause(&cli.host, id.as_deref()).await?;
+          }
+          SyncAction::Resume { id } => {
+            cli::sync::resume(&cli.host, id.as_deref()).await?;
+          }
         }
-        SyncAction::Add { name, connection, remote_path, local_path, direction, filter } => {
-          cli::sync::add(&cli.host, cli.json, &name, &connection, &remote_path, &local_path, &direction, filter.as_deref()).await?;
-        }
-        SyncAction::Remove { id } => {
-          cli::sync::remove(&cli.host, &id).await?;
-        }
-        SyncAction::Status { id } => {
-          cli::sync::status(&cli.host, cli.json, id.as_deref()).await?;
-        }
-        SyncAction::Trigger { id } => {
-          cli::sync::trigger(&cli.host, cli.json, &id).await?;
-        }
-        SyncAction::Pause { id } => {
-          cli::sync::pause(&cli.host, id.as_deref()).await?;
-        }
-        SyncAction::Resume { id } => {
-          cli::sync::resume(&cli.host, id.as_deref()).await?;
-        }
-      }
+        Ok::<(), anyhow::Error>(())
+      })?;
     }
   }
 
