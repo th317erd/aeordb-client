@@ -267,6 +267,7 @@ async fn test_pull_sync_via_http_api() {
     host:          "127.0.0.1".to_string(),
     port:          0,
     database_path,
+    auth_token:    None,
   };
 
   let (address, _handle) = start_server_with_handle(config)

@@ -17,12 +17,14 @@ use crate::state::StateStore;
 pub struct AppState {
   pub started_at:  Instant,
   pub state_store: Arc<StateStore>,
+  pub auth_token:  Option<String>,
 }
 
 pub struct ServerConfig {
   pub host:          String,
   pub port:          u16,
   pub database_path: String,
+  pub auth_token:    Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -33,6 +35,7 @@ impl Default for ServerConfig {
       host:          "127.0.0.1".to_string(),
       port:          9400,
       database_path: format!("{}/.aeordb-client/state.aeordb", home),
+      auth_token:    None,
     }
   }
 }
@@ -66,11 +69,18 @@ pub fn create_app_state(database_path: &str) -> Result<AppState> {
   Ok(AppState {
     started_at:  Instant::now(),
     state_store: Arc::new(state_store),
+    auth_token:  None,
   })
 }
 
+pub fn create_app_state_with_auth(database_path: &str, auth_token: Option<String>) -> Result<AppState> {
+  let mut state = create_app_state(database_path)?;
+  state.auth_token = auth_token;
+  Ok(state)
+}
+
 pub async fn start_server(config: ServerConfig) -> Result<()> {
-  let state    = create_app_state(&config.database_path)?;
+  let state    = create_app_state_with_auth(&config.database_path, config.auth_token)?;
   let router   = build_router(state);
   let address  = format!("{}:{}", config.host, config.port);
   let listener = TcpListener::bind(&address).await.map_err(|error| {
@@ -91,7 +101,7 @@ pub async fn start_server(config: ServerConfig) -> Result<()> {
 pub async fn start_server_with_handle(
   config: ServerConfig,
 ) -> Result<(SocketAddr, tokio::task::JoinHandle<Result<()>>)> {
-  let state    = create_app_state(&config.database_path)?;
+  let state    = create_app_state_with_auth(&config.database_path, config.auth_token)?;
   let router   = build_router(state);
   let address  = format!("{}:{}", config.host, config.port);
   let listener = TcpListener::bind(&address).await.map_err(|error| {

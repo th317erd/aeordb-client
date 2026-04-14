@@ -16,6 +16,7 @@ fn test_config() -> ServerConfig {
     host:          "127.0.0.1".to_string(),
     port:          0,
     database_path,
+    auth_token:    None,
   }
 }
 

@@ -115,6 +115,7 @@ async fn test_conflicts_http_api_list_empty() {
     host:          "127.0.0.1".to_string(),
     port:          0,
     database_path,
+    auth_token:    None,
   };
 
   let (address, _handle) = start_server_with_handle(config)
@@ -152,6 +153,7 @@ async fn test_conflicts_http_api_resolve_not_found() {
     host:          "127.0.0.1".to_string(),
     port:          0,
     database_path,
+    auth_token:    None,
   };
 
   let (address, _handle) = start_server_with_handle(config)
