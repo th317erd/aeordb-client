@@ -45,7 +45,8 @@ pub fn build_router(state: AppState) -> Router {
     .route("/sync", get(sync::list_relationships).post(sync::create_relationship))
     .route("/sync/{id}", get(sync::get_relationship).patch(sync::update_relationship).delete(sync::delete_relationship))
     .route("/sync/{id}/enable", post(sync::enable_relationship))
-    .route("/sync/{id}/disable", post(sync::disable_relationship));
+    .route("/sync/{id}/disable", post(sync::disable_relationship))
+    .route("/sync/{id}/trigger", post(sync::trigger_sync));
 
   Router::new()
     .nest("/api/v1", api_routes)

@@ -3,6 +3,7 @@ use axum::http::StatusCode;
 use axum::response::Json;
 
 use crate::server::AppState;
+use crate::sync::engine::{SyncPassResult, pull_sync_pass};
 use crate::sync::relationships::{
   CreateSyncRelationshipRequest, RelationshipManager,
   SyncRelationship, UpdateSyncRelationshipRequest,
@@ -124,6 +125,22 @@ pub async fn disable_relationship(
     .map_err(|error| {
       let status = if error.to_string().contains("not found") {
         StatusCode::NOT_FOUND
+      } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+      };
+      (status, Json(serde_json::json!({ "error": error.to_string() })))
+    })
+}
+
+pub async fn trigger_sync(
+  State(state): State<AppState>,
+  Path(id): Path<String>,
+) -> Result<Json<SyncPassResult>, (StatusCode, Json<serde_json::Value>)> {
+  pull_sync_pass(&state.state_store, &id).await
+    .map(Json)
+    .map_err(|error| {
+      let status = if error.to_string().contains("not found") || error.to_string().contains("disabled") {
+        StatusCode::BAD_REQUEST
       } else {
         StatusCode::INTERNAL_SERVER_ERROR
       };
