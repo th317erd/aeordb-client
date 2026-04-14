@@ -5,19 +5,22 @@ use std::time::Instant;
 use axum::Router;
 use axum::routing::{get, post};
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 
 use crate::api::routes::conflicts;
 use crate::api::routes::connections;
 use crate::api::routes::status::get_status;
 use crate::api::routes::sync;
+use crate::api::routes::system;
 use crate::error::{ClientError, Result};
 use crate::state::StateStore;
 
 #[derive(Clone)]
 pub struct AppState {
-  pub started_at:  Instant,
-  pub state_store: Arc<StateStore>,
-  pub auth_token:  Option<String>,
+  pub started_at:      Instant,
+  pub state_store:     Arc<StateStore>,
+  pub auth_token:      Option<String>,
+  pub shutdown_signal: Option<Arc<Notify>>,
 }
 
 pub struct ServerConfig {
@@ -53,7 +56,8 @@ pub fn build_router(state: AppState) -> Router {
     .route("/sync/{id}/trigger", post(sync::trigger_sync))
     .route("/conflicts", get(conflicts::list_conflicts))
     .route("/conflicts/{id}/resolve", post(conflicts::resolve_conflict))
-    .route("/conflicts/resolve-all", post(conflicts::resolve_all_conflicts));
+    .route("/conflicts/resolve-all", post(conflicts::resolve_all_conflicts))
+    .route("/shutdown", post(system::shutdown));
 
   Router::new()
     .nest("/api/v1", api_routes)
@@ -67,9 +71,10 @@ pub fn create_app_state(database_path: &str) -> Result<AppState> {
   tracing::info!("client identity: {} ({})", identity.id, identity.name);
 
   Ok(AppState {
-    started_at:  Instant::now(),
-    state_store: Arc::new(state_store),
-    auth_token:  None,
+    started_at:      Instant::now(),
+    state_store:     Arc::new(state_store),
+    auth_token:      None,
+    shutdown_signal: None,
   })
 }
 

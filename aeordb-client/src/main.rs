@@ -47,6 +47,9 @@ enum Commands {
   /// Show status of the running instance
   Status,
 
+  /// Stop the running instance
+  Stop,
+
   /// Manage remote connections
   Connections {
     #[command(subcommand)]
@@ -185,11 +188,25 @@ async fn main() -> anyhow::Result<()> {
       tracing::info!("aeordb-client listening on {}", address);
       tracing::info!("UI available at http://{}", address);
 
-      axum::serve(listener, app).await?;
+      axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+      tracing::info!("aeordb-client shut down gracefully");
     }
 
     Some(Commands::Status) => {
       cli::status::run(&cli.host, cli.json).await?;
+    }
+
+    Some(Commands::Stop) => {
+      match cli::api_post(&cli.host, "/api/v1/shutdown", &serde_json::json!({})).await {
+        Ok(_) => println!("Shutdown initiated."),
+        Err(error) => {
+          eprintln!("Failed to stop instance: {}", error);
+          std::process::exit(1);
+        }
+      }
     }
 
     Some(Commands::Connections { action }) => {
@@ -237,4 +254,28 @@ async fn main() -> anyhow::Result<()> {
   }
 
   Ok(())
+}
+
+async fn shutdown_signal() {
+  let ctrl_c = async {
+    tokio::signal::ctrl_c()
+      .await
+      .expect("failed to install CTRL+C handler");
+  };
+
+  #[cfg(unix)]
+  let terminate = async {
+    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+      .expect("failed to install SIGTERM handler")
+      .recv()
+      .await;
+  };
+
+  #[cfg(not(unix))]
+  let terminate = std::future::pending::<()>();
+
+  tokio::select! {
+    _ = ctrl_c => { tracing::info!("received CTRL+C, shutting down..."); }
+    _ = terminate => { tracing::info!("received SIGTERM, shutting down..."); }
+  }
 }

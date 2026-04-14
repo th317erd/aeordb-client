@@ -29,7 +29,10 @@
 - **Step 11**: Multi-relationship hierarchy awareness ✅
 - **Step 12**: Offline reconciliation engine ✅
 - **Step 13**: Symlink support — DEFERRED (requires aeordb engine changes)
-- **Steps 14-18**: UI, Tauri, auth, hardening — TODO
+- **Steps 14-15**: WebComponent UI shell + management pages ✅
+- **Step 16**: Tauri webview + systray — TODO
+- **Step 17**: Auth infrastructure ✅
+- **Step 18**: Resilience (retry, graceful restart, daemon) — TODO
 
 ## Test Count: 67 tests passing
 
