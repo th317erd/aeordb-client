@@ -8,6 +8,7 @@ use tokio::net::TcpListener;
 
 use crate::api::routes::connections;
 use crate::api::routes::status::get_status;
+use crate::api::routes::sync;
 use crate::error::{ClientError, Result};
 use crate::state::StateStore;
 
@@ -40,7 +41,11 @@ pub fn build_router(state: AppState) -> Router {
     .route("/status", get(get_status))
     .route("/connections", get(connections::list_connections).post(connections::create_connection))
     .route("/connections/{id}", get(connections::get_connection).patch(connections::update_connection).delete(connections::delete_connection))
-    .route("/connections/{id}/test", post(connections::test_connection));
+    .route("/connections/{id}/test", post(connections::test_connection))
+    .route("/sync", get(sync::list_relationships).post(sync::create_relationship))
+    .route("/sync/{id}", get(sync::get_relationship).patch(sync::update_relationship).delete(sync::delete_relationship))
+    .route("/sync/{id}/enable", post(sync::enable_relationship))
+    .route("/sync/{id}/disable", post(sync::disable_relationship));
 
   Router::new()
     .nest("/api/v1", api_routes)
