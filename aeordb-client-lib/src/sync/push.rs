@@ -56,6 +56,8 @@ pub async fn push_sync_pass(
     return Ok(result);
   }
 
+  let filter = relationship.filter.as_deref();
+
   push_directory_recursive(
     state,
     &remote_client,
@@ -63,6 +65,7 @@ pub async fn push_sync_pass(
     &relationship.local_path,
     &relationship.remote_path,
     relationship_id,
+    filter,
     &mut result,
   ).await;
 
@@ -88,6 +91,7 @@ async fn push_directory_recursive(
   local_base: &str,
   remote_base: &str,
   relationship_id: &str,
+  filter: Option<&str>,
   result: &mut PushSyncResult,
 ) {
   let entries = match std::fs::read_dir(current_dir) {
@@ -114,9 +118,17 @@ async fn push_directory_recursive(
     if entry_path.is_dir() {
       Box::pin(push_directory_recursive(
         state, remote_client, &entry_path,
-        local_base, remote_base, relationship_id, result,
+        local_base, remote_base, relationship_id, filter, result,
       )).await;
     } else if entry_path.is_file() {
+      // Apply filter
+      let filename = entry_path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+      if !crate::sync::filter::matches_filter(filename, filter) {
+        result.files_skipped += 1;
+        continue;
+      }
       // Compute the remote path
       let relative = entry_path.strip_prefix(local_base)
         .unwrap_or(&entry_path);

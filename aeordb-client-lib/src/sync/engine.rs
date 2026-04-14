@@ -82,6 +82,8 @@ pub async fn pull_sync_pass(
     errors:           Vec::new(),
   };
 
+  let filter = relationship.filter.as_deref();
+
   // Recursively walk the remote directory and sync files
   let remote_entries = match remote_client.list_directory(&relationship.remote_path).await {
     Ok(entries) => entries,
@@ -98,6 +100,7 @@ pub async fn pull_sync_pass(
     &relationship.remote_path,
     &relationship.local_path,
     relationship_id,
+    filter,
     &remote_entries,
     &mut result,
   ).await;
@@ -123,6 +126,7 @@ async fn sync_directory_recursive(
   remote_dir_path: &str,
   local_dir_path: &str,
   relationship_id: &str,
+  filter: Option<&str>,
   entries: &[crate::remote::RemoteEntry],
   result: &mut SyncPassResult,
 ) {
@@ -145,7 +149,7 @@ async fn sync_directory_recursive(
         Ok(sub_entries) => {
           Box::pin(sync_directory_recursive(
             state, remote_client, &sub_remote_path,
-            &local_file_path, relationship_id, &sub_entries, result,
+            &local_file_path, relationship_id, filter, &sub_entries, result,
           )).await;
         }
         Err(error) => {
@@ -154,6 +158,12 @@ async fn sync_directory_recursive(
         }
       }
     } else {
+      // Apply filter
+      if !crate::sync::filter::matches_filter(&entry.name, filter) {
+        result.files_skipped += 1;
+        continue;
+      }
+
       // File — check if we need to download it
       let relative_path = entry.name.clone();
       let state_key     = file_state_key(relationship_id, &remote_file_path);

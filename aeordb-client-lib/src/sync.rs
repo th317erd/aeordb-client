@@ -1,5 +1,6 @@
 pub mod conflicts;
 pub mod engine;
+pub mod filter;
 pub mod fs_watcher;
 pub mod push;
 pub mod relationships;
