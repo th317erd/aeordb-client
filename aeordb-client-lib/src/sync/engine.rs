@@ -84,6 +84,10 @@ pub async fn pull_sync_pass(
 
   let filter = relationship.filter.as_deref();
 
+  // Compute hierarchy exclusions — paths owned by child relationships
+  let all_relationships = relationship_manager.list()?;
+  let exclusions = crate::sync::hierarchy::child_exclusions(&relationship, &all_relationships);
+
   // Recursively walk the remote directory and sync files
   let remote_entries = match remote_client.list_directory(&relationship.remote_path).await {
     Ok(entries) => entries,
@@ -101,6 +105,7 @@ pub async fn pull_sync_pass(
     &relationship.local_path,
     relationship_id,
     filter,
+    &exclusions,
     &remote_entries,
     &mut result,
   ).await;
@@ -127,6 +132,7 @@ async fn sync_directory_recursive(
   local_dir_path: &str,
   relationship_id: &str,
   filter: Option<&str>,
+  exclusions: &[String],
   entries: &[crate::remote::RemoteEntry],
   result: &mut SyncPassResult,
 ) {
@@ -137,6 +143,12 @@ async fn sync_directory_recursive(
     if entry.entry_type == "directory" {
       // Recurse into subdirectory
       let sub_remote_path = format!("{}/", remote_file_path);
+
+      // Check hierarchy exclusions — skip if owned by a child relationship
+      if crate::sync::hierarchy::is_excluded_by_child(&sub_remote_path, exclusions) {
+        tracing::debug!("skipping {} — owned by child relationship", sub_remote_path);
+        continue;
+      }
 
       // Ensure local subdirectory exists
       if let Err(error) = std::fs::create_dir_all(&local_file_path) {
@@ -149,7 +161,7 @@ async fn sync_directory_recursive(
         Ok(sub_entries) => {
           Box::pin(sync_directory_recursive(
             state, remote_client, &sub_remote_path,
-            &local_file_path, relationship_id, filter, &sub_entries, result,
+            &local_file_path, relationship_id, filter, exclusions, &sub_entries, result,
           )).await;
         }
         Err(error) => {
