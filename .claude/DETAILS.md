@@ -5,6 +5,15 @@
 - **Stack**: Rust + Tauri (backend), Native WebComponents + vanilla JS + HTML5 (frontend) — NO frameworks
 - **AeorDB docs location**: `../aeordb/docs/`
 
+## AeorDB Dependency
+- **Crate name**: `aeordb` (from `aeordb-lib/` directory in the aeordb repo)
+- **Git dep**: `aeordb = { git = "ssh://git@github.com/th317erd/aeordb.git", branch = "main" }`
+- **Repo remote**: `git@github.com:th317erd/aeordb.git`
+- **Branch**: `main`
+- **Local path**: `/home/wyatt/Projects/aeordb-workspace/aeordb/aeordb-lib/`
+- **Workspace members in aeordb repo**: aeordb-lib, aeordb-cli, aeordb-plugin-sdk, aeordb-parsers/plaintext
+- **Public API modules**: engine (StorageEngine, DirectoryOps, RequestContext), auth, logging, metrics, plugins, replication, server, storage
+
 ## AeorDB Summary
 - Content-addressed file database (BLAKE3 hashing), append-only WAL
 - Filesystem-like data model: files at paths (e.g., `/users/alice.json`)
