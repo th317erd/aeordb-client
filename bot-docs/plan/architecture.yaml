@@ -1,0 +1,205 @@
+architecture:
+  description: >
+    Single-binary architecture. One process does everything: sync engine,
+    HTTP server (serves UI + control API), and optional systray. CLI mode
+    is a thin HTTP client to a running instance (local or remote). Headless
+    mode disables UI/tray for server deployments.
+
+  binary: aeordb-client
+  workspace_crates:
+    aeordb-client-lib:
+      type: library
+      owns: >
+        Core logic — sync engine, connection management, local embedded
+        aeordb, conflict detection, state tracking, filesystem watcher,
+        SSE listener, upload/download workers, offline reconciliation.
+        Zero UI dependencies. Zero Tauri dependencies. Pure Rust.
+    aeordb-client:
+      type: binary
+      owns: >
+        The executable. HTTP server, Tauri webview (optional), CLI mode,
+        systray (optional), WebComponent frontend assets. Consumes
+        aeordb-client-lib.
+
+  runtime_modes:
+    foreground_desktop:
+      invocation: "aeordb-client"
+      behavior: >
+        Starts as foreground process. HTTP server listening. Activates
+        systray icon. Opens Tauri webview pointed at own HTTP server.
+        Closing window minimizes to tray. Quit from tray or CLI to stop.
+    headless:
+      invocation: "aeordb-client --headless"
+      behavior: >
+        Foreground process, no webview, no tray. HTTP server listening.
+        For servers, containers, NAS devices. Controlled via CLI from
+        any machine, or via web browser pointed at the HTTP server.
+    daemon:
+      invocation: "aeordb-client --daemon"
+      behavior: >
+        Forks to background. Same as headless but detached from terminal.
+        Writes pidfile.
+    cli_control:
+      invocation: "aeordb-client <subcommand>"
+      behavior: >
+        Thin HTTP client. Sends request to a running instance's HTTP API.
+        Defaults to localhost, or specify --host for remote instances.
+        Prints response. Exits. Same auth model as any HTTP client.
+
+  http_server:
+    description: >
+      The single communication layer. Serves everything: the WebComponent
+      UI (static assets), the control API, and SSE events for real-time
+      updates. Both the Tauri webview and external browsers consume the
+      same server. The CLI is just an HTTP client to this server.
+    default_port: 9400
+    routes:
+      ui:
+        description: Static WebComponent frontend assets
+        prefix: "/"
+        note: "HTML, JS, CSS served directly. No build step."
+      api:
+        description: Control API — mirrors CLI subcommands 1:1
+        prefix: "/api/v1"
+        endpoints:
+          connections:
+            - "GET    /api/v1/connections            # List connections"
+            - "POST   /api/v1/connections            # Create connection"
+            - "GET    /api/v1/connections/:id         # Get connection"
+            - "PATCH  /api/v1/connections/:id         # Update connection"
+            - "DELETE /api/v1/connections/:id         # Delete connection"
+            - "POST   /api/v1/connections/:id/test    # Test connectivity"
+          sync:
+            - "GET    /api/v1/sync                   # List sync relationships"
+            - "POST   /api/v1/sync                   # Create sync relationship"
+            - "GET    /api/v1/sync/:id               # Get relationship"
+            - "PATCH  /api/v1/sync/:id               # Update relationship"
+            - "DELETE /api/v1/sync/:id               # Delete relationship"
+            - "POST   /api/v1/sync/:id/enable        # Enable relationship"
+            - "POST   /api/v1/sync/:id/disable       # Disable relationship"
+            - "POST   /api/v1/sync/:id/trigger       # Force full scan"
+          sync_control:
+            - "GET    /api/v1/sync/status             # Overall sync status"
+            - "GET    /api/v1/sync/:id/status         # Relationship status"
+            - "POST   /api/v1/sync/pause              # Pause all sync"
+            - "POST   /api/v1/sync/resume             # Resume all sync"
+          conflicts:
+            - "GET    /api/v1/conflicts               # List all conflicts"
+            - "GET    /api/v1/conflicts?sync_id=:id   # Conflicts for relationship"
+            - "POST   /api/v1/conflicts/:id/resolve   # Resolve a conflict"
+            - "POST   /api/v1/conflicts/resolve-all   # Resolve all conflicts"
+          system:
+            - "GET    /api/v1/status                  # Daemon status (PID, uptime, summary)"
+            - "POST   /api/v1/restart                 # Graceful restart"
+            - "POST   /api/v1/shutdown                # Graceful shutdown"
+      events:
+        description: SSE stream for real-time UI updates
+        endpoint: "GET /api/v1/events/stream"
+        event_types:
+          - sync_progress (per-file upload/download progress)
+          - sync_status_changed (relationship status updates)
+          - conflict_detected (new conflict found)
+          - connection_status_changed (online/offline transitions)
+
+    auth:
+      description: >
+        Same auth model for all consumers — Tauri webview, web browser,
+        CLI, remote management. Auth credentials stored in a file
+        (e.g., ~/.aeordb-client/auth.json) readable by the CLI.
+      local_default: >
+        On first startup, generates an auth token and writes it to
+        ~/.aeordb-client/auth.json (file permissions 0600). The CLI
+        reads this file automatically when targeting localhost.
+      remote: >
+        For remote connections, user provides --host and --auth-file
+        (or --token). Same HTTP auth headers.
+      note: >
+        The UI served by the HTTP server can use a session cookie or
+        token obtained at login. Headless instances on trusted networks
+        can optionally disable auth (--no-auth flag, with warning).
+
+  cli_subcommands:
+    lifecycle:
+      - "aeordb-client start                          # Start (foreground, desktop)"
+      - "aeordb-client start --headless                # Start (headless)"
+      - "aeordb-client start --daemon                  # Start (background)"
+      - "aeordb-client stop                            # Graceful shutdown"
+      - "aeordb-client restart                         # Graceful restart"
+      - "aeordb-client status                          # Running? PID, uptime, sync summary"
+    connections:
+      - "aeordb-client connections list                # List all remote connections"
+      - "aeordb-client connections add                 # Interactive: add new connection"
+      - "aeordb-client connections remove <id>         # Remove a connection"
+      - "aeordb-client connections test <id>           # Test connectivity and auth"
+    sync:
+      - "aeordb-client sync list                       # List all sync relationships"
+      - "aeordb-client sync add                        # Interactive: configure new relationship"
+      - "aeordb-client sync remove <id>                # Remove a sync relationship"
+      - "aeordb-client sync status [id]                # Status of one or all"
+      - "aeordb-client sync pause [id]                 # Pause one or all"
+      - "aeordb-client sync resume [id]                # Resume one or all"
+      - "aeordb-client sync trigger <id>               # Force a full scan"
+    conflicts:
+      - "aeordb-client conflicts list                  # List pending conflicts"
+      - "aeordb-client conflicts resolve <id> <keep-local|keep-remote|keep-both>"
+    global_flags:
+      - "--json                                        # Machine-readable JSON output"
+      - "--host <url>                                  # Target instance (default: localhost:9400)"
+      - "--auth-file <path>                            # Auth credentials file"
+      - "--token <token>                               # Auth token directly"
+
+  graceful_restart:
+    trigger: "POST /api/v1/restart, CLI 'aeordb-client restart', or SIGHUP"
+    behavior:
+      1: Stop accepting new sync operations
+      2: Wait for in-flight uploads/downloads to complete (with timeout)
+      3: Persist all state to local embedded aeordb
+      4: Re-read configuration from local aeordb
+      5: Reinitialize sync engine, filesystem watchers, SSE listeners
+      6: Resume normal operation
+    note: >
+      No sync state lost because everything is persisted in local aeordb.
+      Watchers are re-established from sync relationship config.
+
+  local_aeordb:
+    location: "~/.aeordb-client/state.aeordb"
+    mode: Embedded library (direct Rust API, no HTTP)
+    stores:
+      /client/identity: Client UUID and friendly name
+      /connections/: Remote connection configs (URL, auth credentials)
+      /sync/relationships/: Sync relationship configurations
+      /sync/state/: Per-file sync state (hashes, timestamps, status)
+      /sync/conflicts/: Pending conflict records
+      /settings/: Client-wide settings
+
+  frontend:
+    technology: Native WebComponents, vanilla JS, HTML5
+    served_by: >
+      The client's own HTTP server. In desktop mode, Tauri webview points
+      to localhost:{port}. In headless mode, any browser can connect.
+      Same UI either way.
+    communicates_via: >
+      HTTP API calls to /api/v1/* and SSE subscription to
+      /api/v1/events/stream. The frontend has no special access —
+      it uses the exact same API as the CLI. What the CLI can do,
+      the UI can do, and vice versa.
+    not_connected_state: >
+      Each remote connection shows online/offline status independently.
+      If the HTTP server itself is unreachable (browser hitting a stopped
+      instance), standard browser connection error — no special handling
+      needed.
+    systray:
+      icon: OS-native systray icon (desktop mode only)
+      states:
+        - idle (all synced, green)
+        - syncing (activity, animated/blue)
+        - conflict (needs attention, yellow/orange)
+        - error (connection lost, red)
+        - paused (sync paused, grey)
+      menu:
+        - Open AeorDB Client (show main window)
+        - "Sync Status: 3/3 up to date" (informational)
+        - Pause All Sync
+        - Resume All Sync
+        - separator
+        - Quit

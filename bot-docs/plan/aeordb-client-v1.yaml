@@ -1,0 +1,322 @@
+# =============================================================================
+# AeorDB Client — Implementation Plan v1
+# =============================================================================
+# Sync-first native desktop client for AeorDB.
+# Single binary: headed (Tauri + systray) or headless (server/container).
+# HTTP is the universal control plane. CLI is a thin HTTP client.
+# =============================================================================
+
+name: aeordb-client
+version: "0.1.0"
+status: approved
+created: 2026-04-13
+
+# =============================================================================
+# STACK
+# =============================================================================
+stack:
+  language: Rust
+  async_runtime: tokio
+  http_server: axum
+  webview: Tauri (desktop mode only)
+  frontend: Native WebComponents, vanilla JS, HTML5 — zero frameworks
+  local_database: aeordb (embedded library, direct Rust API)
+  cli_parsing: clap
+  filesystem_watcher: notify
+  hashing: BLAKE3 (matches aeordb)
+
+# =============================================================================
+# ARCHITECTURE
+# =============================================================================
+architecture:
+  single_binary: aeordb-client
+  description: >
+    One process. Runs the sync engine, serves an HTTP API (UI + control),
+    and optionally shows a Tauri webview + systray. CLI subcommands talk
+    to the running instance via the same HTTP API. Headless mode for servers.
+
+  workspace:
+    aeordb-client-lib:
+      type: lib
+      description: >
+        Pure Rust library. Zero UI/framework deps. Owns all core logic:
+        sync engine, connection management, embedded local aeordb,
+        conflict detection, state tracking, filesystem watcher,
+        SSE listener, upload/download workers, offline reconciliation.
+    aeordb-client:
+      type: bin
+      description: >
+        The executable. Axum HTTP server, Tauri webview (optional),
+        clap CLI, systray (optional), WebComponent frontend assets.
+        Thin layer over aeordb-client-lib.
+
+  modes:
+    desktop: "aeordb-client                  → HTTP server + Tauri webview + systray"
+    headless: "aeordb-client --headless       → HTTP server only, no UI/tray"
+    daemon: "aeordb-client --daemon          → Headless, forked to background, pidfile"
+    cli: "aeordb-client <subcommand>      → Thin HTTP client to running instance"
+
+  http_server:
+    default_port: 9400
+    routes:
+      "/": Static WebComponent frontend assets
+      "/api/v1/*": Control API (JSON)
+      "/api/v1/events/stream": SSE for real-time updates
+
+  local_state:
+    path: "~/.aeordb-client/state.aeordb"
+    mode: Embedded library (no HTTP, direct Rust API)
+    schema:
+      /client/identity: "UUID + friendly name"
+      /connections/: Remote connection configs
+      /sync/relationships/: Sync relationship configs
+      /sync/state/: "Per-file state (hash, timestamps, status)"
+      /sync/conflicts/: Pending conflict records
+      /settings/: Client-wide settings
+
+# =============================================================================
+# DATA MODELS
+# =============================================================================
+models:
+
+  remote_connection:
+    id: UUID
+    name: "string — user-friendly label"
+    url: "string — base URL of remote aeordb"
+    auth_type: "enum: api_key | jwt | none"
+    auth_credentials: "stored securely in local aeordb"
+    status: "enum: connected | disconnected | authenticating | error"
+    created_at: timestamp
+    updated_at: timestamp
+
+  sync_relationship:
+    id: UUID
+    name: "string — user-friendly label"
+    remote_connection_id: "UUID — reference to remote_connection"
+    remote_path: "string — directory path in aeordb"
+    local_path: "string — absolute filesystem path"
+    direction: "enum: bidirectional | pull_only | push_only"
+    filter: "string — glob patterns, comma-separated, ! for exclusion"
+    delete_propagation:
+      local_to_remote: "bool (default false)"
+      remote_to_local: "bool (default false)"
+    enabled: "bool (default true)"
+    created_at: timestamp
+    updated_at: timestamp
+    hierarchy_note: >
+      Relationships are hierarchy-aware. A parent relationship will NOT
+      descend into paths covered by a child relationship.
+
+  file_state:
+    path: "string — relative path within sync relationship"
+    relationship_id: UUID
+    content_hash: "BLAKE3 hash"
+    local_modified_at: timestamp
+    remote_modified_at: timestamp
+    sync_status: "enum: synced | pending_push | pending_pull | conflict | error"
+    last_synced_at: timestamp
+
+  conflict_record:
+    id: UUID
+    file_path: "string — relative path"
+    relationship_id: UUID
+    local_hash: BLAKE3
+    remote_hash: BLAKE3
+    last_synced_hash: BLAKE3
+    local_modified_at: timestamp
+    remote_modified_at: timestamp
+    detected_at: timestamp
+    resolution_options: "keep_local | keep_remote | keep_both | manual"
+
+# =============================================================================
+# HTTP API
+# =============================================================================
+api:
+  prefix: /api/v1
+
+  system:
+    - "GET    /status                        → daemon status, uptime, version, sync summary"
+    - "POST   /restart                       → graceful restart"
+    - "POST   /shutdown                      → graceful shutdown"
+
+  connections:
+    - "GET    /connections                   → list all"
+    - "POST   /connections                   → create"
+    - "GET    /connections/:id               → get one"
+    - "PATCH  /connections/:id               → update"
+    - "DELETE /connections/:id               → delete"
+    - "POST   /connections/:id/test          → test connectivity"
+
+  sync:
+    - "GET    /sync                          → list all relationships"
+    - "POST   /sync                          → create relationship"
+    - "GET    /sync/:id                      → get one"
+    - "PATCH  /sync/:id                      → update"
+    - "DELETE /sync/:id                      → delete"
+    - "POST   /sync/:id/enable              → enable"
+    - "POST   /sync/:id/disable             → disable"
+    - "POST   /sync/:id/trigger             → force full sync pass"
+    - "GET    /sync/status                   → overall sync status"
+    - "GET    /sync/:id/status              → relationship status"
+    - "POST   /sync/pause                    → pause all sync"
+    - "POST   /sync/resume                   → resume all sync"
+
+  conflicts:
+    - "GET    /conflicts                     → list all"
+    - "GET    /conflicts?sync_id=:id         → filter by relationship"
+    - "POST   /conflicts/:id/resolve         → resolve one"
+    - "POST   /conflicts/resolve-all         → resolve all"
+
+  events:
+    - "GET    /events/stream                 → SSE stream"
+    event_types:
+      - sync_progress
+      - sync_status_changed
+      - conflict_detected
+      - connection_status_changed
+
+# =============================================================================
+# CLI SUBCOMMANDS
+# =============================================================================
+cli:
+  lifecycle:
+    - "start [--headless] [--daemon]         → start the client"
+    - "stop                                  → graceful shutdown"
+    - "restart                               → graceful restart"
+    - "status                                → running state, uptime, sync summary"
+
+  connections:
+    - "connections list                      → list all"
+    - "connections add                       → interactive setup"
+    - "connections remove <id>               → remove"
+    - "connections test <id>                 → test connectivity"
+
+  sync:
+    - "sync list                             → list relationships"
+    - "sync add                              → interactive setup"
+    - "sync remove <id>                      → remove"
+    - "sync status [id]                      → status of one or all"
+    - "sync pause [id]                       → pause one or all"
+    - "sync resume [id]                      → resume one or all"
+    - "sync trigger <id>                     → force full sync"
+
+  conflicts:
+    - "conflicts list                        → list pending conflicts"
+    - "conflicts resolve <id> <resolution>   → resolve (keep-local|keep-remote|keep-both)"
+
+  global_flags:
+    - "--json                                → machine-readable JSON output"
+    - "--host <url>                          → target instance (default: localhost:9400)"
+    - "--auth-file <path>                    → auth credentials file"
+    - "--token <token>                       → auth token directly"
+
+# =============================================================================
+# SYNC ENGINE INTERNALS
+# =============================================================================
+sync_engine:
+  components:
+    filesystem_watcher:
+      crate: notify
+      coalescing: "100ms debounce, 500ms hard cap"
+      symlinks: "Follow and sync (phase 13)"
+    sse_listener:
+      source: "Remote aeordb GET /events/stream"
+      filters: "entries_created, entries_deleted by synced path prefixes"
+      reconnection: "Auto-reconnect with exponential backoff"
+    state_tracker:
+      storage: "Local embedded aeordb at /sync/state/"
+      tracks: "Per-file: path, hash, timestamps, sync status"
+    change_detector:
+      local: "Filesystem watcher events + periodic full scan safety net"
+      remote: "SSE events + hash comparison"
+      rename: "Content hash match across paths within time window → move not delete+create"
+    conflict_detector:
+      trigger: "Bidirectional only — both sides changed since last sync"
+      behavior: "Pause file, add to conflict queue, surface to user"
+    upload_worker:
+      protocol: "aeordb 4-phase: config → check (dedup) → chunks → commit"
+      chunking: "256KB, BLAKE3"
+      concurrency: "Configurable, default 4"
+    download_worker:
+      protocol: "GET /engine/{path}"
+      concurrency: "Configurable, default 4"
+    offline_reconciler:
+      algorithm: "Diff local vs tracker, query remote for changes, classify, auto-resolve or queue conflicts"
+
+# =============================================================================
+# IMPLEMENTATION PHASES
+# =============================================================================
+phases:
+
+  # --- INFANT (steps 1-6): CLI-only, pull-only sync client ---
+
+  step_1:
+    name: Skeleton
+    scope: >
+      Cargo workspace, binary boots, clap args, axum HTTP server starts,
+      GET /api/v1/status health endpoint.
+
+  step_2:
+    name: Local state store
+    scope: >
+      Embedded aeordb at ~/.aeordb-client/state.aeordb. Client identity
+      (UUID + name) generated on first run. Persists across restarts.
+
+  step_3:
+    name: Connection management
+    scope: >
+      Library API + HTTP API + CLI for connection CRUD. HTTP client for
+      remote aeordb. Connection test (hit /admin/health). Persisted in
+      local aeordb.
+
+  step_4:
+    name: Sync relationship CRUD
+    scope: >
+      Library API + HTTP API + CLI for relationship CRUD. Validation
+      (paths exist). Persisted in local aeordb. No sync yet.
+
+  step_5:
+    name: Pull sync (one-shot)
+    scope: >
+      List remote dir, diff against state tracker, download missing/changed
+      files, update state tracker. Triggered via POST /api/v1/sync/:id/trigger
+      or CLI sync trigger.
+
+  step_6:
+    name: CLI control mode
+    scope: >
+      Binary detects subcommand → HTTP client mode. All subcommands work.
+      --json flag. --host for remote. Human-friendly default output.
+      Auto-read auth token from ~/.aeordb-client/auth.json for localhost.
+
+  # --- GROWTH (steps 7-13): real-time, bidirectional, full sync ---
+
+  step_7: { name: "Continuous pull sync (SSE)" }
+  step_8: { name: "Push sync (filesystem watcher + upload protocol)" }
+  step_9: { name: "Bidirectional sync + conflict detection" }
+  step_10: { name: "Filters (globs) + delete propagation" }
+  step_11: { name: "Multi-relationship hierarchy + rename detection" }
+  step_12: { name: "Offline reconciliation" }
+  step_13: { name: "Symlink support (may require aeordb engine changes)" }
+
+  # --- UI (steps 14-16): web interface, desktop experience ---
+
+  step_14: { name: "WebComponent UI shell" }
+  step_15: { name: "UI management pages (connections, sync, conflicts)" }
+  step_16: { name: "Tauri webview + systray" }
+
+  # --- HARDENING (steps 17-18): security, resilience ---
+
+  step_17: { name: "Auth + security for local HTTP API" }
+  step_18: { name: "Resilience (retry, graceful restart, daemon mode, error reporting)" }
+
+  # --- SUITE (future planning rounds) ---
+
+  future:
+    - File browser
+    - Query builder
+    - Version management (snapshots, forks, diff/patch)
+    - Admin panel (users, groups, API keys, GC, tasks, cron, metrics)
+    - Index management
+    - Plugin management
+    - Event stream viewer

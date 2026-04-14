@@ -1,0 +1,132 @@
+plan_tests:
+
+  # === ARCHITECTURE ===
+
+  - assert: architecture is-coherent
+    severity: blocker
+    status: pass
+    notes: >
+      Single-binary, single-process. HTTP server is the universal control
+      plane — serves UI, control API, and SSE events. CLI is a thin HTTP
+      client. No IPC, no custom protocols. Clean.
+
+  - assert: architecture cli-and-ui-parity
+    severity: high
+    status: pass
+    notes: >
+      Frontend uses /api/v1/* — same API as CLI. What CLI can do, UI can
+      do, and vice versa. No special access paths.
+
+  - assert: architecture remote-management-works
+    severity: high
+    status: pass
+    notes: >
+      CLI with --host flag controls remote instances. Same auth model.
+      Headless instances manageable from any machine with network access.
+      Also accessible via any web browser pointed at the HTTP server.
+
+  - assert: architecture auth-model-defined
+    severity: high
+    status: pass
+    notes: >
+      Token file at ~/.aeordb-client/auth.json (0600 perms) for localhost.
+      CLI reads automatically. Remote connections use --auth-file or --token.
+      Optional --no-auth for trusted networks (with warning).
+
+  # === SYNC ENGINE ===
+
+  - assert: sync_engine has-complete-acceptance-criteria
+    severity: blocker
+    status: pass
+    notes: >
+      Relationship model fully defined. Direction, filters, delete propagation,
+      hierarchy awareness, conflict handling all specified.
+
+  - assert: sync_engine has-test-strategy-defined
+    severity: blocker
+    status: pass
+    notes: >
+      Unit tests for hash comparison, filter matching, hierarchy resolution.
+      Integration tests against real aeordb. Conflict scenario tests.
+      Offline reconciliation tests. Delete propagation tests.
+
+  - assert: sync_engine is-implementation-ready
+    severity: blocker
+    status: pass
+    notes: >
+      Phased implementation plan defined. Data models specified.
+      Library API signatures defined. Component breakdown clear.
+      HTTP control API endpoints defined (RESTful, /api/v1/*).
+
+  - assert: sync_engine dependencies-exist-in-plan
+    severity: high
+    status: pass
+    notes: >
+      aeordb confirmed embeddable as native Rust library today. No HTTP
+      needed for local instance. Direct library calls.
+      Symlink support may require aeordb engine changes — deferred to phase 4.
+
+  - assert: sync_engine is-swarm-divisible
+    severity: medium
+    status: pass
+    notes: >
+      Clearly separable: filesystem watcher, SSE listener, upload worker,
+      download worker, state tracker, conflict detector, offline reconciler,
+      HTTP server, CLI client. Phase 1-5 breakdown enables parallel work.
+
+  - assert: sync_engine has-defined-boundaries
+    severity: high
+    status: pass
+    notes: >
+      Sync engine lives in aeordb-client-lib (pure Rust, no UI deps).
+      HTTP server in binary crate exposes library via REST API + SSE.
+      Frontend communicates via HTTP. CLI communicates via HTTP.
+      Local aeordb is internal to the library.
+
+  - assert: sync_engine fits-architecture
+    severity: blocker
+    status: pass
+    notes: >
+      Single-binary with HTTP as the universal interface. Library crate
+      has zero UI/framework deps. Two aeordb instances: local embedded
+      for state, remote HTTP for the actual database.
+
+  - assert: sync_engine no-conflicts-with other_features
+    severity: medium
+    status: pass
+    notes: >
+      Future features (file browser, admin, query) will be additional
+      API endpoints and UI pages. Same architecture, additive only.
+
+  - assert: sync_engine rollback-safe
+    severity: high
+    status: pass
+    notes: >
+      aeordb's append-only WAL and content-addressing means nothing is
+      ever truly destroyed. Snapshots can capture state before risky
+      operations. Conservative delete propagation defaults (both false).
+
+  # === OPEN QUESTIONS (not blocking, but tracked) ===
+
+  - assert: symlink_aeordb_support is-defined
+    severity: medium
+    status: deferred
+    notes: >
+      SymlinkRecord vs FileRecord-with-flag decision deferred to phase 4.
+      User is aeordb author and will update engine as needed.
+
+  - assert: conflict_ui is-fully-designed
+    severity: low
+    status: deferred
+    notes: >
+      Initial version: table with local vs remote info. Future: diff view.
+      User explicitly said "not entirely sure on UI yet." Will refine later.
+
+  - assert: multiple_remote_connections is-defined
+    severity: medium
+    status: pass
+    notes: >
+      Confirmed: multiple remote aeordb instances supported. Each sync
+      relationship specifies its own remote connection. Connection is a
+      first-class concept (URL, auth, status). Multiple relationships
+      can share one connection.

@@ -1,0 +1,485 @@
+feature: sync_engine
+priority: P0
+status: planning
+description: >
+  Core sync engine that keeps local filesystem directories mirrored with
+  remote aeordb directories. Sync-first architecture — this is the heartbeat
+  of the entire client.
+
+# =============================================================================
+# SYNC RELATIONSHIP MODEL
+# =============================================================================
+remote_connection:
+  description: >
+    A named connection to a remote aeordb instance. Sync relationships
+    reference a connection by ID. Multiple relationships can share one
+    connection, or each can point to a different server.
+  fields:
+    id: UUID (generated on creation)
+    name: User-friendly label (e.g., "Production Server", "Local Dev")
+    url: Base URL of remote aeordb (e.g., "https://db.example.com", "http://localhost:3000")
+    auth:
+      type: enum [api_key, jwt, none]
+      api_key: Optional — stored securely in local aeordb
+      jwt_refresh_token: Optional — for token-based auth
+      note: Auth details persisted in local embedded aeordb, NOT plaintext config files
+    status: enum [connected, disconnected, authenticating, error]
+    created_at: timestamp
+    updated_at: timestamp
+  persistence:
+    location: Local embedded aeordb instance
+    path: "/connections/"
+
+sync_relationship:
+  description: >
+    A first-class binding between a remote aeordb directory and a local
+    filesystem directory. Each relationship is independently configured.
+    Each relationship references a remote connection.
+  fields:
+    id: UUID (generated on creation)
+    name: User-friendly label (e.g., "Work Documents")
+    remote_connection_id: Reference to a remote_connection by UUID
+    remote_path: Directory path in aeordb (e.g., "/projects/website/assets/")
+    local_path: Absolute filesystem path (e.g., "/home/user/Design/assets/")
+    direction:
+      type: enum
+      values: [bidirectional, pull_only, push_only]
+    filter:
+      type: glob pattern list
+      examples: ["*.pdf", "*.jpg, *.png", "!*.tmp, !.DS_Store"]
+      note: Glob syntax, comma-separated, ! prefix for exclusion
+    delete_propagation:
+      local_to_remote: bool (default false)
+      remote_to_local: bool (default false)
+      note: Independent per-direction. Conservative defaults (no delete propagation).
+    enabled: bool (default true)
+    created_at: timestamp
+    updated_at: timestamp
+
+  hierarchy:
+    description: >
+      Relationships are hierarchy-aware. A parent relationship will NOT
+      descend into paths covered by a child relationship. The sync engine
+      knows about all configured relationships and respects boundaries.
+    example:
+      - remote: "/projects/"
+        local: "~/Projects/"
+        direction: bidirectional
+        note: "Will NOT touch /projects/secrets/ because child exists"
+      - remote: "/projects/secrets/"
+        local: "~/Secrets/"
+        direction: pull_only
+        note: "Owns this subtree exclusively"
+
+  persistence:
+    location: Local embedded aeordb instance
+    path: "/sync/relationships/"
+
+# =============================================================================
+# SYNC ENGINE ARCHITECTURE
+# =============================================================================
+engine:
+  location: Tauri Rust backend
+  components:
+
+    filesystem_watcher:
+      crate: notify (Rust)
+      behavior: >
+        Watches all local paths from active sync relationships.
+        Emits file change events (create, modify, delete, rename).
+      coalescing:
+        debounce_ms: 100
+        max_wait_ms: 500
+        note: >
+          Coalesce rapid successive changes. 100ms quiet window,
+          but hard flush at 500ms if changes keep coming.
+      symlinks: Follow and sync. Resolve target, sync content.
+      inotify_limits:
+        note: >
+          Linux default is 8192 watches. Deep trees may exhaust this.
+          Client should detect and warn user, suggest increasing
+          fs.inotify.max_user_watches.
+
+    sse_listener:
+      source: "GET /events/stream on remote aeordb"
+      filters: "entries_created, entries_deleted filtered by synced path prefixes"
+      behavior: >
+        Listens for remote changes relevant to active sync relationships.
+        Triggers pull operations for changed files.
+      reconnection: Auto-reconnect with exponential backoff on disconnect.
+
+    state_tracker:
+      storage: Local embedded aeordb instance
+      tracks_per_file:
+        path: Relative path within sync relationship
+        content_hash: BLAKE3 hash of file content (matches aeordb's hashing)
+        local_modified_at: Last known local modification time
+        remote_modified_at: Last known remote modification time
+        sync_status: enum [synced, pending_push, pending_pull, conflict, error]
+        last_synced_at: timestamp
+      tracks_per_relationship:
+        last_full_scan_at: timestamp
+        last_remote_event_id: For SSE resume
+        pending_changes_count: int
+
+    change_detector:
+      local_changes:
+        - Filesystem watcher events (real-time)
+        - Periodic full scan as safety net (configurable interval)
+        - Hash comparison against state tracker to confirm actual content change
+      remote_changes:
+        - SSE events (real-time)
+        - Hash comparison against state tracker
+      rename_detection:
+        method: >
+          Content hash matching. If file disappears at path A and appears
+          at path B with same content hash within a time window, treat as
+          rename. Optimize: server-side move instead of delete + re-upload.
+
+    conflict_detector:
+      trigger: >
+        Bidirectional sync only. Both local and remote changed the same
+        file since last sync (detected via state tracker).
+      behavior: >
+        Pause the conflicted file. Do NOT sync either direction.
+        Add to conflict queue. Surface to user for resolution.
+      conflict_record:
+        file_path: Relative path
+        relationship_id: UUID
+        local_hash: Current local content hash
+        remote_hash: Current remote content hash
+        last_synced_hash: Hash at last successful sync
+        local_modified_at: timestamp
+        remote_modified_at: timestamp
+        detected_at: timestamp
+      resolution_options:
+        - keep_local (push local version to remote)
+        - keep_remote (pull remote version to local)
+        - keep_both (rename one, e.g., "file (conflict).ext")
+        - manual (user will handle it themselves)
+      conflict_ui:
+        initial_version: >
+          Table showing: file path, local info (date, size),
+          remote info (date, size). User picks resolution per-file.
+        future: Diff view, side-by-side comparison
+
+    upload_worker:
+      protocol: aeordb 4-phase upload (config, check, chunks, commit)
+      behavior: >
+        Chunks local files using aeordb's 256KB chunking and BLAKE3 hashing.
+        Uses check endpoint for dedup — only uploads new chunks.
+        Commits atomically.
+      concurrency: Configurable worker pool (default 4 concurrent uploads)
+      progress: Reports per-file and overall progress to frontend via Tauri events
+
+    download_worker:
+      protocol: "GET /engine/{path} for file content"
+      behavior: >
+        Downloads remote files, writes to local filesystem at configured
+        local path. Updates state tracker on completion.
+      concurrency: Configurable worker pool (default 4 concurrent downloads)
+      progress: Reports per-file and overall progress to frontend via Tauri events
+
+    offline_reconciler:
+      trigger: Connection restored after offline period
+      algorithm:
+        1: Diff local filesystem state against state tracker (what changed locally while offline)
+        2: Query remote for changes since last_remote_event_id (what changed remotely while offline)
+        3: Classify each change as push, pull, or conflict
+        4: Process non-conflicting changes automatically
+        5: Queue conflicts for user resolution
+      note: >
+        aeordb's content hashing makes this reliable. Hash match = no change,
+        regardless of timestamps or clock skew.
+
+# =============================================================================
+# SYMLINK SUPPORT
+# =============================================================================
+symlinks:
+  behavior: >
+    Full symlink support. Symlinks in sync folders are followed and their
+    content is synced. May require aeordb engine updates to store symlink
+    metadata (target path) as a first-class concept.
+  aeordb_changes_needed:
+    option_preferred: >
+      New SymlinkRecord entry type in the append-only WAL. Stores target
+      path as content. Content-addressed like everything else.
+    option_fallback: >
+      Store as FileRecord with special flag or content type indicating
+      it's a symlink. Content is the target path string.
+  note: >
+    Decision on aeordb-side implementation deferred to when we implement
+    this. The client design assumes symlinks are a supported concept.
+
+# =============================================================================
+# CLIENT IDENTITY
+# =============================================================================
+client_identity:
+  id: UUID (generated on first launch)
+  name: User-configurable friendly name (e.g., "Wyatt's Laptop")
+  storage: Local embedded aeordb instance at /client/identity
+  purpose: >
+    Identifies this client instance. Used in sync metadata so the remote
+    can (optionally) track which client last modified a file.
+
+# =============================================================================
+# LIBRARY API (aeordb-client-lib public interface)
+# =============================================================================
+library_api:
+  description: >
+    These are the public Rust API methods on aeordb-client-lib. Both the
+    Tauri frontend (via Tauri commands) and the CLI/IPC layer call these
+    same methods. Single source of truth.
+  connections:
+    - get_connections() -> Vec<RemoteConnection>
+    - get_connection(id: UUID) -> RemoteConnection
+    - create_connection(config: ConnectionConfig) -> RemoteConnection
+    - update_connection(id: UUID, config: ConnectionConfig) -> RemoteConnection
+    - delete_connection(id: UUID) -> ()
+    - test_connection(id: UUID) -> ConnectionTestResult
+  sync_relationships:
+    - get_sync_relationships() -> Vec<SyncRelationship>
+    - get_sync_relationship(id: UUID) -> SyncRelationship
+    - create_sync_relationship(config: SyncRelationshipConfig) -> SyncRelationship
+    - update_sync_relationship(id: UUID, config: SyncRelationshipConfig) -> SyncRelationship
+    - delete_sync_relationship(id: UUID) -> ()
+    - enable_sync_relationship(id: UUID) -> ()
+    - disable_sync_relationship(id: UUID) -> ()
+  sync_control:
+    - get_sync_status() -> SyncStatus (overall)
+    - get_relationship_status(id: UUID) -> RelationshipSyncStatus
+    - trigger_full_scan(id: UUID) -> () (manual reconciliation)
+    - pause_sync() -> ()
+    - resume_sync() -> ()
+  conflicts:
+    - get_conflicts() -> Vec<ConflictRecord>
+    - get_conflicts_for_relationship(id: UUID) -> Vec<ConflictRecord>
+    - resolve_conflict(conflict_id: UUID, resolution: ConflictResolution) -> ()
+    - resolve_all_conflicts(resolution: ConflictResolution) -> ()
+  events:
+    description: >
+      The library emits events via a channel/callback mechanism. The HTTP
+      server exposes these as SSE at /api/v1/events/stream. The frontend
+      subscribes to this SSE endpoint. The CLI can also subscribe for
+      real-time output (e.g., aeordb-client sync status --watch).
+    types:
+      - sync_progress: Per-file upload/download progress
+      - sync_status_changed: Relationship status updates
+      - conflict_detected: New conflict found
+      - connection_status_changed: Online/offline transitions
+
+# =============================================================================
+# IMPLEMENTATION PHASES
+# =============================================================================
+phases:
+  # =========================================================================
+  # INFANT — minimal viable sync client (CLI-only, pull-only)
+  # =========================================================================
+
+  step_1:
+    name: Skeleton
+    description: Binary boots, parses args, HTTP server starts
+    deliverables:
+      - Cargo workspace (aeordb-client-lib + aeordb-client)
+      - Binary entry point with clap argument parsing
+      - Runtime mode detection (server mode vs CLI subcommand mode)
+      - HTTP server (axum) starts and serves health endpoint
+      - "GET /api/v1/status → { status: running, uptime, version }"
+
+  step_2:
+    name: Local state store
+    description: Embedded aeordb for client state
+    deliverables:
+      - Open/create ~/.aeordb-client/state.aeordb on startup
+      - Client identity generated on first run (UUID + friendly name)
+      - Library API for reading/writing local state
+      - State persists across restarts
+
+  step_3:
+    name: Connection management
+    description: Add, list, test, remove remote aeordb connections
+    deliverables:
+      - Library API — create/list/get/update/delete/test connections
+      - Remote connection model (URL, auth type, credentials)
+      - HTTP client for talking to remote aeordb instances
+      - Connection test (hit remote /admin/health, verify auth)
+      - HTTP API endpoints — CRUD at /api/v1/connections
+      - CLI subcommands — connections add/list/remove/test
+      - Connection configs persisted in local aeordb at /connections/
+
+  step_4:
+    name: Sync relationship CRUD
+    description: Define sync relationships (config only, no sync yet)
+    deliverables:
+      - Library API — create/list/get/update/delete relationships
+      - Sync relationship model (remote connection, remote path, local path, direction, etc.)
+      - Validation (local path exists or can be created, remote path exists)
+      - HTTP API endpoints — CRUD at /api/v1/sync
+      - CLI subcommands — sync add/list/remove
+      - Relationships persisted in local aeordb at /sync/relationships/
+
+  step_5:
+    name: Pull sync (one-shot)
+    description: Actually sync files — the moment it comes alive
+    deliverables:
+      - List remote directory contents via aeordb HTTP API (GET /engine/{path})
+      - State tracker — per-file records (path, content hash, timestamps, status)
+      - Diff engine — compare remote state vs local state tracker
+      - Download worker — fetch files from remote, write to local filesystem
+      - State tracker updated after each successful download
+      - One-shot "do a full sync pass" triggered via API or CLI
+      - HTTP API — POST /api/v1/sync/:id/trigger
+      - CLI — aeordb-client sync trigger <id>
+      - Sync status reporting (GET /api/v1/sync/:id/status)
+
+  step_6:
+    name: CLI control mode
+    description: Full CLI experience for controlling the running instance
+    deliverables:
+      - Binary detects subcommand → HTTP client mode (not server mode)
+      - All subcommands send HTTP requests to running instance
+      - Default target localhost:9400, overridable with --host
+      - --json flag for machine-readable output
+      - Human-friendly formatted output by default
+      - aeordb-client status, stop, restart subcommands
+      - Auth token file for localhost (auto-read from ~/.aeordb-client/auth.json)
+
+  # =========================================================================
+  # GROWTH — real-time sync, bidirectional, full feature set
+  # =========================================================================
+
+  step_7:
+    name: Continuous pull sync
+    description: Real-time change detection from remote via SSE
+    deliverables:
+      - SSE client subscribes to remote aeordb /events/stream
+      - Filter SSE events by synced path prefixes
+      - Incoming events trigger targeted pull for changed files
+      - Auto-reconnect with exponential backoff on disconnect
+      - Connection status tracking (online/offline transitions)
+      - Library events emitted for status changes
+
+  step_8:
+    name: Push sync
+    description: Local filesystem changes pushed to remote
+    deliverables:
+      - Filesystem watcher (notify crate) on all active sync local paths
+      - Change coalescing (100ms debounce, 500ms hard cap)
+      - Upload worker using aeordb 4-phase upload protocol
+      - Chunk local files (256KB, BLAKE3 hashing)
+      - Dedup check against remote (POST /upload/check)
+      - Upload only new chunks (PUT /upload/chunks/{hash})
+      - Atomic commit (POST /upload/commit)
+      - State tracker updated after successful push
+      - Configurable upload concurrency (default 4 workers)
+
+  step_9:
+    name: Bidirectional sync and conflict detection
+    description: Both directions active, conflicts detected and queued
+    deliverables:
+      - Bidirectional mode — SSE listener + filesystem watcher active simultaneously
+      - Conflict detector — both sides changed since last sync
+      - Conflict queue — paused files waiting for user resolution
+      - Conflict model (local hash, remote hash, last synced hash, timestamps)
+      - Library API — get/resolve conflicts
+      - HTTP API — /api/v1/conflicts endpoints
+      - CLI — conflicts list, conflicts resolve
+
+  step_10:
+    name: Filters and delete propagation
+    description: Per-relationship glob filters and configurable delete behavior
+    deliverables:
+      - Glob pattern matching for sync filters (include/exclude)
+      - Filter applied to both pull and push directions
+      - Delete propagation settings (local→remote, remote→local, independent bools)
+      - Deletion events from SSE trigger local deletes (if configured)
+      - Local file deletions trigger remote deletes (if configured)
+
+  step_11:
+    name: Multi-relationship hierarchy and rename detection
+    description: Multiple concurrent relationships with boundary awareness
+    deliverables:
+      - Multiple relationships running simultaneously
+      - Hierarchy awareness — parent skips child-owned subtrees
+      - Rename detection via content hash (same hash at different path = rename)
+      - Optimized rename handling (server-side move vs delete + re-upload)
+
+  step_12:
+    name: Offline reconciliation
+    description: Reconnect after offline period and reconcile changes
+    deliverables:
+      - Detect connection loss and queue local changes
+      - On reconnect, diff local state vs state tracker (local changes while offline)
+      - On reconnect, query remote for changes since last known state
+      - Classify changes as push, pull, or conflict
+      - Process non-conflicting changes automatically
+      - Queue conflicts for user resolution
+
+  step_13:
+    name: Symlink support
+    description: Full symlink sync support
+    deliverables:
+      - aeordb engine updates (SymlinkRecord or equivalent) — coordinate with aeordb repo
+      - Detect symlinks in watched directories
+      - Sync symlink target path as metadata
+      - Recreate symlinks on pull
+
+  # =========================================================================
+  # UI — web interface and desktop experience
+  # =========================================================================
+
+  step_14:
+    name: WebComponent UI shell
+    description: Basic web interface served by the HTTP server
+    deliverables:
+      - Static HTML/JS/CSS served at /
+      - WebComponent architecture (custom elements, shadow DOM)
+      - App shell with navigation (connections, sync, conflicts, settings)
+      - Calls /api/v1/* — same API as CLI
+      - SSE subscription for real-time updates
+
+  step_15:
+    name: UI — connection and sync management pages
+    description: Full management UI
+    deliverables:
+      - Connections page (list, add, edit, test, remove)
+      - Sync relationships page (list, add, edit, remove, status)
+      - Sync status dashboard (per-relationship health, progress)
+      - Conflict resolution page (list conflicts, resolve per-file)
+
+  step_16:
+    name: Tauri webview and systray
+    description: Desktop app experience
+    deliverables:
+      - Tauri wraps the web UI in a native window
+      - Systray icon with status indicator (synced/syncing/conflict/error/paused)
+      - Systray menu (open window, pause/resume, quit)
+      - Close window → minimize to tray
+      - Desktop mode is default, --headless disables it
+
+  # =========================================================================
+  # HARDENING — resilience, security, polish
+  # =========================================================================
+
+  step_17:
+    name: Auth and security
+    description: Secure the local HTTP API
+    deliverables:
+      - Auth token generated on first startup
+      - Token written to ~/.aeordb-client/auth.json (0600 permissions)
+      - All /api/v1/* endpoints require auth token
+      - CLI auto-reads token file for localhost
+      - --token / --auth-file flags for remote instances
+      - Optional --no-auth flag for trusted networks (with warning)
+
+  step_18:
+    name: Resilience and error handling
+    description: Production-grade reliability
+    deliverables:
+      - inotify watch limit detection and user warning (Linux)
+      - Large file progress tracking (per-file, per-chunk)
+      - Retry logic for transient network failures (with backoff)
+      - Graceful restart (finish in-flight ops, re-init watchers)
+      - SIGHUP handler for graceful restart
+      - Comprehensive error reporting via API and events
+      - Daemon mode (--daemon, fork to background, pidfile)

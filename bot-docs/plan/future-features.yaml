@@ -1,0 +1,152 @@
+future_features:
+  description: >
+    Features planned for after core sync is solid. These are NOT in scope
+    for the initial implementation (steps 1-6 in sync-engine.yaml). Each
+    will get its own planning round when the time comes.
+
+  # =========================================================================
+  # SYNC GROWTH (steps 7-13 in sync-engine.yaml)
+  # These are the next priorities after the infant is alive.
+  # =========================================================================
+
+  continuous_pull_sync:
+    step: 7
+    priority: P0
+    description: Real-time pull via SSE from remote aeordb
+    planned_in: sync-engine.yaml
+
+  push_sync:
+    step: 8
+    priority: P0
+    description: Filesystem watcher + 4-phase upload protocol
+    planned_in: sync-engine.yaml
+
+  bidirectional_sync_and_conflicts:
+    step: 9
+    priority: P0
+    description: Both directions active, conflict detection and resolution
+    planned_in: sync-engine.yaml
+
+  filters_and_delete_propagation:
+    step: 10
+    priority: P1
+    description: Glob filters per-relationship, configurable delete behavior
+    planned_in: sync-engine.yaml
+
+  multi_relationship_hierarchy:
+    step: 11
+    priority: P1
+    description: Multiple concurrent relationships, hierarchy awareness, rename detection
+    planned_in: sync-engine.yaml
+
+  offline_reconciliation:
+    step: 12
+    priority: P1
+    description: Reconnect after offline and reconcile changes
+    planned_in: sync-engine.yaml
+
+  symlink_support:
+    step: 13
+    priority: P2
+    description: Full symlink sync, may require aeordb engine changes
+    planned_in: sync-engine.yaml
+
+  # =========================================================================
+  # UI (steps 14-16 in sync-engine.yaml)
+  # =========================================================================
+
+  webcomponent_ui_shell:
+    step: 14
+    priority: P1
+    description: Basic web UI served by HTTP server, WebComponent architecture
+    planned_in: sync-engine.yaml
+
+  ui_management_pages:
+    step: 15
+    priority: P1
+    description: Connection, sync, conflict, and settings management pages
+    planned_in: sync-engine.yaml
+
+  tauri_and_systray:
+    step: 16
+    priority: P1
+    description: Desktop app with native window and systray icon
+    planned_in: sync-engine.yaml
+
+  # =========================================================================
+  # HARDENING (steps 17-18 in sync-engine.yaml)
+  # =========================================================================
+
+  auth_and_security:
+    step: 17
+    priority: P1
+    description: Token-based auth for the local HTTP API
+    planned_in: sync-engine.yaml
+
+  resilience:
+    step: 18
+    priority: P1
+    description: Retry logic, graceful restart, inotify limits, daemon mode
+    planned_in: sync-engine.yaml
+
+  # =========================================================================
+  # SUITE FEATURES (not yet planned in detail)
+  # These get their own planning rounds when the sync client is mature.
+  # =========================================================================
+
+  file_browser:
+    priority: P2
+    description: >
+      Navigate the aeordb filesystem visually. Browse directories, view
+      file metadata, upload/download files manually, preview content.
+      Shows sync status per-file when a sync relationship covers the path.
+    depends_on: [ui_management_pages, sync engine]
+    notes: Likely the first "suite" feature since it complements sync naturally.
+
+  query_builder:
+    priority: P2
+    description: >
+      Construct and execute queries against indexed aeordb data. Visual
+      query builder for boolean logic (and/or/not), field selection,
+      sorting, pagination. Results table with projections. Explain mode
+      for query plan inspection. Aggregation support.
+    depends_on: [ui_management_pages]
+
+  version_management:
+    priority: P2
+    description: >
+      Create/restore/delete snapshots. Create/promote/delete forks.
+      Visual diff between versions. Export/import .aeordb files.
+      Diff/patch generation. Timeline view of snapshot history.
+    depends_on: [ui_management_pages]
+
+  admin_panel:
+    priority: P2
+    description: >
+      User and group management. API key creation/revocation.
+      Garbage collection trigger and monitoring. Background task
+      viewer with progress. Cron schedule management. Health check
+      and Prometheus metrics display. Role-gated — only visible if
+      user has admin permissions.
+    depends_on: [ui_management_pages]
+
+  index_management:
+    priority: P2
+    description: >
+      Configure per-directory indexes. Visual editor for indexes.json.
+      Monitor reindex progress. View index types and strategies per field.
+    depends_on: [ui_management_pages, file_browser]
+
+  plugin_management:
+    priority: P3
+    description: >
+      Deploy/remove WASM parser and query plugins. Invoke query plugins.
+      View deployed plugins per database. Plugin output viewer.
+    depends_on: [ui_management_pages]
+
+  event_stream_viewer:
+    priority: P3
+    description: >
+      Real-time SSE event viewer. Filter by event type and path prefix.
+      Live tail of database activity. Useful for debugging and monitoring.
+    depends_on: [ui_management_pages]

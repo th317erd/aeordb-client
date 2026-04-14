@@ -1,0 +1,41 @@
+client_overview:
+  name: AeorDB Client
+  tagline: "A sync-first client for AeorDB — runs headed or headless, controlled via HTTP"
+  philosophy:
+    - Sync-first — the client's primary job is keeping local folders mirrored with remote aeordb
+    - Single binary — one process does everything, runs anywhere
+    - HTTP is the universal interface — UI, CLI, and remote management all use the same API
+    - Headless-capable — runs on servers, NAS, containers without a display
+    - Native web platform only — WebComponents, vanilla JS, HTML5, zero frameworks
+    - Dogfoods aeordb — local embedded aeordb instance for client state
+
+  stack:
+    backend:
+      language: Rust
+      http_server: axum (or similar)
+      webview: Tauri (desktop mode only)
+      local_database: aeordb (embedded, library mode, direct Rust API)
+      remote_communication: HTTP client to remote aeordb instance(s)
+    frontend:
+      components: Native WebComponents (custom elements, shadow DOM)
+      language: Vanilla JavaScript (ES modules)
+      markup: HTML5
+      styling: CSS (no preprocessors unless user requests)
+      bundler: None
+      frameworks: None — this is non-negotiable
+
+  architecture:
+    single_binary: aeordb-client
+    modes:
+      desktop: "HTTP server + Tauri webview + systray"
+      headless: "HTTP server only (--headless)"
+      daemon: "HTTP server, backgrounded (--daemon)"
+      cli: "Thin HTTP client to running instance"
+    workspace:
+      aeordb-client-lib: "Pure Rust library — sync engine, connections, local aeordb"
+      aeordb-client: "Binary — HTTP server, Tauri, CLI, systray"
+    communication:
+      internal: "Library calls (in-process, Rust)"
+      external: "HTTP API (/api/v1/*) + SSE (/api/v1/events/stream)"
+      cli_to_daemon: "HTTP (same API as everything else)"
+      ui_to_backend: "HTTP (same API as everything else)"

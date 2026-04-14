@@ -1,0 +1,42 @@
+aeordb_capabilities:
+  overview: Content-addressed file database, filesystem model, Git-like versioning, WASM plugins, HTTP API
+  storage:
+    model: Append-only WAL, BLAKE3 content hashing
+    chunking: 256KB chunks, automatic deduplication
+    compression: Optional zstd per-directory, auto-detection heuristics
+    crash_recovery: Hot file WAL, magic byte scanning, multi-tier recovery
+  api:
+    base: HTTP (axum-based), default port 3000
+    files: PUT/GET/DELETE/HEAD /engine/{path}
+    query: POST /query — boolean logic, sorting, pagination, projections, aggregations
+    upload_protocol:
+      phases: [config negotiation, chunk check (dedup), chunk upload, commit]
+      hash: "blake3('chunk:' + bytes), 256KB chunks"
+    versioning:
+      snapshots: Named point-in-time references to root hash
+      forks: Isolated branches, promotable to HEAD
+      diff_patch: Changeset between two versions
+      export_import: Self-contained .aeordb files
+    events: GET /events/stream — SSE with filtering (entries_created, entries_deleted, etc.)
+    admin:
+      gc: Mark-and-sweep garbage collection
+      tasks: Background task system with progress tracking
+      cron: Scheduled tasks (gc, reindex)
+      users_groups: Full user/group management
+      api_keys: Create/list/revoke
+      metrics: Prometheus endpoint
+    auth:
+      modes: [disabled, self-contained, file-based]
+      flow: API key → JWT + refresh token
+      magic_links: Passwordless auth option
+    plugins:
+      parser: WASM plugins transform non-JSON to queryable JSON
+      query: WASM plugins for custom data-layer logic
+  indexing:
+    model: Opt-in per-directory via .config/indexes.json
+    types: [u64, i64, f64, string, timestamp, trigram, phonetic, soundex, dmetaphone]
+    multi_strategy: Single field can have multiple index types
+    reindexing: Automatic background reindex on config change
+  embeddability:
+    status: Design goal — embedded library mode without HTTP server
+    note: If gaps exist, engine will be updated. Client is the proving ground.
