@@ -175,8 +175,12 @@ async fn main() -> anyhow::Result<()> {
 
       let database_path = database.unwrap_or_else(default_database_path);
 
-      let state = create_app_state(&database_path)
+      let mut state = create_app_state(&database_path)
         .map_err(|error| anyhow::anyhow!("failed to initialize: {}", error))?;
+
+      // Wire up the API-triggered shutdown signal
+      let api_shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
+      state.shutdown_signal = Some(api_shutdown.clone());
 
       let api_router    = build_router(state);
       let static_router = static_files::static_routes();
@@ -188,8 +192,16 @@ async fn main() -> anyhow::Result<()> {
       tracing::info!("aeordb-client listening on {}", address);
       tracing::info!("UI available at http://{}", address);
 
+      // Shutdown on either OS signal or API request
+      let shutdown_future = async move {
+        tokio::select! {
+          _ = shutdown_signal() => {}
+          _ = api_shutdown.notified() => { tracing::info!("shutdown requested via API"); }
+        }
+      };
+
       axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_future)
         .await?;
 
       tracing::info!("aeordb-client shut down gracefully");
