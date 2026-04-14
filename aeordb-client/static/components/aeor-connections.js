@@ -74,7 +74,8 @@ class AeorConnections extends HTMLElement {
           margin-bottom: 4px;
         }
 
-        .form-row input {
+        .form-row input,
+        .form-row select {
           width: 100%;
           padding: 8px 12px;
           border-radius: 6px;
@@ -82,9 +83,11 @@ class AeorConnections extends HTMLElement {
           background-color: var(--bg-tertiary, #21262d);
           color: var(--text-primary, #e6edf3);
           font-size: 14px;
+          font-family: inherit;
         }
 
-        .form-row input:focus { border-color: var(--accent, #58a6ff); outline: none; }
+        .form-row input:focus,
+        .form-row select:focus { border-color: var(--accent, #f97316); outline: none; }
         .form-actions { display: flex; gap: 8px; margin-top: 16px; }
 
         .id-cell {
@@ -96,7 +99,7 @@ class AeorConnections extends HTMLElement {
 
       <h1>
         Connections
-        <button id="add-btn">${(this._showAddForm) ? 'Cancel' : 'Add Connection'}</button>
+        <button id="add-btn" class="${(this._showAddForm) ? 'secondary' : ''}">${(this._showAddForm) ? 'Cancel' : 'Add Connection'}</button>
       </h1>
 
       ${(this._showAddForm) ? this._renderAddForm() : ''}

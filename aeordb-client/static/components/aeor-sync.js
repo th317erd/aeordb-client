@@ -37,15 +37,16 @@ class AeorSync extends HTMLElement {
         .form-overlay h2 { font-size: 16px; margin-bottom: 16px; }
         .form-row { margin-bottom: 12px; }
         .form-row label { display: block; font-size: 12px; color: var(--text-secondary, #8b949e); margin-bottom: 4px; }
-        .form-row input, .form-row select { width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border, #30363d); background-color: var(--bg-tertiary, #21262d); color: var(--text-primary, #e6edf3); font-size: 14px; }
-        .form-row input:focus, .form-row select:focus { border-color: var(--accent, #58a6ff); outline: none; }
+        .form-row input, .form-row select { width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border, #30363d); background-color: var(--bg-tertiary, #21262d); color: var(--text-primary, #e6edf3); font-size: 14px; font-family: inherit; appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M2 4l4 4 4-4'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; }
+        .form-row input { background-image: none; }
+        .form-row input:focus, .form-row select:focus { border-color: var(--accent, #f97316); outline: none; }
         .form-actions { display: flex; gap: 8px; margin-top: 16px; }
         .id-cell { font-family: var(--font-mono, monospace); font-size: 12px; color: var(--text-secondary, #8b949e); }
       </style>
 
       <h1>
         Sync Relationships
-        <button id="add-btn">${(this._showAddForm) ? 'Cancel' : 'Add Sync'}</button>
+        <button id="add-btn" class="${(this._showAddForm) ? 'secondary' : ''}">${(this._showAddForm) ? 'Cancel' : 'Add Sync'}</button>
       </h1>
 
       ${(this._showAddForm) ? this._renderAddForm() : ''}
