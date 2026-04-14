@@ -3,7 +3,8 @@ use axum::http::StatusCode;
 use axum::response::Json;
 
 use crate::server::AppState;
-use crate::sync::engine::{SyncPassResult, pull_sync_pass};
+use crate::sync::engine::pull_sync_pass;
+use crate::sync::push::push_sync_pass;
 use crate::sync::relationships::{
   CreateSyncRelationshipRequest, RelationshipManager,
   SyncRelationship, UpdateSyncRelationshipRequest,
@@ -135,9 +136,9 @@ pub async fn disable_relationship(
 pub async fn trigger_sync(
   State(state): State<AppState>,
   Path(id): Path<String>,
-) -> Result<Json<SyncPassResult>, (StatusCode, Json<serde_json::Value>)> {
-  pull_sync_pass(&state.state_store, &id).await
-    .map(Json)
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+  // Run both pull and push, return combined results
+  let pull_result = pull_sync_pass(&state.state_store, &id).await
     .map_err(|error| {
       let status = if error.to_string().contains("not found") || error.to_string().contains("disabled") {
         StatusCode::BAD_REQUEST
@@ -145,5 +146,16 @@ pub async fn trigger_sync(
         StatusCode::INTERNAL_SERVER_ERROR
       };
       (status, Json(serde_json::json!({ "error": error.to_string() })))
-    })
+    })?;
+
+  let push_result = push_sync_pass(&state.state_store, &id).await
+    .map_err(|error| (
+      StatusCode::INTERNAL_SERVER_ERROR,
+      Json(serde_json::json!({ "error": error.to_string() })),
+    ))?;
+
+  Ok(Json(serde_json::json!({
+    "pull": pull_result,
+    "push": push_result,
+  })))
 }

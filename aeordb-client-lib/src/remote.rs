@@ -154,4 +154,61 @@ impl RemoteClient {
 
     Ok(response.status().is_success())
   }
+
+  /// Upload a file to the remote aeordb instance.
+  /// Uses the simple PUT /engine/{path} endpoint.
+  pub async fn upload_file(
+    &self,
+    remote_path: &str,
+    data: Vec<u8>,
+    content_type: Option<&str>,
+  ) -> Result<()> {
+    let url = format!("{}/engine{}", self.base_url, remote_path);
+
+    let mut request = self.http_client.put(&url).body(data);
+
+    if let Some(content_type) = content_type {
+      request = request.header("Content-Type", content_type);
+    }
+
+    if let Some(ref auth) = self.auth_header() {
+      request = request.header("Authorization", auth);
+    }
+
+    let response = request.send().await
+      .map_err(|error| ClientError::Server(
+        format!("failed to upload {}: {}", remote_path, error),
+      ))?;
+
+    if !response.status().is_success() {
+      return Err(ClientError::Server(
+        format!("remote returned HTTP {} for PUT {}", response.status(), remote_path),
+      ));
+    }
+
+    Ok(())
+  }
+
+  /// Delete a file on the remote aeordb instance.
+  pub async fn delete_file(&self, remote_path: &str) -> Result<()> {
+    let url = format!("{}/engine{}", self.base_url, remote_path);
+
+    let mut request = self.http_client.delete(&url);
+    if let Some(ref auth) = self.auth_header() {
+      request = request.header("Authorization", auth);
+    }
+
+    let response = request.send().await
+      .map_err(|error| ClientError::Server(
+        format!("failed to delete remote {}: {}", remote_path, error),
+      ))?;
+
+    if !response.status().is_success() {
+      return Err(ClientError::Server(
+        format!("remote returned HTTP {} for DELETE {}", response.status(), remote_path),
+      ));
+    }
+
+    Ok(())
+  }
 }

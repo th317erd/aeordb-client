@@ -9,7 +9,7 @@ use aeordb_client_lib::connections::{AuthType, CreateConnectionRequest};
 use aeordb_client_lib::connections::ConnectionManager;
 use aeordb_client_lib::server::{ServerConfig, start_server_with_handle};
 use aeordb_client_lib::state::StateStore;
-use aeordb_client_lib::sync::engine::{SyncPassResult, pull_sync_pass};
+use aeordb_client_lib::sync::engine::pull_sync_pass;
 use aeordb_client_lib::sync::relationships::{
   CreateSyncRelationshipRequest, RelationshipManager, SyncDirection,
 };
@@ -313,9 +313,9 @@ async fn test_pull_sync_via_http_api() {
 
   assert_eq!(trigger_response.status(), 200);
 
-  let result: SyncPassResult = trigger_response.json().await.expect("parse failed");
-  assert_eq!(result.files_downloaded, 3);
-  assert_eq!(result.files_failed, 0);
+  let result: serde_json::Value = trigger_response.json().await.expect("parse failed");
+  assert_eq!(result["pull"]["files_downloaded"], 3);
+  assert_eq!(result["pull"]["files_failed"], 0);
 
   // Verify files exist
   assert!(local_sync_dir.join("readme.md").exists());

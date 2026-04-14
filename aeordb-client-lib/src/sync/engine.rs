@@ -227,7 +227,7 @@ async fn sync_directory_recursive(
 }
 
 /// Generate the state store key for a file's sync state.
-fn file_state_key(relationship_id: &str, remote_path: &str) -> String {
+pub fn file_state_key(relationship_id: &str, remote_path: &str) -> String {
   // Use a hash of the remote path to avoid filesystem-unfriendly characters
   let path_hash = blake3::hash(remote_path.as_bytes());
   let short_hash = &path_hash.to_hex()[..16];
