@@ -53,9 +53,71 @@ pub async fn resolve_conflict(
       Json(serde_json::json!({ "error": format!("conflict not found: {}", id) })),
     ))?;
 
-  // TODO: Implement the actual file resolution logic based on request.resolution
-  // For now, just remove the conflict from the queue
-  let _ = request.resolution; // Will be used when we implement actual resolution
+  // Resolve the conflict by performing the requested action
+  let resolution_action = match request.resolution {
+    ConflictResolution::KeepLocal => {
+      // Push the local version to remote
+      // Load relationship to find paths
+      let rel_manager = crate::sync::relationships::RelationshipManager::new(&state.state_store);
+      if let Ok(Some(relationship)) = rel_manager.get(&conflict.relationship_id) {
+        let conn_manager = crate::connections::ConnectionManager::new(&state.state_store);
+        if let Ok(Some(connection)) = conn_manager.get(&relationship.remote_connection_id) {
+          let mut upload_client = crate::remote::upload::UploadClient::new(&connection);
+
+          // Determine local file path from the conflict
+          let relative = conflict.file_path.strip_prefix(&relationship.remote_path).unwrap_or(&conflict.file_path);
+          let local_path = format!("{}/{}", relationship.local_path, relative);
+
+          if let Ok(bytes) = std::fs::read(&local_path) {
+            let content_type = crate::sync::push::mime_from_extension(std::path::Path::new(&local_path));
+            let _ = upload_client.upload_file_chunked(&conflict.file_path, &bytes, content_type.as_deref()).await;
+          }
+        }
+      }
+      "kept_local"
+    }
+    ConflictResolution::KeepRemote => {
+      // Pull the remote version to local
+      let rel_manager = crate::sync::relationships::RelationshipManager::new(&state.state_store);
+      if let Ok(Some(relationship)) = rel_manager.get(&conflict.relationship_id) {
+        let conn_manager = crate::connections::ConnectionManager::new(&state.state_store);
+        if let Ok(Some(connection)) = conn_manager.get(&relationship.remote_connection_id) {
+          let remote_client = crate::remote::RemoteClient::from_connection(&connection);
+
+          let relative = conflict.file_path.strip_prefix(&relationship.remote_path).unwrap_or(&conflict.file_path);
+          let local_path = format!("{}/{}", relationship.local_path, relative);
+
+          if let Ok((bytes, _metadata)) = remote_client.download_file(&conflict.file_path).await {
+            let _ = std::fs::write(&local_path, &bytes);
+          }
+        }
+      }
+      "kept_remote"
+    }
+    ConflictResolution::KeepBoth => {
+      // Rename the local version with a ".conflict" suffix, then pull remote
+      let rel_manager = crate::sync::relationships::RelationshipManager::new(&state.state_store);
+      if let Ok(Some(relationship)) = rel_manager.get(&conflict.relationship_id) {
+        let conn_manager = crate::connections::ConnectionManager::new(&state.state_store);
+        if let Ok(Some(connection)) = conn_manager.get(&relationship.remote_connection_id) {
+          let remote_client = crate::remote::RemoteClient::from_connection(&connection);
+
+          let relative = conflict.file_path.strip_prefix(&relationship.remote_path).unwrap_or(&conflict.file_path);
+          let local_path = format!("{}/{}", relationship.local_path, relative);
+
+          // Rename local to .local-conflict
+          let conflict_path = format!("{}.local-conflict", local_path);
+          let _ = std::fs::rename(&local_path, &conflict_path);
+
+          // Pull remote version
+          if let Ok((bytes, _metadata)) = remote_client.download_file(&conflict.file_path).await {
+            let _ = std::fs::write(&local_path, &bytes);
+          }
+        }
+      }
+      "kept_both"
+    }
+  };
 
   manager.resolve(&id)
     .map_err(|error| (
@@ -67,6 +129,7 @@ pub async fn resolve_conflict(
     "resolved": true,
     "conflict_id": id,
     "file_path": conflict.file_path,
+    "action": resolution_action,
   })))
 }
 

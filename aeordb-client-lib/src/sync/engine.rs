@@ -36,13 +36,14 @@ pub enum SyncStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncPassResult {
-  pub relationship_id:  String,
-  pub files_downloaded: u64,
-  pub files_skipped:    u64,
-  pub files_failed:     u64,
-  pub total_bytes:      u64,
-  pub duration_ms:      u64,
-  pub errors:           Vec<String>,
+  pub relationship_id:    String,
+  pub files_downloaded:   u64,
+  pub files_skipped:      u64,
+  pub files_failed:       u64,
+  pub conflicts_detected: u64,
+  pub total_bytes:        u64,
+  pub duration_ms:        u64,
+  pub errors:             Vec<String>,
 }
 
 /// Execute a one-shot pull sync pass for a given relationship.
@@ -75,16 +76,18 @@ pub async fn pull_sync_pass(
   let remote_client = RemoteClient::from_connection(&connection);
 
   let mut result = SyncPassResult {
-    relationship_id:  relationship_id.to_string(),
-    files_downloaded: 0,
-    files_skipped:    0,
-    files_failed:     0,
-    total_bytes:      0,
-    duration_ms:      0,
-    errors:           Vec::new(),
+    relationship_id:    relationship_id.to_string(),
+    files_downloaded:   0,
+    files_skipped:      0,
+    files_failed:       0,
+    conflicts_detected: 0,
+    total_bytes:        0,
+    duration_ms:        0,
+    errors:             Vec::new(),
   };
 
-  let filter = relationship.filter.as_deref();
+  let filter    = relationship.filter.as_deref();
+  let direction = relationship.direction.clone();
 
   // Compute hierarchy exclusions — paths owned by child relationships
   let all_relationships = relationship_manager.list()?;
@@ -108,6 +111,7 @@ pub async fn pull_sync_pass(
     relationship_id,
     filter,
     &exclusions,
+    &direction,
     &remote_entries,
     &mut result,
   ).await;
@@ -135,6 +139,7 @@ async fn sync_directory_recursive(
   relationship_id: &str,
   filter: Option<&str>,
   exclusions: &[String],
+  direction: &crate::sync::relationships::SyncDirection,
   entries: &[crate::remote::RemoteEntry],
   result: &mut SyncPassResult,
 ) {
@@ -163,7 +168,7 @@ async fn sync_directory_recursive(
         Ok(sub_entries) => {
           Box::pin(sync_directory_recursive(
             state, remote_client, &sub_remote_path,
-            &local_file_path, relationship_id, filter, exclusions, &sub_entries, result,
+            &local_file_path, relationship_id, filter, exclusions, direction, &sub_entries, result,
           )).await;
         }
         Err(error) => {
@@ -228,6 +233,38 @@ async fn sync_directory_recursive(
             if remote_updated == entry.updated_at {
               result.files_skipped += 1;
               continue;
+            }
+          }
+        }
+      }
+
+      // Bidirectional conflict detection: if remote changed AND local also changed, it's a conflict
+      if *direction == crate::sync::relationships::SyncDirection::Bidirectional {
+        if let Some(ref file_state) = existing_state {
+          // Check if local file has been modified since last sync
+          let local_path = std::path::Path::new(&local_file_path);
+          if local_path.exists() {
+            if let Ok(local_bytes) = std::fs::read(local_path) {
+              let local_hash = blake3::hash(&local_bytes).to_hex().to_string();
+              if local_hash != file_state.content_hash {
+                // Local changed AND remote changed (we wouldn't be here if remote hadn't changed)
+                // This is a conflict!
+                let conflict_manager = crate::sync::conflicts::ConflictManager::new(state);
+                if !conflict_manager.has_conflict_for(relationship_id, &remote_file_path).unwrap_or(false) {
+                  let _ = conflict_manager.record_conflict(
+                    &remote_file_path,
+                    relationship_id,
+                    &local_hash,
+                    &entry.hash.clone().unwrap_or_default(),
+                    &file_state.content_hash,
+                    file_state.local_modified_at,
+                    Some(entry.updated_at),
+                  );
+                  result.conflicts_detected += 1;
+                  tracing::warn!("conflict detected: {} (both sides changed)", remote_file_path);
+                }
+                continue; // Skip download — wait for user resolution
+              }
             }
           }
         }
