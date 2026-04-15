@@ -29,19 +29,19 @@ class AeorNav extends HTMLElement {
 
       <nav class="nav-items">
         <div class="nav-item ${(active === 'dashboard') ? 'active' : ''}" data-page="dashboard">
-          <span class="nav-icon">&#9632;</span>
+          <span class="nav-icon" style="color: var(--accent)">&#9632;</span>
           Dashboard
         </div>
         <div class="nav-item ${(active === 'connections') ? 'active' : ''}" data-page="connections">
-          <span class="nav-icon">&#8644;</span>
+          <span class="nav-icon" style="color: #58a6ff">&#8644;</span>
           Connections
         </div>
         <div class="nav-item ${(active === 'sync') ? 'active' : ''}" data-page="sync">
-          <span class="nav-icon">&#8635;</span>
+          <span class="nav-icon" style="color: var(--success)">&#8635;</span>
           Sync
         </div>
         <div class="nav-item ${(active === 'conflicts') ? 'active' : ''}" data-page="conflicts">
-          <span class="nav-icon">&#9888;</span>
+          <span class="nav-icon" style="color: var(--warning)">&#9888;</span>
           Conflicts
         </div>
       </nav>

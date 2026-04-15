@@ -10,6 +10,7 @@ class AeorApp extends HTMLElement {
   constructor() {
     super();
     this._currentPage = 'dashboard';
+    this._pageOptions = {};
   }
 
   connectedCallback() {
@@ -24,11 +25,30 @@ class AeorApp extends HTMLElement {
       </div>
     `;
 
+    // Listen for navigation from nav bar
     this.querySelector('aeor-nav')
       .addEventListener('navigate', (event) => {
         this._currentPage = event.detail.page;
+        this._pageOptions = event.detail;
         this.render();
       });
+
+    // Listen for navigation from anywhere (e.g., sync page → connections)
+    this.querySelector('.app-content')
+      .addEventListener('navigate', (event) => {
+        this._currentPage = event.detail.page;
+        this._pageOptions = event.detail;
+        this.render();
+      });
+
+    // Pass autoAdd option to connections component if present
+    if (this._currentPage === 'connections' && this._pageOptions.autoAdd) {
+      const connectionsElement = this.querySelector('aeor-connections');
+      if (connectionsElement)
+        connectionsElement.openAddForm();
+
+      this._pageOptions = {}; // Clear after use
+    }
   }
 
   _renderPage() {

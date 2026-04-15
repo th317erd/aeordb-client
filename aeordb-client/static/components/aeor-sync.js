@@ -14,25 +14,43 @@ class AeorSync extends HTMLElement {
   }
 
   render() {
+    const hasConnections = this._connections.length > 0;
+    const canAdd         = hasConnections;
+
     this.innerHTML = `
       <div class="page-header">
         <h1>Sync Relationships</h1>
-        <button id="add-btn" class="${(this._showAddForm) ? 'secondary' : 'primary'}">${(this._showAddForm) ? 'Cancel' : 'Add Sync'}</button>
+        <button id="add-btn" class="${(this._showAddForm) ? 'secondary' : 'primary'}" ${(!canAdd && !this._showAddForm) ? 'disabled' : ''}>${(this._showAddForm) ? 'Cancel' : 'Add Sync'}</button>
       </div>
 
       ${(this._showAddForm) ? this._renderAddForm() : ''}
 
       ${(this._relationships.length === 0)
-        ? '<div class="empty-state">No sync relationships configured.</div>'
+        ? (hasConnections)
+          ? '<div class="empty-state">No sync relationships configured.</div>'
+          : '<div class="empty-state">You must first add a <a href="#" id="go-connections">Connection</a> before you can set up a sync.</div>'
         : this._renderTable()
       }
     `;
 
-    this.querySelector('#add-btn')
-      .addEventListener('click', () => {
+    const addButton = this.querySelector('#add-btn');
+    if (addButton && canAdd) {
+      addButton.addEventListener('click', () => {
         this._showAddForm = !this._showAddForm;
         this.render();
       });
+    }
+
+    const goConnectionsLink = this.querySelector('#go-connections');
+    if (goConnectionsLink) {
+      goConnectionsLink.addEventListener('click', (event) => {
+        event.preventDefault();
+        this.dispatchEvent(new CustomEvent('navigate', {
+          detail:  { page: 'connections', autoAdd: true },
+          bubbles: true,
+        }));
+      });
+    }
 
     if (this._showAddForm)
       this._bindFormEvents();

@@ -250,6 +250,11 @@ button.danger:hover {
   opacity: 0.9;
 }
 
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 button.small {
   padding: 5px 10px 6px;
   font-size: 12px;

@@ -12,6 +12,11 @@ class AeorConnections extends HTMLElement {
     this._fetchConnections();
   }
 
+  openAddForm() {
+    this._showAddForm = true;
+    this.render();
+  }
+
   render() {
     this.innerHTML = `
       <div class="page-header">
