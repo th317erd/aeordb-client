@@ -241,27 +241,83 @@ fn main() -> anyhow::Result<()> {
         tauri::Builder::default()
           .plugin(tauri_plugin_shell::init())
           .setup(move |app| {
-            // The default window is created from tauri.conf.json but with
-            // visible:false. We grab it and navigate to our HTTP server URL,
-            // then show it.
             use tauri::Manager;
-            if let Some(window) = app.get_webview_window("main") {
-              let parsed_url: tauri::Url = url.parse().expect("valid localhost URL");
-              window.navigate(parsed_url)?;
-              window.show()?;
-            } else {
-              // Window not created from config — build one manually
-              let parsed_url: tauri::Url = url.parse().expect("valid localhost URL");
-              let _window = tauri::WebviewWindowBuilder::new(
-                app,
-                "main",
-                tauri::WebviewUrl::External(parsed_url),
-              )
-              .title("AeorDB Client")
-              .inner_size(1024.0, 768.0)
-              .min_inner_size(800.0, 600.0)
+            use tauri::menu::{MenuBuilder, MenuItemBuilder};
+            use tauri::tray::TrayIconBuilder;
+            use tauri::image::Image;
+
+            // --- Create the main window ---
+            let parsed_url: tauri::Url = url.parse().expect("valid localhost URL");
+            let window = tauri::WebviewWindowBuilder::new(
+              app,
+              "main",
+              tauri::WebviewUrl::External(parsed_url),
+            )
+            .title("AeorDB Client")
+            .inner_size(1024.0, 768.0)
+            .min_inner_size(800.0, 600.0)
+            .build()?;
+
+            // --- Close-to-tray: hide window on close instead of quitting ---
+            let window_for_close = window.clone();
+            window.on_window_event(move |event| {
+              if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window_for_close.hide();
+              }
+            });
+
+            // --- Systray ---
+            let icon_bytes = include_bytes!("../icons/icon.png");
+            let icon = Image::from_bytes(icon_bytes)
+              .unwrap_or_else(|_| Image::new(&[255, 255, 255, 255], 1, 1));
+
+            let window_for_open    = window.clone();
+            let app_handle_for_quit = app.handle().clone();
+
+            let open_item  = MenuItemBuilder::with_id("open", "Open AeorDB Client").build(app)?;
+            let pause_item = MenuItemBuilder::with_id("pause", "Pause All Sync").build(app)?;
+            let quit_item  = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+
+            let tray_menu = MenuBuilder::new(app)
+              .item(&open_item)
+              .separator()
+              .item(&pause_item)
+              .separator()
+              .item(&quit_item)
               .build()?;
-            }
+
+            TrayIconBuilder::new()
+              .icon(icon)
+              .tooltip("AeorDB Client")
+              .menu(&tray_menu)
+              .on_menu_event(move |app, event| {
+                match event.id().as_ref() {
+                  "open" => {
+                    let _ = window_for_open.show();
+                    let _ = window_for_open.set_focus();
+                  }
+                  "pause" => {
+                    // TODO: toggle pause/resume via API
+                    tracing::info!("pause/resume sync requested from tray");
+                  }
+                  "quit" => {
+                    tracing::info!("quit requested from tray");
+                    app_handle_for_quit.exit(0);
+                  }
+                  _ => {}
+                }
+              })
+              .on_tray_icon_event(move |tray, event| {
+                if let tauri::tray::TrayIconEvent::DoubleClick { .. } = event {
+                  if let Some(webview_window) = tray.app_handle().get_webview_window("main") {
+                    let _ = webview_window.show();
+                    let _ = webview_window.set_focus();
+                  }
+                }
+              })
+              .build(app)?;
+
             Ok(())
           })
           .run(tauri::generate_context!())
