@@ -22,9 +22,39 @@ async fn start_mock_aeordb() -> (String, Arc<Mutex<HashMap<String, Vec<u8>>>>) {
   let storage: Arc<Mutex<HashMap<String, Vec<u8>>>> = Arc::new(Mutex::new(HashMap::new()));
   let storage_clone = storage.clone();
 
+  let storage_for_upload = storage.clone();
+
   let app = Router::new()
     .route("/admin/health", get(|| async { Json(serde_json::json!({"status": "ok"})) }))
     .route("/engine/{*path}", get(mock_engine_get).put(mock_engine_put))
+    .route("/upload/config", get(|| async {
+      Json(serde_json::json!({
+        "hash_algorithm": "blake3",
+        "chunk_size": 262144,
+        "chunk_hash_prefix": "chunk:"
+      }))
+    }))
+    .route("/upload/check", axum::routing::post(|| async {
+      Json(serde_json::json!({ "have": [], "needed": [] }))
+    }))
+    .route("/upload/chunks/{hash}", axum::routing::put(|| async { StatusCode::CREATED }))
+    .route("/upload/commit", axum::routing::post({
+      let storage = storage_for_upload;
+      move |body: axum::extract::Json<serde_json::Value>| {
+        let storage = storage.clone();
+        async move {
+          // Extract files from commit and store them
+          if let Some(files) = body.get("files").and_then(|f| f.as_array()) {
+            for file in files {
+              if let Some(path) = file.get("path").and_then(|p| p.as_str()) {
+                storage.lock().unwrap().insert(path.to_string(), vec![]);
+              }
+            }
+          }
+          Json(serde_json::json!({"status": "ok"}))
+        }
+      }
+    }))
     .with_state(storage_clone);
 
   let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind failed");

@@ -5,6 +5,7 @@ use chrono::Utc;
 use crate::connections::ConnectionManager;
 use crate::error::{ClientError, Result};
 use crate::remote::RemoteClient;
+use crate::remote::upload::UploadClient;
 use crate::state::StateStore;
 use crate::sync::engine::{FileState, SyncStatus};
 use crate::sync::relationships::RelationshipManager;
@@ -37,6 +38,7 @@ pub async fn push_sync_pass(
     ))?;
 
   let remote_client = RemoteClient::from_connection(&connection);
+  let mut upload_client = UploadClient::new(&connection);
 
   let mut result = PushSyncResult {
     relationship_id:  relationship_id.to_string(),
@@ -44,6 +46,8 @@ pub async fn push_sync_pass(
     files_skipped:    0,
     files_failed:     0,
     total_bytes:      0,
+    chunks_uploaded:  0,
+    chunks_deduped:   0,
     duration_ms:      0,
     errors:           Vec::new(),
   };
@@ -61,6 +65,7 @@ pub async fn push_sync_pass(
   push_directory_recursive(
     state,
     &remote_client,
+    &mut upload_client,
     local_path,
     &relationship.local_path,
     &relationship.remote_path,
@@ -87,6 +92,7 @@ pub async fn push_sync_pass(
 async fn push_directory_recursive(
   state: &StateStore,
   remote_client: &RemoteClient,
+  upload_client: &mut UploadClient,
   current_dir: &Path,
   local_base: &str,
   remote_base: &str,
@@ -149,7 +155,7 @@ async fn push_directory_recursive(
       }
     } else if entry_path.is_dir() {
       Box::pin(push_directory_recursive(
-        state, remote_client, &entry_path,
+        state, remote_client, upload_client, &entry_path,
         local_base, remote_base, relationship_id, filter, result,
       )).await;
     } else if entry_path.is_file() {
@@ -193,14 +199,15 @@ async fn push_directory_recursive(
       // Detect content type from extension
       let content_type = mime_from_extension(&entry_path);
 
-      // Upload
-      match remote_client.upload_file(&remote_file_path, bytes.clone(), content_type.as_deref()).await {
-        Ok(()) => {
+      // Upload using 4-phase chunked protocol
+      match upload_client.upload_file_chunked(&remote_file_path, &bytes, content_type.as_deref()).await {
+        Ok(_chunk_hashes) => {
           // Update state tracker
           let file_state = FileState {
             relative_path:      relative.display().to_string(),
             relationship_id:    relationship_id.to_string(),
             content_hash,
+            remote_hash:        None,
             local_modified_at:  entry_path.metadata().ok()
               .and_then(|m| m.modified().ok())
               .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64),
@@ -265,6 +272,8 @@ pub struct PushSyncResult {
   pub files_skipped:   u64,
   pub files_failed:    u64,
   pub total_bytes:     u64,
+  pub chunks_uploaded: u64,
+  pub chunks_deduped:  u64,
   pub duration_ms:     u64,
   pub errors:          Vec<String>,
 }

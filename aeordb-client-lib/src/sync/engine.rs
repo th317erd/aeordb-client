@@ -13,13 +13,15 @@ const SYNC_STATE_PATH: &str = "/sync/state/";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileState {
-  pub relative_path:     String,
-  pub relationship_id:   String,
-  pub content_hash:      String,
-  pub local_modified_at: Option<i64>,
+  pub relative_path:      String,
+  pub relationship_id:    String,
+  pub content_hash:       String,
+  #[serde(default)]
+  pub remote_hash:        Option<String>,
+  pub local_modified_at:  Option<i64>,
   pub remote_modified_at: Option<i64>,
-  pub sync_status:       SyncStatus,
-  pub last_synced_at:    i64,
+  pub sync_status:        SyncStatus,
+  pub last_synced_at:     i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -212,10 +214,17 @@ async fn sync_directory_recursive(
       let existing_state: Option<FileState> = state.read_json(&state_key)
         .unwrap_or(None);
 
-      // Compare: if we have synced state with matching updated_at, skip
+      // Compare: if we have synced state with matching remote hash, skip.
+      // Falls back to updated_at if hash is not available.
       if let Some(ref file_state) = existing_state {
         if file_state.sync_status == SyncStatus::Synced {
-          if let Some(remote_updated) = file_state.remote_modified_at {
+          // Prefer hash comparison (more reliable than timestamps)
+          if let (Some(tracked_hash), Some(remote_hash)) = (&file_state.remote_hash, &entry.hash) {
+            if tracked_hash == remote_hash {
+              result.files_skipped += 1;
+              continue;
+            }
+          } else if let Some(remote_updated) = file_state.remote_modified_at {
             if remote_updated == entry.updated_at {
               result.files_skipped += 1;
               continue;
@@ -244,8 +253,9 @@ async fn sync_directory_recursive(
               // Update state tracker
               let file_state = FileState {
                 relative_path,
-                relationship_id: relationship_id.to_string(),
+                relationship_id:    relationship_id.to_string(),
                 content_hash:       hash.to_hex().to_string(),
+                remote_hash:        entry.hash.clone(),
                 local_modified_at:  None,
                 remote_modified_at: Some(entry.updated_at),
                 sync_status:        SyncStatus::Synced,
