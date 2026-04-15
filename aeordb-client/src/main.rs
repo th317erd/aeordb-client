@@ -172,6 +172,16 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("starting in headless mode");
       }
 
+      // Singleton check: if an instance is already running on this port, don't start another
+      let check_url = format!("http://{}:{}/api/v1/status", bind, port);
+      if let Ok(response) = reqwest::blocking::get(&check_url) {
+        if response.status().is_success() {
+          eprintln!("aeordb-client is already running on {}:{}", bind, port);
+          eprintln!("Use 'aeordb-client status' to check it, or 'aeordb-client stop' to stop it.");
+          std::process::exit(1);
+        }
+      }
+
       let database_path = database.unwrap_or_else(default_database_path);
 
       let mut state = create_app_state(&database_path)
