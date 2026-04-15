@@ -163,13 +163,17 @@ a:hover {
 button {
   font-family: var(--font-sans);
   font-size: 14px;
-  padding: 6px 16px;
+  padding: 7px 16px 8px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background-color: var(--bg-tertiary);
   color: var(--text-primary);
   cursor: pointer;
   font-weight: 500;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   transition: background-color 0.15s;
 }
 
@@ -213,7 +217,7 @@ button.danger:hover {
 }
 
 button.small {
-  padding: 4px 10px;
+  padding: 5px 10px 6px;
   font-size: 12px;
 }
 
