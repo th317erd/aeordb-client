@@ -137,25 +137,39 @@ pub async fn trigger_sync(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-  // Run both pull and push, return combined results
-  let pull_result = pull_sync_pass(&state.state_store, &id).await
-    .map_err(|error| {
-      let status = if error.to_string().contains("not found") || error.to_string().contains("disabled") {
-        StatusCode::BAD_REQUEST
-      } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-      };
-      (status, Json(serde_json::json!({ "error": error.to_string() })))
-    })?;
+  use crate::sync::relationships::{RelationshipManager, SyncDirection};
 
-  let push_result = push_sync_pass(&state.state_store, &id).await
-    .map_err(|error| (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    ))?;
+  // Load the relationship to check direction
+  let relationship_manager = RelationshipManager::new(&state.state_store);
+  let relationship = relationship_manager.get(&id)
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": error.to_string() }))))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": format!("sync relationship not found: {}", id) }))))?;
 
-  Ok(Json(serde_json::json!({
-    "pull": pull_result,
-    "push": push_result,
-  })))
+  let mut result = serde_json::Map::new();
+
+  // Pull if direction allows it
+  if relationship.direction == SyncDirection::PullOnly || relationship.direction == SyncDirection::Bidirectional {
+    let pull_result = pull_sync_pass(&state.state_store, &id).await
+      .map_err(|error| {
+        let status = if error.to_string().contains("not found") || error.to_string().contains("disabled") {
+          StatusCode::BAD_REQUEST
+        } else {
+          StatusCode::INTERNAL_SERVER_ERROR
+        };
+        (status, Json(serde_json::json!({ "error": error.to_string() })))
+      })?;
+    result.insert("pull".to_string(), serde_json::to_value(&pull_result).unwrap_or_default());
+  }
+
+  // Push if direction allows it
+  if relationship.direction == SyncDirection::PushOnly || relationship.direction == SyncDirection::Bidirectional {
+    let push_result = push_sync_pass(&state.state_store, &id).await
+      .map_err(|error| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": error.to_string() })),
+      ))?;
+    result.insert("push".to_string(), serde_json::to_value(&push_result).unwrap_or_default());
+  }
+
+  Ok(Json(serde_json::Value::Object(result)))
 }
