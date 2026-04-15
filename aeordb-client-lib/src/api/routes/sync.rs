@@ -173,3 +173,43 @@ pub async fn trigger_sync(
 
   Ok(Json(serde_json::Value::Object(result)))
 }
+
+pub async fn start_sync(
+  State(state): State<AppState>,
+  Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+  state.sync_runner.start(&id).await
+    .map(|_| Json(serde_json::json!({ "message": format!("sync started for {}", id) })))
+    .map_err(|error| {
+      let status = if error.to_string().contains("already running") {
+        StatusCode::CONFLICT
+      } else if error.to_string().contains("not found") || error.to_string().contains("disabled") {
+        StatusCode::BAD_REQUEST
+      } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+      };
+      (status, Json(serde_json::json!({ "error": error.to_string() })))
+    })
+}
+
+pub async fn stop_sync(
+  State(state): State<AppState>,
+  Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+  state.sync_runner.stop(&id).await
+    .map(|_| Json(serde_json::json!({ "message": format!("sync stopped for {}", id) })))
+    .map_err(|error| {
+      let status = if error.to_string().contains("not running") {
+        StatusCode::BAD_REQUEST
+      } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+      };
+      (status, Json(serde_json::json!({ "error": error.to_string() })))
+    })
+}
+
+pub async fn sync_runner_status(
+  State(state): State<AppState>,
+) -> Json<Vec<crate::sync::runner::SyncRunnerStatus>> {
+  Json(state.sync_runner.status().await)
+}

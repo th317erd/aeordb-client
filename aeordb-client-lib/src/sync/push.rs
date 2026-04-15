@@ -227,7 +227,7 @@ async fn push_directory_recursive(
   }
 }
 
-fn mime_from_extension(path: &Path) -> Option<String> {
+pub fn mime_from_extension(path: &Path) -> Option<String> {
   let extension = path.extension()?.to_str()?;
 
   let mime = match extension.to_lowercase().as_str() {

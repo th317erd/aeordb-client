@@ -14,11 +14,13 @@ use crate::api::routes::sync;
 use crate::api::routes::system;
 use crate::error::{ClientError, Result};
 use crate::state::StateStore;
+use crate::sync::runner::SyncRunner;
 
 #[derive(Clone)]
 pub struct AppState {
   pub started_at:      Instant,
   pub state_store:     Arc<StateStore>,
+  pub sync_runner:     SyncRunner,
   pub auth_token:      Option<String>,
   pub shutdown_signal: Option<Arc<Notify>>,
 }
@@ -54,6 +56,9 @@ pub fn build_router(state: AppState) -> Router {
     .route("/sync/{id}/enable", post(sync::enable_relationship))
     .route("/sync/{id}/disable", post(sync::disable_relationship))
     .route("/sync/{id}/trigger", post(sync::trigger_sync))
+    .route("/sync/{id}/start", post(sync::start_sync))
+    .route("/sync/{id}/stop", post(sync::stop_sync))
+    .route("/sync/runner/status", get(sync::sync_runner_status))
     .route("/conflicts", get(conflicts::list_conflicts))
     .route("/conflicts/{id}/resolve", post(conflicts::resolve_conflict))
     .route("/conflicts/resolve-all", post(conflicts::resolve_all_conflicts))
@@ -70,9 +75,13 @@ pub fn create_app_state(database_path: &str) -> Result<AppState> {
 
   tracing::info!("client identity: {} ({})", identity.id, identity.name);
 
+  let state_store = Arc::new(state_store);
+  let sync_runner = SyncRunner::new(state_store.clone());
+
   Ok(AppState {
     started_at:      Instant::now(),
-    state_store:     Arc::new(state_store),
+    state_store,
+    sync_runner,
     auth_token:      None,
     shutdown_signal: None,
   })
