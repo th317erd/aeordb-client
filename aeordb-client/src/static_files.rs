@@ -38,7 +38,7 @@ async fn serve_static(Path(path): Path<String>) -> impl IntoResponse {
       Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime)
-        .header(header::CACHE_CONTROL, "public, max-age=3600")
+        .header(header::CACHE_CONTROL, "no-cache")
         .body(Body::from(content.data.to_vec()))
         .unwrap()
     }
