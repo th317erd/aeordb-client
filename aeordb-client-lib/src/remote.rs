@@ -3,15 +3,44 @@ use serde::{Deserialize, Serialize};
 use crate::connections::{AuthType, RemoteConnection};
 use crate::error::{ClientError, Result};
 
+/// Entry type constants from aeordb.
+pub const ENTRY_TYPE_FILE:      u8 = 2;
+pub const ENTRY_TYPE_DIRECTORY: u8 = 3;
+pub const ENTRY_TYPE_SYMLINK:   u8 = 8;
+
 /// A remote aeordb directory entry, as returned by GET /engine/{directory_path}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteEntry {
-  pub name:         String,
-  pub entry_type:   String,
-  pub total_size:   u64,
-  pub created_at:   i64,
-  pub updated_at:   i64,
-  pub content_type: Option<String>,
+  pub name:                        String,
+  pub entry_type:                  u8,
+  #[serde(default)]
+  pub total_size:                  u64,
+  #[serde(default)]
+  pub created_at:                  i64,
+  #[serde(default)]
+  pub updated_at:                  i64,
+  #[serde(default)]
+  pub content_type:                Option<String>,
+  #[serde(default)]
+  pub path:                        Option<String>,
+  #[serde(default)]
+  pub hash:                        Option<String>,
+  #[serde(default)]
+  pub target:                      Option<String>,
+}
+
+impl RemoteEntry {
+  pub fn is_file(&self) -> bool {
+    self.entry_type == ENTRY_TYPE_FILE
+  }
+
+  pub fn is_directory(&self) -> bool {
+    self.entry_type == ENTRY_TYPE_DIRECTORY
+  }
+
+  pub fn is_symlink(&self) -> bool {
+    self.entry_type == ENTRY_TYPE_SYMLINK
+  }
 }
 
 /// Downloaded file metadata from response headers.
@@ -206,6 +235,33 @@ impl RemoteClient {
     if !response.status().is_success() {
       return Err(ClientError::Server(
         format!("remote returned HTTP {} for DELETE {}", response.status(), remote_path),
+      ));
+    }
+
+    Ok(())
+  }
+
+  /// Create a symlink on the remote aeordb instance.
+  /// Uses POST /engine-symlink/{path} with {"target": "..."} body.
+  pub async fn create_symlink(&self, remote_path: &str, target: &str) -> Result<()> {
+    let url = format!("{}/engine-symlink{}", self.base_url, remote_path);
+
+    let mut request = self.http_client
+      .post(&url)
+      .json(&serde_json::json!({ "target": target }));
+
+    if let Some(ref auth) = self.auth_header() {
+      request = request.header("Authorization", auth);
+    }
+
+    let response = request.send().await
+      .map_err(|error| ClientError::Server(
+        format!("failed to create symlink {}: {}", remote_path, error),
+      ))?;
+
+    if !response.status().is_success() {
+      return Err(ClientError::Server(
+        format!("remote returned HTTP {} for symlink {}", response.status(), remote_path),
       ));
     }
 

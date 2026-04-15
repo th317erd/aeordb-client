@@ -140,7 +140,7 @@ async fn sync_directory_recursive(
     let remote_file_path = format!("{}{}", remote_dir_path, entry.name);
     let local_file_path  = format!("{}/{}", local_dir_path, entry.name);
 
-    if entry.entry_type == "directory" {
+    if entry.is_directory() {
       // Recurse into subdirectory
       let sub_remote_path = format!("{}/", remote_file_path);
 
@@ -169,7 +169,35 @@ async fn sync_directory_recursive(
           result.files_failed += 1;
         }
       }
-    } else {
+    } else if entry.is_symlink() {
+      // Symlink — create a local symlink pointing to the target
+      if let Some(ref target) = entry.target {
+        let symlink_path = std::path::Path::new(&local_file_path);
+
+        // Remove existing file/symlink at this path if it exists
+        if symlink_path.exists() || symlink_path.is_symlink() {
+          let _ = std::fs::remove_file(symlink_path);
+        }
+
+        #[cfg(unix)]
+        {
+          if let Err(error) = std::os::unix::fs::symlink(target, symlink_path) {
+            result.errors.push(format!("failed to create symlink {}: {}", local_file_path, error));
+            result.files_failed += 1;
+          } else {
+            result.files_downloaded += 1;
+            tracing::debug!("synced symlink: {} → {}", remote_file_path, target);
+          }
+        }
+
+        #[cfg(not(unix))]
+        {
+          result.errors.push(format!("symlinks not supported on this platform: {}", remote_file_path));
+          result.files_failed += 1;
+        }
+      }
+      continue;
+    } else if entry.is_file() {
       // Apply filter
       if !crate::sync::filter::matches_filter(&entry.name, filter) {
         result.files_skipped += 1;

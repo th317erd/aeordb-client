@@ -74,7 +74,7 @@ pub async fn reconcile(
 
   let mut remote_files: HashMap<String, (i64, u64)> = HashMap::new(); // name → (updated_at, size)
   for entry in &remote_entries {
-    if entry.entry_type == "file" {
+    if entry.is_file() {
       if matches_filter(&entry.name, filter) {
         remote_files.insert(entry.name.clone(), (entry.updated_at, entry.total_size));
       }

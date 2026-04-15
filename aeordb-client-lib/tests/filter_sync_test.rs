@@ -43,11 +43,11 @@ async fn mock_engine_get(Path(path): Path<String>) -> Response {
   match path.as_str() {
     "/docs/" => {
       Json(serde_json::json!([
-        { "name": "report.pdf",  "entry_type": "file", "total_size": 5, "created_at": 1700000000000_i64, "updated_at": 1700000001000_i64, "content_type": "application/pdf" },
-        { "name": "readme.md",   "entry_type": "file", "total_size": 8, "created_at": 1700000000000_i64, "updated_at": 1700000002000_i64, "content_type": "text/markdown" },
-        { "name": "notes.txt",   "entry_type": "file", "total_size": 5, "created_at": 1700000000000_i64, "updated_at": 1700000003000_i64, "content_type": "text/plain" },
-        { "name": "cache.tmp",   "entry_type": "file", "total_size": 4, "created_at": 1700000000000_i64, "updated_at": 1700000004000_i64, "content_type": "application/octet-stream" },
-        { "name": ".DS_Store",   "entry_type": "file", "total_size": 3, "created_at": 1700000000000_i64, "updated_at": 1700000005000_i64, "content_type": "application/octet-stream" }
+        { "name": "report.pdf",  "entry_type": 2, "total_size": 5, "created_at": 1700000000000_i64, "updated_at": 1700000001000_i64, "content_type": "application/pdf" },
+        { "name": "readme.md",   "entry_type": 2, "total_size": 8, "created_at": 1700000000000_i64, "updated_at": 1700000002000_i64, "content_type": "text/markdown" },
+        { "name": "notes.txt",   "entry_type": 2, "total_size": 5, "created_at": 1700000000000_i64, "updated_at": 1700000003000_i64, "content_type": "text/plain" },
+        { "name": "cache.tmp",   "entry_type": 2, "total_size": 4, "created_at": 1700000000000_i64, "updated_at": 1700000004000_i64, "content_type": "application/octet-stream" },
+        { "name": ".DS_Store",   "entry_type": 2, "total_size": 3, "created_at": 1700000000000_i64, "updated_at": 1700000005000_i64, "content_type": "application/octet-stream" }
       ])).into_response()
     }
     "/docs/report.pdf" => (StatusCode::OK, [("x-updated-at", "1700000001000")], "PDF!!").into_response(),

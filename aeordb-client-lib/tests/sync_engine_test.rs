@@ -41,7 +41,7 @@ async fn mock_engine_handler(Path(path): Path<String>) -> Response {
       Json(serde_json::json!([
         {
           "name": "readme.md",
-          "entry_type": "file",
+          "entry_type": 2,
           "total_size": 13,
           "created_at": 1700000000000_i64,
           "updated_at": 1700000001000_i64,
@@ -49,7 +49,7 @@ async fn mock_engine_handler(Path(path): Path<String>) -> Response {
         },
         {
           "name": "notes.txt",
-          "entry_type": "file",
+          "entry_type": 2,
           "total_size": 11,
           "created_at": 1700000000000_i64,
           "updated_at": 1700000002000_i64,
@@ -57,7 +57,7 @@ async fn mock_engine_handler(Path(path): Path<String>) -> Response {
         },
         {
           "name": "sub",
-          "entry_type": "directory",
+          "entry_type": 3,
           "total_size": 0,
           "created_at": 1700000000000_i64,
           "updated_at": 1700000000000_i64,
@@ -69,7 +69,7 @@ async fn mock_engine_handler(Path(path): Path<String>) -> Response {
       Json(serde_json::json!([
         {
           "name": "deep.txt",
-          "entry_type": "file",
+          "entry_type": 2,
           "total_size": 14,
           "created_at": 1700000000000_i64,
           "updated_at": 1700000003000_i64,

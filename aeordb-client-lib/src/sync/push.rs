@@ -115,7 +115,39 @@ async fn push_directory_recursive(
 
     let entry_path = entry.path();
 
-    if entry_path.is_dir() {
+    if entry_path.is_symlink() {
+      // Symlink — read target and upload as symlink to remote
+      let filename = entry_path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+      if !crate::sync::filter::matches_filter(filename, filter) {
+        result.files_skipped += 1;
+        continue;
+      }
+
+      let relative = entry_path.strip_prefix(local_base).unwrap_or(&entry_path);
+      let remote_file_path = format!("{}{}", remote_base, relative.display());
+
+      match std::fs::read_link(&entry_path) {
+        Ok(target) => {
+          let target_str = target.to_string_lossy().to_string();
+          match remote_client.create_symlink(&remote_file_path, &target_str).await {
+            Ok(()) => {
+              result.files_uploaded += 1;
+              tracing::debug!("pushed symlink: {} → {}", remote_file_path, target_str);
+            }
+            Err(error) => {
+              result.errors.push(format!("failed to push symlink {}: {}", remote_file_path, error));
+              result.files_failed += 1;
+            }
+          }
+        }
+        Err(error) => {
+          result.errors.push(format!("failed to read symlink {:?}: {}", entry_path, error));
+          result.files_failed += 1;
+        }
+      }
+    } else if entry_path.is_dir() {
       Box::pin(push_directory_recursive(
         state, remote_client, &entry_path,
         local_base, remote_base, relationship_id, filter, result,

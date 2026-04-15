@@ -35,8 +35,8 @@ async fn mock_engine_handler(Path(path): Path<String>) -> Response {
   match path.as_str() {
     "/data/" => {
       Json(serde_json::json!([
-        { "name": "stable.txt",  "entry_type": "file", "total_size": 6, "created_at": 1700000000000_i64, "updated_at": 1700000001000_i64, "content_type": "text/plain" },
-        { "name": "changed.txt", "entry_type": "file", "total_size": 11, "created_at": 1700000000000_i64, "updated_at": 1700000099000_i64, "content_type": "text/plain" }
+        { "name": "stable.txt",  "entry_type": 2, "total_size": 6, "created_at": 1700000000000_i64, "updated_at": 1700000001000_i64, "content_type": "text/plain" },
+        { "name": "changed.txt", "entry_type": 2, "total_size": 11, "created_at": 1700000000000_i64, "updated_at": 1700000099000_i64, "content_type": "text/plain" }
       ])).into_response()
     }
     "/data/stable.txt"  => (StatusCode::OK, [("x-updated-at", "1700000001000")], "stable").into_response(),

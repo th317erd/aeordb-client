@@ -14,6 +14,10 @@
 - **Local path**: `/home/wyatt/Projects/aeordb-workspace/aeordb/aeordb-lib/`
 - **Key API**: StorageEngine::open/create, DirectoryOps::new(&engine), RequestContext::system()
 - **File ops**: store_file(&ctx, path, data, content_type), read_file(path), delete_file(&ctx, path), list_directory(path), exists(path), get_metadata(path)
+- **Symlink ops**: store_symlink(&ctx, path, target), get_symlink(path), delete_symlink(&ctx, path)
+- **Symlink API**: POST /engine-symlink/{path} with {"target": "..."}, GET ?nofollow=true for metadata
+- **Symlink in listings**: entry_type: 8, includes "target" field
+- **Symlink resolution**: follows transparently, max 32 hops, cycle detection
 
 ## Implementation Progress
 - **Step 1**: Skeleton — Cargo workspace, axum HTTP server, /api/v1/status ✅
