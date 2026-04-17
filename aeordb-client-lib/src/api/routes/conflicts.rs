@@ -1,150 +1,145 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use serde::Deserialize;
 
-use crate::server::AppState;
-use crate::sync::conflicts::{ConflictManager, ConflictRecord, ConflictResolution};
+use aeordb::engine::{
+  list_conflicts_typed,
+  RequestContext,
+};
+use aeordb::engine::conflict_store::{resolve_conflict, dismiss_conflict};
 
-#[derive(Deserialize)]
-pub struct ConflictQuery {
-  pub sync_id: Option<String>,
-}
+use crate::server::AppState;
 
 #[derive(Deserialize)]
 pub struct ResolveRequest {
-  pub resolution: ConflictResolution,
+  /// The conflicted file path (e.g., "/docs/readme.md")
+  pub path: String,
+  /// "winner" or "loser" — which version to keep as the active file
+  pub pick: String,
 }
 
+#[derive(Deserialize)]
+pub struct DismissRequest {
+  /// The conflicted file path
+  pub path: String,
+}
+
+/// GET /api/v1/conflicts — list all conflicts from aeordb's /.conflicts/
 pub async fn list_conflicts(
   State(state): State<AppState>,
-  Query(query): Query<ConflictQuery>,
-) -> Result<Json<Vec<ConflictRecord>>, (StatusCode, Json<serde_json::Value>)> {
-  let manager = ConflictManager::new(&state.state_store);
-
-  let conflicts = match query.sync_id {
-    Some(ref sync_id) => manager.list_for_relationship(sync_id),
-    None => manager.list(),
-  };
-
-  conflicts
-    .map(Json)
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+  let conflicts = list_conflicts_typed(&state.state_store.engine())
     .map_err(|error| (
       StatusCode::INTERNAL_SERVER_ERROR,
       Json(serde_json::json!({ "error": error.to_string() })),
-    ))
+    ))?;
+
+  // Convert to JSON-serializable format
+  let json_conflicts: Vec<serde_json::Value> = conflicts.iter()
+    .map(|conflict| {
+      serde_json::json!({
+        "path":          conflict.path,
+        "conflict_type": conflict.conflict_type,
+        "auto_winner":   conflict.auto_winner,
+        "created_at":    conflict.created_at,
+        "winner": {
+          "hash":         conflict.winner.hash,
+          "virtual_time": conflict.winner.virtual_time,
+          "node_id":      conflict.winner.node_id,
+          "size":         conflict.winner.size,
+          "content_type": conflict.winner.content_type,
+        },
+        "loser": {
+          "hash":         conflict.loser.hash,
+          "virtual_time": conflict.loser.virtual_time,
+          "node_id":      conflict.loser.node_id,
+          "size":         conflict.loser.size,
+          "content_type": conflict.loser.content_type,
+        },
+      })
+    })
+    .collect();
+
+  Ok(Json(serde_json::json!(json_conflicts)))
 }
 
-pub async fn resolve_conflict(
+/// POST /api/v1/conflicts/resolve — resolve a conflict by picking winner or loser
+pub async fn resolve_conflict_handler(
   State(state): State<AppState>,
-  Path(id): Path<String>,
   Json(request): Json<ResolveRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-  let manager = ConflictManager::new(&state.state_store);
+  let ctx          = RequestContext::system();
+  let conflict_path = &request.path;
 
-  // Get the conflict record before resolving
-  let conflict = manager.get(&id)
-    .map_err(|error| (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    ))?
-    .ok_or_else(|| (
-      StatusCode::NOT_FOUND,
-      Json(serde_json::json!({ "error": format!("conflict not found: {}", id) })),
-    ))?;
-
-  // Resolve the conflict by performing the requested action
-  let resolution_action = match request.resolution {
-    ConflictResolution::KeepLocal => {
-      // Push the local version to remote
-      // Load relationship to find paths
-      let rel_manager = crate::sync::relationships::RelationshipManager::new(&state.state_store);
-      if let Ok(Some(relationship)) = rel_manager.get(&conflict.relationship_id) {
-        let conn_manager = crate::connections::ConnectionManager::new(&state.state_store);
-        if let Ok(Some(connection)) = conn_manager.get(&relationship.remote_connection_id) {
-          let mut upload_client = crate::remote::upload::UploadClient::new(&connection);
-
-          // Determine local file path from the conflict
-          let relative = conflict.file_path.strip_prefix(&relationship.remote_path).unwrap_or(&conflict.file_path);
-          let local_path = format!("{}/{}", relationship.local_path, relative);
-
-          if let Ok(bytes) = std::fs::read(&local_path) {
-            let content_type = crate::sync::push::mime_from_extension(std::path::Path::new(&local_path));
-            let _ = upload_client.upload_file_chunked(&conflict.file_path, &bytes, content_type.as_deref()).await;
-          }
-        }
-      }
-      "kept_local"
-    }
-    ConflictResolution::KeepRemote => {
-      // Pull the remote version to local
-      let rel_manager = crate::sync::relationships::RelationshipManager::new(&state.state_store);
-      if let Ok(Some(relationship)) = rel_manager.get(&conflict.relationship_id) {
-        let conn_manager = crate::connections::ConnectionManager::new(&state.state_store);
-        if let Ok(Some(connection)) = conn_manager.get(&relationship.remote_connection_id) {
-          let remote_client = crate::remote::RemoteClient::from_connection(&connection);
-
-          let relative = conflict.file_path.strip_prefix(&relationship.remote_path).unwrap_or(&conflict.file_path);
-          let local_path = format!("{}/{}", relationship.local_path, relative);
-
-          if let Ok((bytes, _metadata)) = remote_client.download_file(&conflict.file_path).await {
-            let _ = std::fs::write(&local_path, &bytes);
-          }
-        }
-      }
-      "kept_remote"
-    }
-    ConflictResolution::KeepBoth => {
-      // Rename the local version with a ".conflict" suffix, then pull remote
-      let rel_manager = crate::sync::relationships::RelationshipManager::new(&state.state_store);
-      if let Ok(Some(relationship)) = rel_manager.get(&conflict.relationship_id) {
-        let conn_manager = crate::connections::ConnectionManager::new(&state.state_store);
-        if let Ok(Some(connection)) = conn_manager.get(&relationship.remote_connection_id) {
-          let remote_client = crate::remote::RemoteClient::from_connection(&connection);
-
-          let relative = conflict.file_path.strip_prefix(&relationship.remote_path).unwrap_or(&conflict.file_path);
-          let local_path = format!("{}/{}", relationship.local_path, relative);
-
-          // Rename local to .local-conflict
-          let conflict_path = format!("{}.local-conflict", local_path);
-          let _ = std::fs::rename(&local_path, &conflict_path);
-
-          // Pull remote version
-          if let Ok((bytes, _metadata)) = remote_client.download_file(&conflict.file_path).await {
-            let _ = std::fs::write(&local_path, &bytes);
-          }
-        }
-      }
-      "kept_both"
-    }
-  };
-
-  manager.resolve(&id)
-    .map_err(|error| (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    ))?;
+  resolve_conflict(
+    &state.state_store.engine(),
+    &ctx,
+    conflict_path,
+    &request.pick,
+  ).map_err(|error| {
+    let status = if error.to_string().contains("not found") || error.to_string().contains("No conflict") {
+      StatusCode::NOT_FOUND
+    } else {
+      StatusCode::INTERNAL_SERVER_ERROR
+    };
+    (status, Json(serde_json::json!({ "error": error.to_string() })))
+  })?;
 
   Ok(Json(serde_json::json!({
-    "resolved": true,
-    "conflict_id": id,
-    "file_path": conflict.file_path,
-    "action": resolution_action,
+    "resolved":  true,
+    "path":      request.path,
+    "picked":    request.pick,
   })))
 }
 
-pub async fn resolve_all_conflicts(
+/// POST /api/v1/conflicts/dismiss — accept the auto-winner
+pub async fn dismiss_conflict_handler(
+  State(state): State<AppState>,
+  Json(request): Json<DismissRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+  let ctx          = RequestContext::system();
+  let conflict_path = &request.path;
+
+  dismiss_conflict(
+    &state.state_store.engine(),
+    &ctx,
+    conflict_path,
+  ).map_err(|error| {
+    let status = if error.to_string().contains("not found") || error.to_string().contains("No conflict") {
+      StatusCode::NOT_FOUND
+    } else {
+      StatusCode::INTERNAL_SERVER_ERROR
+    };
+    (status, Json(serde_json::json!({ "error": error.to_string() })))
+  })?;
+
+  Ok(Json(serde_json::json!({
+    "dismissed": true,
+    "path":      request.path,
+  })))
+}
+
+/// POST /api/v1/conflicts/dismiss-all — dismiss all conflicts (accept auto-winners)
+pub async fn dismiss_all_conflicts(
   State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-  let manager = ConflictManager::new(&state.state_store);
+  let ctx = RequestContext::system();
 
-  let count = manager.resolve_all()
+  let conflicts = list_conflicts_typed(&state.state_store.engine())
     .map_err(|error| (
       StatusCode::INTERNAL_SERVER_ERROR,
       Json(serde_json::json!({ "error": error.to_string() })),
     ))?;
 
+  let mut dismissed = 0;
+  for conflict in &conflicts {
+    if dismiss_conflict(&state.state_store.engine(), &ctx, &conflict.path).is_ok() {
+      dismissed += 1;
+    }
+  }
+
   Ok(Json(serde_json::json!({
-    "resolved_count": count,
+    "dismissed_count": dismissed,
   })))
 }

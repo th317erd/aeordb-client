@@ -60,8 +60,9 @@ pub fn build_router(state: AppState) -> Router {
     .route("/sync/{id}/stop", post(sync::stop_sync))
     .route("/sync/runner/status", get(sync::sync_runner_status))
     .route("/conflicts", get(conflicts::list_conflicts))
-    .route("/conflicts/{id}/resolve", post(conflicts::resolve_conflict))
-    .route("/conflicts/resolve-all", post(conflicts::resolve_all_conflicts))
+    .route("/conflicts/resolve", post(conflicts::resolve_conflict_handler))
+    .route("/conflicts/dismiss", post(conflicts::dismiss_conflict_handler))
+    .route("/conflicts/dismiss-all", post(conflicts::dismiss_all_conflicts))
     .route("/shutdown", post(system::shutdown));
 
   Router::new()
