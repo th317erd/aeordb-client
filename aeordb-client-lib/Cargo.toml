@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 aeordb = { git = "ssh://git@github.com/th317erd/aeordb.git", branch = "main" }
 axum = "0.8"
+base64 = "0.22"
 blake3 = "1"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
