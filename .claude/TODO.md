@@ -33,4 +33,8 @@
 - [ ] Conflict UI uses aeordb ConflictRecord format (winner/loser)
 - [ ] Remove "Keep Both" option
 - [ ] Update/rewrite tests for new sync flow
+- [ ] Remove dead code (old engine.rs, push.rs, reconcile.rs, upload.rs, conflicts.rs)
 - [ ] All tests pass
+
+## Cleanup
+- [ ] Remove redundant client-side path filtering from replication flow (server now handles selective sync)

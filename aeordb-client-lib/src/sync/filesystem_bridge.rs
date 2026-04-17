@@ -144,7 +144,7 @@ fn ingest_recursive(
 
       match std::fs::read(&entry_path) {
         Ok(bytes) => {
-          let content_type = crate::sync::push::mime_from_extension(&entry_path);
+          let content_type = crate::sync::content_type::mime_from_extension(&entry_path);
           match ops.store_file(ctx, &remote_file, &bytes, content_type.as_deref()) {
             Ok(_) => result.files_stored += 1,
             Err(error) => {
@@ -304,7 +304,7 @@ pub fn ingest_single_file(
       .map_err(|error| ClientError::Server(format!("failed to store symlink: {}", error)))?;
   } else if local_path.is_file() {
     let bytes        = std::fs::read(local_path)?;
-    let content_type = crate::sync::push::mime_from_extension(local_path);
+    let content_type = crate::sync::content_type::mime_from_extension(local_path);
 
     ops.store_file(&ctx, &remote, &bytes, content_type.as_deref())
       .map_err(|error| ClientError::Server(format!("failed to store file: {}", error)))?;

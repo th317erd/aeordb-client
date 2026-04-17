@@ -1,5 +1,3 @@
-pub mod upload;
-
 use serde::{Deserialize, Serialize};
 
 use crate::connections::{AuthType, RemoteConnection};
