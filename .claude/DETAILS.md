@@ -19,6 +19,23 @@
 - **Symlink in listings**: entry_type: 8, includes "target" field
 - **Symlink resolution**: follows transparently, max 32 hops, cycle detection
 
+## AeorDB Replication API (Library-Level)
+- **compute_sync_diff(engine, since_root_hash, paths_filter, include_system) -> SyncDiff**
+  - SyncDiff: root_hash, files_added/modified/deleted, symlinks_added/modified/deleted, chunk_hashes_needed
+- **get_needed_chunks(engine, chunk_hashes) -> Vec<ChunkData>** (ChunkData: hash + data)
+- **apply_sync_chunks(engine, chunks) -> usize** (returns count of new chunks stored)
+- **list_conflicts_typed(engine) -> Vec<ConflictRecord>**
+  - ConflictRecord: path, conflict_type, auto_winner, created_at, winner/loser (ConflictVersionInfo)
+  - ConflictVersionInfo: hash, virtual_time, node_id, size, content_type
+- **resolve_conflict(engine, ctx, path, pick)** — pick = "winner" or "loser"
+- **dismiss_conflict(engine, ctx, path)** — accept auto-winner
+- **get_conflict(engine, path) -> Option<serde_json::Value>**
+- **file_history(engine, path) -> Vec<FileHistoryEntry>** (snapshot, timestamp, change_type, size, hash)
+- **file_restore_from_version(engine, ctx, path, snapshot_name, version_hash) -> (snapshot_name, size)**
+- All in `aeordb::engine` module
+- Replication: aeordb uses eventual consistency, last-write-wins, loser in /.conflicts/
+- Remote HTTP equivalents: POST /sync/diff, POST /sync/chunks, GET /admin/conflicts, etc.
+
 ## Implementation Progress
 - **Step 1**: Skeleton — Cargo workspace, axum HTTP server, /api/v1/status ✅
 - **Step 2**: Local state store — embedded aeordb, client identity ✅

@@ -1,30 +1,36 @@
-# TODO — Tauri v2 Integration
+# TODO — Restructure for aeordb Native Replication
 
-## Phase 1: Tauri scaffolding
-- [ ] Add tauri, tauri-build deps to aeordb-client/Cargo.toml
-- [ ] Create aeordb-client/build.rs
-- [ ] Create aeordb-client/tauri.conf.json
-- [ ] Create placeholder icon
-- [ ] Verify: cargo build + cargo test pass
+## Phase 1: Update aeordb dependency + verify APIs compile
+- [ ] Update aeordb git dependency
+- [ ] Write minimal test calling compute_sync_diff()
+- [ ] Verify all new APIs are accessible and compile
 
-## Phase 2: Main thread restructure
-- [ ] Rewrite main.rs — non-async main(), manual tokio runtime
-- [ ] HTTP server on background thread, Tauri on main thread
-- [ ] Server readiness signal before Tauri window opens
-- [ ] Headless mode bypasses Tauri
-- [ ] CLI subcommands still work
-- [ ] Test gate: 67 tests pass
+## Phase 2: Build the replication module
+- [ ] Create sync/replication.rs
+- [ ] Orchestrate local (library) ↔ remote (HTTP) sync
+- [ ] compute_sync_diff() locally, POST /sync/diff remotely
+- [ ] Chunk exchange in both directions
+- [ ] Replace sync/engine.rs, sync/push.rs, sync/reconcile.rs
 
-## Phase 3: Systray
-- [ ] Systray icon with menu
-- [ ] Open / Pause / Resume / Quit actions
-- [ ] Quit triggers graceful shutdown
+## Phase 3: Build the filesystem bridge
+- [ ] Create sync/filesystem_bridge.rs
+- [ ] Ingest: fs watcher → DirectoryOps::store_file() into local aeordb
+- [ ] Project: after replication, read changed files → write to filesystem
+- [ ] Write-back suppression (ignore watcher events from our own writes)
 
-## Phase 4: Window behavior
-- [ ] Close-to-tray (X hides, not quits)
-- [ ] Window title, sizing (1024x768 default, 800x600 min)
-- [ ] Re-show from tray
+## Phase 4: Replace conflict system
+- [ ] Delete sync/conflicts.rs (our custom conflict tracking)
+- [ ] Conflict UI calls list_conflicts_typed() on local aeordb
+- [ ] Resolution calls resolve_conflict() / dismiss_conflict()
+- [ ] Update API routes to proxy these calls
 
-## Phase 5: Graceful shutdown wiring
-- [ ] All shutdown paths work (CTRL+C, SIGTERM, API, tray, CLI)
-- [ ] All 67 tests still pass
+## Phase 5: Update the sync runner
+- [ ] sync/runner.rs orchestrates: filesystem bridge + periodic replication
+- [ ] SSE listener triggers replication cycle
+- [ ] Remove dead code: remote/upload.rs, old engine/push/reconcile
+
+## Phase 6: Update UI + tests
+- [ ] Conflict UI uses aeordb ConflictRecord format (winner/loser)
+- [ ] Remove "Keep Both" option
+- [ ] Update/rewrite tests for new sync flow
+- [ ] All tests pass
