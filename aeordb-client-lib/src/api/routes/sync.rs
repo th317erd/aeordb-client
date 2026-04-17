@@ -3,8 +3,7 @@ use axum::http::StatusCode;
 use axum::response::Json;
 
 use crate::server::AppState;
-use crate::sync::engine::pull_sync_pass;
-use crate::sync::push::push_sync_pass;
+use crate::sync::replication::replicate;
 use crate::sync::relationships::{
   CreateSyncRelationshipRequest, RelationshipManager,
   SyncRelationship, UpdateSyncRelationshipRequest,
@@ -137,41 +136,71 @@ pub async fn trigger_sync(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-  use crate::sync::relationships::{RelationshipManager, SyncDirection};
+  use crate::sync::relationships::RelationshipManager;
+  use crate::sync::filesystem_bridge::{
+    WriteSuppressionSet, ingest_directory, project_to_filesystem,
+  };
+  use crate::connections::ConnectionManager;
 
-  // Load the relationship to check direction
+  // Load relationship and connection
   let relationship_manager = RelationshipManager::new(&state.state_store);
   let relationship = relationship_manager.get(&id)
     .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": error.to_string() }))))?
     .ok_or_else(|| (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": format!("sync relationship not found: {}", id) }))))?;
 
-  let mut result = serde_json::Map::new();
+  let connection_manager = ConnectionManager::new(&state.state_store);
+  let connection = connection_manager.get(&relationship.remote_connection_id)
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": error.to_string() }))))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "connection not found" }))))?;
 
-  // Pull if direction allows it
-  if relationship.direction == SyncDirection::PullOnly || relationship.direction == SyncDirection::Bidirectional {
-    let pull_result = pull_sync_pass(&state.state_store, &id).await
-      .map_err(|error| {
-        let status = if error.to_string().contains("not found") || error.to_string().contains("disabled") {
-          StatusCode::BAD_REQUEST
-        } else {
-          StatusCode::INTERNAL_SERVER_ERROR
-        };
-        (status, Json(serde_json::json!({ "error": error.to_string() })))
-      })?;
-    result.insert("pull".to_string(), serde_json::to_value(&pull_result).unwrap_or_default());
-  }
+  let direction  = &relationship.direction;
+  let suppression = WriteSuppressionSet::new();
 
-  // Push if direction allows it
-  if relationship.direction == SyncDirection::PushOnly || relationship.direction == SyncDirection::Bidirectional {
-    let push_result = push_sync_pass(&state.state_store, &id).await
-      .map_err(|error| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({ "error": error.to_string() })),
-      ))?;
-    result.insert("push".to_string(), serde_json::to_value(&push_result).unwrap_or_default());
-  }
+  // Step 1: Ingest local filesystem → local aeordb (for push-capable directions)
+  let ingest_result = if *direction == crate::sync::relationships::SyncDirection::PushOnly
+    || *direction == crate::sync::relationships::SyncDirection::Bidirectional
+  {
+    ingest_directory(
+      state.state_store.engine(),
+      &relationship.local_path,
+      &relationship.remote_path,
+      relationship.filter.as_deref(),
+    ).ok()
+  } else {
+    None
+  };
 
-  Ok(Json(serde_json::Value::Object(result)))
+  // Step 2: Replicate local aeordb ↔ remote aeordb
+  let replication_result = replicate(
+    state.state_store.engine(),
+    &connection,
+    None,
+    None,
+  ).await.map_err(|error| (
+    StatusCode::INTERNAL_SERVER_ERROR,
+    Json(serde_json::json!({ "error": error.to_string() })),
+  ))?;
+
+  // Step 3: Project changes to filesystem (for pull-capable directions)
+  let project_result = if *direction == crate::sync::relationships::SyncDirection::PullOnly
+    || *direction == crate::sync::relationships::SyncDirection::Bidirectional
+  {
+    project_to_filesystem(
+      state.state_store.engine(),
+      &relationship.local_path,
+      &relationship.remote_path,
+      relationship.filter.as_deref(),
+      &suppression,
+    ).ok()
+  } else {
+    None
+  };
+
+  Ok(Json(serde_json::json!({
+    "replication": replication_result,
+    "ingest":      ingest_result,
+    "project":     project_result,
+  })))
 }
 
 pub async fn start_sync(
