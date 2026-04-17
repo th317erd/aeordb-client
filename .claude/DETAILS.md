@@ -4,78 +4,47 @@
 - **Purpose**: Sync-first native desktop client for AeorDB
 - **Stack**: Rust + Tauri (backend), Native WebComponents + vanilla JS + HTML5 (frontend) — NO frameworks
 - **Architecture**: Single binary (headed/headless), HTTP control API, CLI is a thin HTTP client
-- **AeorDB docs location**: `../aeordb/docs/`
+
+## File Locations
+- **Config (YAML, human-editable)**: `~/.config/aeordb-client/config.yaml` — connections, relationships
+- **Data (aeordb state)**: `~/.local/share/aeordb-client/state.aeordb` — sync state, identity
+- **Uses dirs crate for XDG platform paths**
 
 ## AeorDB Dependency
-- **Crate name**: `aeordb` (from `aeordb-lib/` directory in the aeordb repo)
 - **Git dep**: `aeordb = { git = "ssh://git@github.com/th317erd/aeordb.git", branch = "main" }`
-- **Repo remote**: `git@github.com:th317erd/aeordb.git`
-- **Branch**: `main`
-- **Local path**: `/home/wyatt/Projects/aeordb-workspace/aeordb/aeordb-lib/`
-- **Key API**: StorageEngine::open/create, DirectoryOps::new(&engine), RequestContext::system()
-- **File ops**: store_file(&ctx, path, data, content_type), read_file(path), delete_file(&ctx, path), list_directory(path), exists(path), get_metadata(path)
-- **Symlink ops**: store_symlink(&ctx, path, target), get_symlink(path), delete_symlink(&ctx, path)
-- **Symlink API**: POST /engine-symlink/{path} with {"target": "..."}, GET ?nofollow=true for metadata
-- **Symlink in listings**: entry_type: 8, includes "target" field
-- **Symlink resolution**: follows transparently, max 32 hops, cycle detection
+- **Key API**: StorageEngine, DirectoryOps, RequestContext
+- **Replication API**: compute_sync_diff, get_needed_chunks, apply_sync_chunks
+- **Conflict API**: list_conflicts_typed, resolve_conflict, dismiss_conflict
+- **Version API**: file_history, file_restore_from_version
 
-## AeorDB Replication API (Library-Level)
-- **compute_sync_diff(engine, since_root_hash, paths_filter, include_system) -> SyncDiff**
-  - SyncDiff: root_hash, files_added/modified/deleted, symlinks_added/modified/deleted, chunk_hashes_needed
-- **get_needed_chunks(engine, chunk_hashes) -> Vec<ChunkData>** (ChunkData: hash + data)
-- **apply_sync_chunks(engine, chunks) -> usize** (returns count of new chunks stored)
-- **list_conflicts_typed(engine) -> Vec<ConflictRecord>**
-  - ConflictRecord: path, conflict_type, auto_winner, created_at, winner/loser (ConflictVersionInfo)
-  - ConflictVersionInfo: hash, virtual_time, node_id, size, content_type
-- **resolve_conflict(engine, ctx, path, pick)** — pick = "winner" or "loser"
-- **dismiss_conflict(engine, ctx, path)** — accept auto-winner
-- **get_conflict(engine, path) -> Option<serde_json::Value>**
-- **file_history(engine, path) -> Vec<FileHistoryEntry>** (snapshot, timestamp, change_type, size, hash)
-- **file_restore_from_version(engine, ctx, path, snapshot_name, version_hash) -> (snapshot_name, size)**
-- All in `aeordb::engine` module
-- Replication: aeordb uses eventual consistency, last-write-wins, loser in /.conflicts/
-- Remote HTTP equivalents: POST /sync/diff, POST /sync/chunks, GET /admin/conflicts, etc.
-
-## Implementation Progress
-- **Step 1**: Skeleton — Cargo workspace, axum HTTP server, /api/v1/status ✅
-- **Step 2**: Local state store — embedded aeordb, client identity ✅
-- **Step 3**: Connection management — CRUD + connectivity test ✅
-- **Step 4**: Sync relationship CRUD ✅
-- **Step 5**: Pull sync engine — one-shot recursive directory sync ✅
-- **Step 6**: CLI control mode — full subcommand structure ✅
-- **Step 7**: SSE listener infrastructure ✅
-- **Step 8**: Push sync engine + filesystem watcher infrastructure ✅
-- **Step 9**: Conflict detection and management ✅
-- **Step 10**: Glob filters for sync relationships ✅
-- **Step 11**: Multi-relationship hierarchy awareness ✅
-- **Step 12**: Offline reconciliation engine ✅
-- **Step 13**: Symlink support — DEFERRED (requires aeordb engine changes)
-- **Steps 14-15**: WebComponent UI shell + management pages ✅
-- **Step 16**: Tauri webview + systray — TODO (requires Tauri-specific setup)
-- **Step 17**: Auth infrastructure ✅
-- **Step 18**: Graceful shutdown + resilience ✅
-
-## Test Count: 67 tests passing
+## Architecture (Post-Restructure)
+- **Sync uses aeordb native replication** — no custom pull/push/merge
+- **Filesystem bridge**: local files ↔ local embedded aeordb (client's responsibility)
+- **Replication**: local aeordb ↔ remote aeordb via HTTP (POST /sync/diff + /sync/chunks)
+- **Conflicts**: aeordb native /.conflicts/ with winner/loser model (LWW)
+- **Direction control**: client-layer (aeordb always bidirectional)
+- **Selective sync**: server-side via sync_paths (recently fixed)
+- **Delete propagation**: client-layer pre-engine filtering
 
 ## Key Modules
-- `aeordb-client-lib/src/state.rs` — Embedded aeordb state store
-- `aeordb-client-lib/src/connections.rs` — Remote connection management
-- `aeordb-client-lib/src/remote.rs` — HTTP client for remote aeordb
-- `aeordb-client-lib/src/sync/engine.rs` — Pull sync engine
-- `aeordb-client-lib/src/sync/push.rs` — Push sync engine
-- `aeordb-client-lib/src/sync/conflicts.rs` — Conflict management
-- `aeordb-client-lib/src/sync/filter.rs` — Glob filter matching
-- `aeordb-client-lib/src/sync/fs_watcher.rs` — Filesystem watcher with coalescing
-- `aeordb-client-lib/src/sync/sse_listener.rs` — SSE event listener
-- `aeordb-client-lib/src/server.rs` — HTTP server (axum)
-- `aeordb-client/src/main.rs` — Binary entry point, clap CLI
-- `aeordb-client/src/cli/` — CLI subcommand handlers
+- `config.rs` — YAML config store (connections, relationships)
+- `state.rs` — Embedded aeordb state store (sync state, identity)
+- `sync/replication.rs` — aeordb replication orchestration
+- `sync/filesystem_bridge.rs` — local files ↔ local aeordb
+- `sync/runner.rs` — continuous sync lifecycle (watcher + SSE + replication)
+- `sync/fs_watcher.rs` — filesystem watcher with coalescing
+- `sync/sse_listener.rs` — SSE event listener
+- `sync/filter.rs` — glob filter matching (for filesystem bridge)
+- `sync/hierarchy.rs` — parent/child relationship exclusions
+- `sync/content_type.rs` — MIME type detection
+- `remote/mod.rs` — HTTP client for remote aeordb
+- `server.rs` — axum HTTP server + AppState
+- `connections.rs` — connection CRUD (reads from ConfigStore)
+- `sync/relationships.rs` — relationship CRUD (reads from ConfigStore)
+- `api/routes/conflicts.rs` — proxies aeordb native conflict APIs
 
 ## GitHub
 - **Repo**: `git@github.com:th317erd/aeordb-client.git`
 - **User**: `th317erd`
 
-## User Preferences
-- HATES React/Vue/Angular — strictly native WebComponents, vanilla JS, HTML5
-- No frameworks, no bundlers, no nonsense
-- Tokio + axum confirmed as preferred async runtime and HTTP server
+## Test Count: 58 tests passing
