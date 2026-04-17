@@ -3,9 +3,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use aeordb::engine::{
-  StorageEngine, RequestContext,
+  StorageEngine,
   compute_sync_diff, get_needed_chunks, apply_sync_chunks,
-  SyncDiff, ChunkData,
+  ChunkData,
 };
 
 use crate::connections::{AuthType, RemoteConnection};
@@ -86,13 +86,12 @@ pub async fn replicate(
   engine: &Arc<StorageEngine>,
   connection: &RemoteConnection,
   last_remote_root_hash: Option<&[u8]>,
-  paths_filter: Option<&[String]>,
 ) -> Result<ReplicationResult> {
   let start = std::time::Instant::now();
   let mut errors = Vec::new();
 
   // --- Step 1: Compute our local diff ---
-  let local_diff = compute_sync_diff(engine, last_remote_root_hash, paths_filter, false)
+  let local_diff = compute_sync_diff(engine, last_remote_root_hash, None, false)
     .map_err(|error| ClientError::Server(
       format!("failed to compute local sync diff: {}", error),
     ))?;
@@ -103,7 +102,6 @@ pub async fn replicate(
   let remote_diff = fetch_remote_diff(
     connection,
     last_remote_root_hash,
-    paths_filter,
   ).await?;
 
   let remote_root_hash = remote_diff.root_hash.clone();
@@ -223,14 +221,12 @@ pub async fn replicate(
 async fn fetch_remote_diff(
   connection: &RemoteConnection,
   since_root_hash: Option<&[u8]>,
-  paths_filter: Option<&[String]>,
 ) -> Result<RemoteSyncDiffResponse> {
   let url    = format!("{}/sync/diff", connection.url);
   let client = reqwest::Client::new();
 
   let body = serde_json::json!({
     "since_root_hash": since_root_hash.map(hex::encode),
-    "paths": paths_filter,
   });
 
   let mut request = client.post(&url).json(&body);

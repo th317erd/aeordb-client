@@ -175,7 +175,6 @@ pub async fn trigger_sync(
     state.state_store.engine(),
     &connection,
     None,
-    None,
   ).await.map_err(|error| (
     StatusCode::INTERNAL_SERVER_ERROR,
     Json(serde_json::json!({ "error": error.to_string() })),

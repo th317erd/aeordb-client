@@ -173,10 +173,7 @@ async fn run_sync_loop(
   }
 
   // --- Step 2: Initial replication --- local aeordb ↔ remote aeordb ---
-  let paths_filter: Option<Vec<String>> = filter.as_ref().map(|f| vec![f.clone()]);
-  let paths_ref: Option<&[String]> = paths_filter.as_deref();
-
-  do_replication_cycle(&state, &connection, &relationship, &direction, paths_ref, &suppression).await;
+  do_replication_cycle(&state, &connection, &relationship, &direction, &suppression).await;
 
   // --- Step 3: Start watchers based on direction ---
   let mut fs_receiver: Option<mpsc::Receiver<FsChange>> = None;
@@ -255,7 +252,7 @@ async fn run_sync_loop(
         }
 
         // Replicate to push our change to the remote
-        do_replication_cycle(&state, &connection, &relationship, &direction, paths_ref, &suppression).await;
+        do_replication_cycle(&state, &connection, &relationship, &direction, &suppression).await;
       }
 
       // Remote SSE change
@@ -266,12 +263,12 @@ async fn run_sync_loop(
         }
       } => {
         // Remote changed — replicate to pull their changes
-        do_replication_cycle(&state, &connection, &relationship, &direction, paths_ref, &suppression).await;
+        do_replication_cycle(&state, &connection, &relationship, &direction, &suppression).await;
       }
 
       // Periodic safety net — replicate every 60 seconds regardless
       _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
-        do_replication_cycle(&state, &connection, &relationship, &direction, paths_ref, &suppression).await;
+        do_replication_cycle(&state, &connection, &relationship, &direction, &suppression).await;
       }
     }
   }
@@ -283,7 +280,6 @@ async fn do_replication_cycle(
   connection: &crate::connections::RemoteConnection,
   relationship: &SyncRelationship,
   direction: &SyncDirection,
-  paths_filter: Option<&[String]>,
   suppression: &WriteSuppressionSet,
 ) {
   // Replicate between local aeordb and remote aeordb
@@ -295,7 +291,7 @@ async fn do_replication_cycle(
   // at the caller level — we skip the ingest step for pull-only (nothing to push),
   // and skip the project step for push-only (nothing to write locally).
 
-  match replicate(state.engine(), connection, None, paths_filter).await {
+  match replicate(state.engine(), connection, None).await {
     Ok(result) => {
       if result.pulled_chunks > 0 || result.pushed_chunks > 0 || result.conflicts > 0 {
         tracing::info!(
