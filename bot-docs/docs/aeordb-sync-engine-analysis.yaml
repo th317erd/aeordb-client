@@ -1,0 +1,142 @@
+aeordb_sync_engine_analysis:
+  date: 2026-04-16
+  purpose: >
+    Deep analysis of what aeordb's built-in sync engine ACTUALLY does
+    vs what the docs/user described. Based on reading the actual source code.
+
+  # =========================================================================
+  # WHAT AEORDB DOES NATIVELY
+  # =========================================================================
+  implemented:
+    three_way_merge:
+      status: implemented
+      location: engine/merge.rs
+      description: >
+        Deterministic, commutative three-way merge between base, local HEAD,
+        and remote HEAD. LWW conflict resolution by (virtual_time, node_id).
+        Modify beats delete (safety-first).
+
+    sync_engine:
+      status: implemented
+      location: engine/sync_engine.rs
+      key_types:
+        SyncConfig: "{ periodic_interval_secs, cluster_secret }"
+        PeerSyncState: "{ last_synced_root_hash, last_sync_at }"
+        SyncCycleResult: "{ changes_applied, conflicts_detected, operations_applied }"
+      methods:
+        - "sync_with_peer(peer_node_id) — HTTP-based sync with a specific peer"
+        - "sync_with_local_engine(peer_node_id, remote_engine) — in-process sync (no HTTP)"
+        - "sync_all_peers() — sync with all Active peers in parallel"
+        - "trigger_sync_all() — manual on-demand sync entry point"
+
+    periodic_sync_loop:
+      status: implemented
+      location: engine/sync_engine.rs (spawn_sync_loop)
+      description: >
+        Background tokio task that ticks every N seconds and calls sync_all_peers().
+        Uses MissedTickBehavior::Skip. Purely periodic — NOT event-driven.
+
+    http_sync_protocol:
+      status: implemented
+      location: server/sync_routes.rs
+      endpoints:
+        - "POST /sync/diff — compute diff between two states"
+        - "POST /sync/chunks — exchange chunk data"
+      description: >
+        do_sync_cycle_remote() calls POST /sync/diff with local HEAD + last-synced
+        hash, parses response, fetches missing chunks, applies changes via DirectoryOps.
+
+    conflict_storage:
+      status: implemented
+      location: engine/conflict_store.rs
+      endpoints:
+        - "GET /admin/conflicts"
+        - "POST /admin/conflict-resolve/{path}"
+        - "POST /admin/conflict-dismiss/{path}"
+
+    peer_management:
+      status: implemented
+      location: engine/peer_connection.rs
+      lifecycle: "Disconnected → Honeymoon (clock settling) → Active"
+      note: "sync_paths field EXISTS on PeerConfig but is UNUSED"
+
+    sync_api_library:
+      status: implemented
+      location: engine/sync_api.rs
+      functions:
+        - "compute_sync_diff(engine, since_root_hash, paths_filter, include_system)"
+        - "get_needed_chunks(engine, chunk_hashes)"
+        - "apply_sync_chunks(engine, chunks)"
+        - "list_conflicts_typed(engine)"
+        - "file_history(engine, path)"
+        - "file_restore_from_version(engine, ctx, path, snapshot, hash)"
+
+    in_process_sync:
+      status: implemented
+      description: >
+        sync_with_local_engine() can sync two StorageEngine instances
+        in the same process without HTTP. This is KEY for the client —
+        local embedded aeordb can sync directly with... itself? No.
+        This is for testing. For remote sync, HTTP is required.
+
+  # =========================================================================
+  # WHAT AEORDB DOES NOT DO (GAPS)
+  # =========================================================================
+  not_implemented:
+    selective_sync:
+      status: "DEFINED BUT UNUSED"
+      detail: >
+        PeerConfig has sync_paths: Option<Vec<String>> but it is NEVER
+        read or applied. compute_sync_diff accepts paths_filter param
+        but sync_engine.rs doesn't pass it through.
+
+    unidirectional_sync:
+      status: "NOT IMPLEMENTED"
+      detail: >
+        No pull-only or push-only mode. All syncs are bidirectional
+        three-way merge. No direction flags anywhere.
+
+    event_driven_sync:
+      status: "NOT IMPLEMENTED"
+      detail: >
+        Sync loop is purely periodic (timer ticks). No SSE listening,
+        no webhook triggers, no event subscriptions.
+
+    filesystem_integration:
+      status: "NOT IMPLEMENTED"
+      detail: >
+        No raw file I/O. aeordb operates on its own append-only WAL.
+        DirectoryOps stores/reads within the .aeordb file, NOT the
+        actual filesystem. The "raw filesystem driver" mentioned by
+        the user may be a planned feature with an interface defined
+        but no implementation found.
+
+    filesystem_watcher:
+      status: "NOT IMPLEMENTED"
+      detail: No monitoring of local filesystem changes.
+
+    delete_propagation_control:
+      status: "NOT IMPLEMENTED"
+      detail: No per-direction delete propagation settings.
+
+  # =========================================================================
+  # IMPLICATIONS FOR THE CLIENT
+  # =========================================================================
+  client_responsibilities:
+    - "Filesystem bridge: local files ↔ local aeordb (ingest + project)"
+    - "Filesystem watcher: detect local file changes"
+    - "SSE listener: detect remote changes for faster-than-periodic sync"
+    - "Selective sync: filter paths client-side before storing in local aeordb"
+    - "Direction control: pull-only/push-only logic (aeordb always does bidirectional)"
+    - "Delete propagation control: configurable per-relationship"
+    - "Sync relationship management: UI and config"
+    - "Conflict UI: browse and resolve conflicts"
+
+  aeordb_handles:
+    - "Three-way merge with conflict detection"
+    - "Chunk deduplication and exchange"
+    - "HTTP sync protocol (diff + chunks)"
+    - "Per-peer state tracking"
+    - "Conflict storage in /.conflicts/"
+    - "Periodic background sync loop"
+    - "Versioning and file history"
