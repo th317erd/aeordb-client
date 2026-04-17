@@ -15,5 +15,8 @@ pub async fn get_status(
     response = response.with_identity(identity.id, identity.name);
   }
 
+  response.config_dir = Some(state.config_dir.to_string_lossy().to_string());
+  response.data_dir   = Some(state.data_dir.to_string_lossy().to_string());
+
   (StatusCode::OK, Json(response))
 }

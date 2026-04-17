@@ -64,12 +64,12 @@ impl StateStore {
   }
 
   /// Ensure the required directory structure exists in the local state db.
+  /// Note: connections and relationships are now stored in the YAML config
+  /// file, not in the state database.
   fn ensure_directory_structure(&self) -> Result<()> {
     let directories = [
       "/client/",
-      "/connections/",
       "/sync/",
-      "/sync/relationships/",
       "/sync/state/",
       "/sync/conflicts/",
       "/settings/",

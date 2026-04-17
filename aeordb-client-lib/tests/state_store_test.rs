@@ -15,11 +15,10 @@ fn test_open_or_create_new_database() {
   let path  = temp_database_path();
   let store = StateStore::open_or_create(&path).expect("failed to create state store");
 
-  // Should have the directory structure
+  // Should have the directory structure (connections and relationships
+  // are now stored in the YAML config, not in the state database)
   assert!(store.exists("/client/").expect("exists check failed"));
-  assert!(store.exists("/connections/").expect("exists check failed"));
   assert!(store.exists("/sync/").expect("exists check failed"));
-  assert!(store.exists("/sync/relationships/").expect("exists check failed"));
   assert!(store.exists("/sync/state/").expect("exists check failed"));
   assert!(store.exists("/sync/conflicts/").expect("exists check failed"));
   assert!(store.exists("/settings/").expect("exists check failed"));

@@ -2,11 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::config::ConfigStore;
 use crate::connections::ConnectionManager;
 use crate::error::{ClientError, Result};
-use crate::state::StateStore;
-
-const RELATIONSHIPS_PATH: &str = "/sync/relationships/";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -66,19 +64,19 @@ pub struct UpdateSyncRelationshipRequest {
   pub enabled:            Option<bool>,
 }
 
-/// Manages sync relationships, persisted in the local state store.
+/// Manages sync relationships, persisted in the YAML config file.
 pub struct RelationshipManager<'a> {
-  state: &'a StateStore,
+  config: &'a ConfigStore,
 }
 
 impl<'a> RelationshipManager<'a> {
-  pub fn new(state: &'a StateStore) -> Self {
-    Self { state }
+  pub fn new(config: &'a ConfigStore) -> Self {
+    Self { config }
   }
 
   pub fn create(&self, request: CreateSyncRelationshipRequest) -> Result<SyncRelationship> {
     // Validate that the referenced connection exists
-    let connection_manager = ConnectionManager::new(self.state);
+    let connection_manager = ConnectionManager::new(self.config);
     if connection_manager.get(&request.remote_connection_id)?.is_none() {
       return Err(ClientError::Configuration(
         format!("connection not found: {}", request.remote_connection_id),
@@ -120,11 +118,13 @@ impl<'a> RelationshipManager<'a> {
       updated_at:           now,
     };
 
-    let path = format!("{}{}.json", RELATIONSHIPS_PATH, relationship.id);
-    self.state.store_json(&path, &relationship)?;
+    let new_relationship = relationship.clone();
+    self.config.update(|config| {
+      config.relationships.push(new_relationship);
+    })?;
 
     tracing::info!(
-      "created sync relationship '{}' ({}) — {} {} ↔ {}",
+      "created sync relationship '{}' ({}) -- {} {} <-> {}",
       relationship.name,
       relationship.id,
       relationship.remote_connection_id,
@@ -136,70 +136,71 @@ impl<'a> RelationshipManager<'a> {
   }
 
   pub fn list(&self) -> Result<Vec<SyncRelationship>> {
-    let entries = self.state.list_directory(RELATIONSHIPS_PATH)?;
-    let mut relationships = Vec::new();
-
-    for entry_name in entries {
-      if !entry_name.ends_with(".json") || entry_name == ".keep" {
-        continue;
-      }
-
-      let path = format!("{}{}", RELATIONSHIPS_PATH, entry_name);
-      if let Some(relationship) = self.state.read_json::<SyncRelationship>(&path)? {
-        relationships.push(relationship);
-      }
-    }
-
+    let config = self.config.get()?;
+    let mut relationships = config.relationships;
     relationships.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(relationships)
   }
 
   pub fn get(&self, id: &str) -> Result<Option<SyncRelationship>> {
-    let path = format!("{}{}.json", RELATIONSHIPS_PATH, id);
-    self.state.read_json(&path)
+    let config = self.config.get()?;
+    Ok(config.relationships.into_iter().find(|relationship| relationship.id == id))
   }
 
   pub fn update(&self, id: &str, request: UpdateSyncRelationshipRequest) -> Result<SyncRelationship> {
-    let path = format!("{}{}.json", RELATIONSHIPS_PATH, id);
+    let mut updated_relationship = None;
 
-    let mut relationship = self.state.read_json::<SyncRelationship>(&path)?
-      .ok_or_else(|| ClientError::Configuration(
+    self.config.update(|config| {
+      let Some(relationship) = config.relationships.iter_mut().find(|r| r.id == id) else {
+        return;
+      };
+
+      if let Some(name) = request.name {
+        relationship.name = name;
+      }
+      if let Some(direction) = request.direction {
+        relationship.direction = direction;
+      }
+      if let Some(filter) = request.filter {
+        relationship.filter = Some(filter);
+      }
+      if let Some(delete_propagation) = request.delete_propagation {
+        relationship.delete_propagation = delete_propagation;
+      }
+      if let Some(enabled) = request.enabled {
+        relationship.enabled = enabled;
+      }
+
+      relationship.updated_at = Utc::now();
+      updated_relationship = Some(relationship.clone());
+    })?;
+
+    match updated_relationship {
+      Some(relationship) => {
+        tracing::info!("updated sync relationship '{}' ({})", relationship.name, relationship.id);
+        Ok(relationship)
+      }
+      None => Err(ClientError::Configuration(
         format!("sync relationship not found: {}", id),
-      ))?;
-
-    if let Some(name) = request.name {
-      relationship.name = name;
+      )),
     }
-    if let Some(direction) = request.direction {
-      relationship.direction = direction;
-    }
-    if let Some(filter) = request.filter {
-      relationship.filter = Some(filter);
-    }
-    if let Some(delete_propagation) = request.delete_propagation {
-      relationship.delete_propagation = delete_propagation;
-    }
-    if let Some(enabled) = request.enabled {
-      relationship.enabled = enabled;
-    }
-
-    relationship.updated_at = Utc::now();
-    self.state.store_json(&path, &relationship)?;
-
-    tracing::info!("updated sync relationship '{}' ({})", relationship.name, relationship.id);
-    Ok(relationship)
   }
 
   pub fn delete(&self, id: &str) -> Result<()> {
-    let path = format!("{}{}.json", RELATIONSHIPS_PATH, id);
+    let mut found = false;
 
-    if !self.state.exists(&path)? {
+    self.config.update(|config| {
+      let before = config.relationships.len();
+      config.relationships.retain(|relationship| relationship.id != id);
+      found = config.relationships.len() < before;
+    })?;
+
+    if !found {
       return Err(ClientError::Configuration(
         format!("sync relationship not found: {}", id),
       ));
     }
 
-    self.state.delete(&path)?;
     tracing::info!("deleted sync relationship {}", id);
     Ok(())
   }

@@ -12,7 +12,7 @@ use crate::sync::relationships::{
 pub async fn list_relationships(
   State(state): State<AppState>,
 ) -> Result<Json<Vec<SyncRelationship>>, (StatusCode, Json<serde_json::Value>)> {
-  let manager = RelationshipManager::new(&state.state_store);
+  let manager = RelationshipManager::new(&state.config_store);
 
   manager.list()
     .map(Json)
@@ -26,7 +26,7 @@ pub async fn create_relationship(
   State(state): State<AppState>,
   Json(request): Json<CreateSyncRelationshipRequest>,
 ) -> Result<(StatusCode, Json<SyncRelationship>), (StatusCode, Json<serde_json::Value>)> {
-  let manager = RelationshipManager::new(&state.state_store);
+  let manager = RelationshipManager::new(&state.config_store);
 
   manager.create(request)
     .map(|relationship| (StatusCode::CREATED, Json(relationship)))
@@ -44,7 +44,7 @@ pub async fn get_relationship(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<Json<SyncRelationship>, (StatusCode, Json<serde_json::Value>)> {
-  let manager = RelationshipManager::new(&state.state_store);
+  let manager = RelationshipManager::new(&state.config_store);
 
   match manager.get(&id) {
     Ok(Some(relationship)) => Ok(Json(relationship)),
@@ -64,7 +64,7 @@ pub async fn update_relationship(
   Path(id): Path<String>,
   Json(request): Json<UpdateSyncRelationshipRequest>,
 ) -> Result<Json<SyncRelationship>, (StatusCode, Json<serde_json::Value>)> {
-  let manager = RelationshipManager::new(&state.state_store);
+  let manager = RelationshipManager::new(&state.config_store);
 
   manager.update(&id, request)
     .map(Json)
@@ -82,7 +82,7 @@ pub async fn delete_relationship(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
-  let manager = RelationshipManager::new(&state.state_store);
+  let manager = RelationshipManager::new(&state.config_store);
 
   manager.delete(&id)
     .map(|_| StatusCode::NO_CONTENT)
@@ -100,7 +100,7 @@ pub async fn enable_relationship(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<Json<SyncRelationship>, (StatusCode, Json<serde_json::Value>)> {
-  let manager = RelationshipManager::new(&state.state_store);
+  let manager = RelationshipManager::new(&state.config_store);
 
   manager.enable(&id)
     .map(Json)
@@ -118,7 +118,7 @@ pub async fn disable_relationship(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<Json<SyncRelationship>, (StatusCode, Json<serde_json::Value>)> {
-  let manager = RelationshipManager::new(&state.state_store);
+  let manager = RelationshipManager::new(&state.config_store);
 
   manager.disable(&id)
     .map(Json)
@@ -143,12 +143,12 @@ pub async fn trigger_sync(
   use crate::connections::ConnectionManager;
 
   // Load relationship and connection
-  let relationship_manager = RelationshipManager::new(&state.state_store);
+  let relationship_manager = RelationshipManager::new(&state.config_store);
   let relationship = relationship_manager.get(&id)
     .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": error.to_string() }))))?
     .ok_or_else(|| (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": format!("sync relationship not found: {}", id) }))))?;
 
-  let connection_manager = ConnectionManager::new(&state.state_store);
+  let connection_manager = ConnectionManager::new(&state.config_store);
   let connection = connection_manager.get(&relationship.remote_connection_id)
     .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": error.to_string() }))))?
     .ok_or_else(|| (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "connection not found" }))))?;

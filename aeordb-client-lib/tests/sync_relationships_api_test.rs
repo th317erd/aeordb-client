@@ -14,16 +14,15 @@ struct TestContext {
 impl TestContext {
   async fn new() -> Self {
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir").keep();
-    let database_path = temp_dir
-      .join("test-state.aeordb")
-      .to_string_lossy()
-      .to_string();
+    let data_path = temp_dir.join("test-state.aeordb");
+    let config_path = temp_dir.join("config.yaml");
 
     let config = ServerConfig {
-      host:          "127.0.0.1".to_string(),
-      port:          0,
-      database_path,
-      auth_token:    None,
+      host:        "127.0.0.1".to_string(),
+      port:        0,
+      config_path,
+      data_path,
+      auth_token:  None,
     };
 
     let (address, _handle) = start_server_with_handle(config)

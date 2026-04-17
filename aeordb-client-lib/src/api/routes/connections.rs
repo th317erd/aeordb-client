@@ -11,7 +11,7 @@ use crate::server::AppState;
 pub async fn list_connections(
   State(state): State<AppState>,
 ) -> Result<Json<Vec<RemoteConnection>>, (StatusCode, Json<serde_json::Value>)> {
-  let manager = ConnectionManager::new(&state.state_store);
+  let manager = ConnectionManager::new(&state.config_store);
 
   manager.list()
     .map(Json)
@@ -25,7 +25,7 @@ pub async fn create_connection(
   State(state): State<AppState>,
   Json(request): Json<CreateConnectionRequest>,
 ) -> Result<(StatusCode, Json<RemoteConnection>), (StatusCode, Json<serde_json::Value>)> {
-  let manager = ConnectionManager::new(&state.state_store);
+  let manager = ConnectionManager::new(&state.config_store);
 
   manager.create(request)
     .map(|connection| (StatusCode::CREATED, Json(connection)))
@@ -39,7 +39,7 @@ pub async fn get_connection(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<Json<RemoteConnection>, (StatusCode, Json<serde_json::Value>)> {
-  let manager = ConnectionManager::new(&state.state_store);
+  let manager = ConnectionManager::new(&state.config_store);
 
   match manager.get(&id) {
     Ok(Some(connection)) => Ok(Json(connection)),
@@ -59,7 +59,7 @@ pub async fn update_connection(
   Path(id): Path<String>,
   Json(request): Json<UpdateConnectionRequest>,
 ) -> Result<Json<RemoteConnection>, (StatusCode, Json<serde_json::Value>)> {
-  let manager = ConnectionManager::new(&state.state_store);
+  let manager = ConnectionManager::new(&state.config_store);
 
   manager.update(&id, request)
     .map(Json)
@@ -77,7 +77,7 @@ pub async fn delete_connection(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
-  let manager = ConnectionManager::new(&state.state_store);
+  let manager = ConnectionManager::new(&state.config_store);
 
   manager.delete(&id)
     .map(|_| StatusCode::NO_CONTENT)
@@ -95,7 +95,7 @@ pub async fn test_connection(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<Json<ConnectionTestResult>, (StatusCode, Json<serde_json::Value>)> {
-  let manager = ConnectionManager::new(&state.state_store);
+  let manager = ConnectionManager::new(&state.config_store);
 
   manager.test_connection(&id).await
     .map(Json)

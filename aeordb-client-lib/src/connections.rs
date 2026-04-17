@@ -2,10 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::config::ConfigStore;
 use crate::error::{ClientError, Result};
-use crate::state::StateStore;
-
-const CONNECTIONS_PATH: &str = "/connections/";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -48,14 +46,14 @@ pub struct ConnectionTestResult {
   pub latency_ms: Option<u64>,
 }
 
-/// Manages remote aeordb connections, persisted in the local state store.
+/// Manages remote aeordb connections, persisted in the YAML config file.
 pub struct ConnectionManager<'a> {
-  state: &'a StateStore,
+  config: &'a ConfigStore,
 }
 
 impl<'a> ConnectionManager<'a> {
-  pub fn new(state: &'a StateStore) -> Self {
-    Self { state }
+  pub fn new(config: &'a ConfigStore) -> Self {
+    Self { config }
   }
 
   pub fn create(&self, request: CreateConnectionRequest) -> Result<RemoteConnection> {
@@ -74,75 +72,78 @@ impl<'a> ConnectionManager<'a> {
       updated_at: now,
     };
 
-    let path = format!("{}{}.json", CONNECTIONS_PATH, connection.id);
-    self.state.store_json(&path, &connection)?;
+    let new_connection = connection.clone();
+    self.config.update(|config| {
+      config.connections.push(new_connection);
+    })?;
 
     tracing::info!("created connection '{}' ({})", connection.name, connection.id);
     Ok(connection)
   }
 
   pub fn list(&self) -> Result<Vec<RemoteConnection>> {
-    let entries = self.state.list_directory(CONNECTIONS_PATH)?;
-    let mut connections = Vec::new();
-
-    for entry_name in entries {
-      if !entry_name.ends_with(".json") || entry_name == ".keep" {
-        continue;
-      }
-
-      let path = format!("{}{}", CONNECTIONS_PATH, entry_name);
-      if let Some(connection) = self.state.read_json::<RemoteConnection>(&path)? {
-        connections.push(connection);
-      }
-    }
-
+    let config = self.config.get()?;
+    let mut connections = config.connections;
     connections.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(connections)
   }
 
   pub fn get(&self, id: &str) -> Result<Option<RemoteConnection>> {
-    let path = format!("{}{}.json", CONNECTIONS_PATH, id);
-    self.state.read_json(&path)
+    let config = self.config.get()?;
+    Ok(config.connections.into_iter().find(|connection| connection.id == id))
   }
 
   pub fn update(&self, id: &str, request: UpdateConnectionRequest) -> Result<RemoteConnection> {
-    let path = format!("{}{}.json", CONNECTIONS_PATH, id);
+    let mut updated_connection = None;
 
-    let mut connection = self.state.read_json::<RemoteConnection>(&path)?
-      .ok_or_else(|| ClientError::Configuration(
+    self.config.update(|config| {
+      let Some(connection) = config.connections.iter_mut().find(|c| c.id == id) else {
+        return;
+      };
+
+      if let Some(name) = request.name {
+        connection.name = name;
+      }
+      if let Some(url) = request.url {
+        connection.url = url.trim_end_matches('/').to_string();
+      }
+      if let Some(auth_type) = request.auth_type {
+        connection.auth_type = auth_type;
+      }
+      if let Some(api_key) = request.api_key {
+        connection.api_key = Some(api_key);
+      }
+
+      connection.updated_at = Utc::now();
+      updated_connection = Some(connection.clone());
+    })?;
+
+    match updated_connection {
+      Some(connection) => {
+        tracing::info!("updated connection '{}' ({})", connection.name, connection.id);
+        Ok(connection)
+      }
+      None => Err(ClientError::Configuration(
         format!("connection not found: {}", id),
-      ))?;
-
-    if let Some(name) = request.name {
-      connection.name = name;
+      )),
     }
-    if let Some(url) = request.url {
-      connection.url = url.trim_end_matches('/').to_string();
-    }
-    if let Some(auth_type) = request.auth_type {
-      connection.auth_type = auth_type;
-    }
-    if let Some(api_key) = request.api_key {
-      connection.api_key = Some(api_key);
-    }
-
-    connection.updated_at = Utc::now();
-    self.state.store_json(&path, &connection)?;
-
-    tracing::info!("updated connection '{}' ({})", connection.name, connection.id);
-    Ok(connection)
   }
 
   pub fn delete(&self, id: &str) -> Result<()> {
-    let path = format!("{}{}.json", CONNECTIONS_PATH, id);
+    let mut found = false;
 
-    if !self.state.exists(&path)? {
+    self.config.update(|config| {
+      let before = config.connections.len();
+      config.connections.retain(|connection| connection.id != id);
+      found = config.connections.len() < before;
+    })?;
+
+    if !found {
       return Err(ClientError::Configuration(
         format!("connection not found: {}", id),
       ));
     }
 
-    self.state.delete(&path)?;
     tracing::info!("deleted connection {}", id);
     Ok(())
   }

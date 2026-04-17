@@ -27,16 +27,15 @@ fn test_list_conflicts_empty_database() {
 #[tokio::test]
 async fn test_conflicts_http_api_list_empty() {
   let temp_dir = tempfile::tempdir().expect("failed to create temp dir").keep();
-  let database_path = temp_dir
-    .join("test-state.aeordb")
-    .to_string_lossy()
-    .to_string();
+  let data_path = temp_dir.join("test-state.aeordb");
+  let config_path = temp_dir.join("config.yaml");
 
   let config = ServerConfig {
-    host:          "127.0.0.1".to_string(),
-    port:          0,
-    database_path,
-    auth_token:    None,
+    host:        "127.0.0.1".to_string(),
+    port:        0,
+    config_path,
+    data_path,
+    auth_token:  None,
   };
 
   let (address, _handle) = start_server_with_handle(config)
@@ -45,7 +44,7 @@ async fn test_conflicts_http_api_list_empty() {
   let base_url = format!("http://{}", address);
   let client   = reqwest::Client::new();
 
-  // List conflicts — should be empty
+  // List conflicts -- should be empty
   let response = client.get(format!("{}/api/v1/conflicts", base_url))
     .send().await.expect("list failed");
   assert_eq!(response.status(), 200);
@@ -65,16 +64,15 @@ async fn test_conflicts_http_api_list_empty() {
 #[tokio::test]
 async fn test_conflicts_http_api_resolve_not_found() {
   let temp_dir = tempfile::tempdir().expect("failed to create temp dir").keep();
-  let database_path = temp_dir
-    .join("test-state.aeordb")
-    .to_string_lossy()
-    .to_string();
+  let data_path = temp_dir.join("test-state.aeordb");
+  let config_path = temp_dir.join("config.yaml");
 
   let config = ServerConfig {
-    host:          "127.0.0.1".to_string(),
-    port:          0,
-    database_path,
-    auth_token:    None,
+    host:        "127.0.0.1".to_string(),
+    port:        0,
+    config_path,
+    data_path,
+    auth_token:  None,
   };
 
   let (address, _handle) = start_server_with_handle(config)
@@ -88,6 +86,6 @@ async fn test_conflicts_http_api_resolve_not_found() {
     .json(&serde_json::json!({ "path": "/nonexistent/file.txt", "pick": "winner" }))
     .send().await.expect("resolve failed");
 
-  // Should be 404 or 500 — the conflict doesn't exist
+  // Should be 404 or 500 -- the conflict doesn't exist
   assert!(response.status().is_client_error() || response.status().is_server_error());
 }

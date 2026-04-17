@@ -2,11 +2,13 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusResponse {
-  pub status:    String,
-  pub version:   String,
-  pub uptime:    u64,
-  pub client_id: Option<String>,
+  pub status:      String,
+  pub version:     String,
+  pub uptime:      u64,
+  pub client_id:   Option<String>,
   pub client_name: Option<String>,
+  pub config_dir:  Option<String>,
+  pub data_dir:    Option<String>,
 }
 
 impl StatusResponse {
@@ -17,6 +19,8 @@ impl StatusResponse {
       uptime,
       client_id:   None,
       client_name: None,
+      config_dir:  None,
+      data_dir:    None,
     }
   }
 

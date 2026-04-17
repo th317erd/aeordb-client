@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 
+use crate::config::ConfigStore;
 use crate::connections::ConnectionManager;
 use crate::error::{ClientError, Result};
 use crate::state::StateStore;
@@ -22,6 +23,7 @@ use crate::sync::sse_listener::start_sse_listener;
 pub struct SyncRunner {
   running: Arc<Mutex<HashMap<String, RunningSync>>>,
   state:   Arc<StateStore>,
+  config:  Arc<ConfigStore>,
 }
 
 struct RunningSync {
@@ -37,10 +39,11 @@ pub struct SyncRunnerStatus {
 }
 
 impl SyncRunner {
-  pub fn new(state: Arc<StateStore>) -> Self {
+  pub fn new(state: Arc<StateStore>, config: Arc<ConfigStore>) -> Self {
     Self {
       running: Arc::new(Mutex::new(HashMap::new())),
       state,
+      config,
     }
   }
 
@@ -54,7 +57,7 @@ impl SyncRunner {
       ));
     }
 
-    let relationship_manager = RelationshipManager::new(&self.state);
+    let relationship_manager = RelationshipManager::new(&self.config);
     let relationship = relationship_manager.get(relationship_id)?
       .ok_or_else(|| ClientError::Configuration(
         format!("sync relationship not found: {}", relationship_id),
@@ -66,7 +69,7 @@ impl SyncRunner {
       ));
     }
 
-    let connection_manager = ConnectionManager::new(&self.state);
+    let connection_manager = ConnectionManager::new(&self.config);
     let connection = connection_manager.get(&relationship.remote_connection_id)?
       .ok_or_else(|| ClientError::Configuration(
         format!("connection not found: {}", relationship.remote_connection_id),
@@ -109,7 +112,7 @@ impl SyncRunner {
   /// Get status of all sync runners.
   pub async fn status(&self) -> Vec<SyncRunnerStatus> {
     let running = self.running.lock().await;
-    let relationship_manager = RelationshipManager::new(&self.state);
+    let relationship_manager = RelationshipManager::new(&self.config);
     let all_relationships = relationship_manager.list().unwrap_or_default();
 
     all_relationships.iter()
@@ -137,7 +140,7 @@ impl SyncRunner {
 
   /// Start all enabled relationships.
   pub async fn start_all_enabled(&self) {
-    let relationship_manager = RelationshipManager::new(&self.state);
+    let relationship_manager = RelationshipManager::new(&self.config);
     for relationship in relationship_manager.list().unwrap_or_default() {
       if relationship.enabled {
         if let Err(error) = self.start(&relationship.id).await {
@@ -160,7 +163,7 @@ async fn run_sync_loop(
 
   tracing::info!("sync loop active for '{}' ({:?})", relationship.name, direction);
 
-  // --- Step 1: Initial ingest — filesystem → local aeordb ---
+  // --- Step 1: Initial ingest -- filesystem -> local aeordb ---
   if direction == SyncDirection::PushOnly || direction == SyncDirection::Bidirectional {
     if let Err(error) = ingest_directory(
       state.engine(),
@@ -172,7 +175,7 @@ async fn run_sync_loop(
     }
   }
 
-  // --- Step 2: Initial replication --- local aeordb ↔ remote aeordb ---
+  // --- Step 2: Initial replication --- local aeordb <-> remote aeordb ---
   do_replication_cycle(&state, &connection, &relationship, &direction, &suppression).await;
 
   // --- Step 3: Start watchers based on direction ---
@@ -200,7 +203,7 @@ async fn run_sync_loop(
     tracing::info!("SSE listener started for '{}'", relationship.name);
   }
 
-  // --- Step 4: Event loop — react to changes from either side ---
+  // --- Step 4: Event loop -- react to changes from either side ---
   loop {
     tokio::select! {
       // Local filesystem change
@@ -262,11 +265,11 @@ async fn run_sync_loop(
           None => std::future::pending().await,
         }
       } => {
-        // Remote changed — replicate to pull their changes
+        // Remote changed -- replicate to pull their changes
         do_replication_cycle(&state, &connection, &relationship, &direction, &suppression).await;
       }
 
-      // Periodic safety net — replicate every 60 seconds regardless
+      // Periodic safety net -- replicate every 60 seconds regardless
       _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
         do_replication_cycle(&state, &connection, &relationship, &direction, &suppression).await;
       }
@@ -282,15 +285,6 @@ async fn do_replication_cycle(
   direction: &SyncDirection,
   suppression: &WriteSuppressionSet,
 ) {
-  // Replicate between local aeordb and remote aeordb
-  // Direction control: we always call replicate(), but the replication module
-  // handles chunk exchange. For pull-only, we only apply remote chunks locally
-  // and don't push ours. For push-only, we only push ours and don't apply theirs.
-  //
-  // Currently replicate() is always bidirectional. Direction filtering happens
-  // at the caller level — we skip the ingest step for pull-only (nothing to push),
-  // and skip the project step for push-only (nothing to write locally).
-
   match replicate(state.engine(), connection, None).await {
     Ok(result) => {
       if result.pulled_chunks > 0 || result.pushed_chunks > 0 || result.conflicts > 0 {

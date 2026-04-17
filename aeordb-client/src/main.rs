@@ -1,14 +1,17 @@
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use aeordb_client_lib::server::{build_router, create_app_state};
+use aeordb_client_lib::config::{default_config_path, default_data_path};
+use aeordb_client_lib::server::{ServerConfig, build_router, create_app_state};
 
 mod cli;
 mod static_files;
 
 #[derive(Parser)]
 #[command(name = "aeordb-client")]
-#[command(about = "AeorDB Client — sync-first client for AeorDB")]
+#[command(about = "AeorDB Client -- sync-first client for AeorDB")]
 #[command(version)]
 struct Cli {
   /// Target instance URL (for subcommands that talk to a running instance)
@@ -39,9 +42,13 @@ enum Commands {
     #[arg(short, long, default_value_t = 9400)]
     port: u16,
 
+    /// Path to config YAML file
+    #[arg(long, env = "AEORDB_CLIENT_CONFIG")]
+    config: Option<PathBuf>,
+
     /// Path to local state database
     #[arg(long, env = "AEORDB_CLIENT_DB")]
-    database: Option<String>,
+    database: Option<PathBuf>,
   },
 
   /// Show status of the running instance
@@ -143,17 +150,12 @@ enum SyncAction {
   },
 }
 
-fn default_database_path() -> String {
-  let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-  format!("{}/.aeordb-client/state.aeordb", home)
-}
-
 fn main() -> anyhow::Result<()> {
   let cli = Cli::parse();
 
   match cli.command {
     None | Some(Commands::Start { .. }) => {
-      // Server mode — initialize logging
+      // Server mode -- initialize logging
       tracing_subscriber::fmt()
         .with_env_filter(
           EnvFilter::try_from_default_env()
@@ -161,16 +163,31 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
-      let (headless, bind, port, database) = match cli.command {
-        Some(Commands::Start { headless, bind, port, database }) => {
-          (headless, bind, port, database)
+      let (headless, bind, port, config_path, data_path) = match cli.command {
+        Some(Commands::Start { headless, bind, port, config, database }) => {
+          (
+            headless,
+            bind,
+            port,
+            config.unwrap_or_else(default_config_path),
+            database.unwrap_or_else(default_data_path),
+          )
         }
-        _ => (false, "127.0.0.1".to_string(), 9400, None),
+        _ => (
+          false,
+          "127.0.0.1".to_string(),
+          9400,
+          default_config_path(),
+          default_data_path(),
+        ),
       };
 
       if headless {
         tracing::info!("starting in headless mode");
       }
+
+      tracing::info!("config: {}", config_path.display());
+      tracing::info!("data:   {}", data_path.display());
 
       // Singleton check: if an instance is already running on this port, don't start another
       let check_url = format!("http://{}:{}/api/v1/status", bind, port);
@@ -182,9 +199,15 @@ fn main() -> anyhow::Result<()> {
         }
       }
 
-      let database_path = database.unwrap_or_else(default_database_path);
+      let server_config = ServerConfig {
+        host:        bind.clone(),
+        port,
+        config_path,
+        data_path,
+        auth_token:  None,
+      };
 
-      let mut state = create_app_state(&database_path)
+      let mut state = create_app_state(&server_config)
         .map_err(|error| anyhow::anyhow!("failed to initialize: {}", error))?;
 
       // Wire up the API-triggered shutdown signal
@@ -195,7 +218,7 @@ fn main() -> anyhow::Result<()> {
       let static_router = static_files::static_routes();
       let app           = api_router.merge(static_router);
 
-      // Create the tokio runtime manually — Tauri must own the main thread
+      // Create the tokio runtime manually -- Tauri must own the main thread
       let runtime = tokio::runtime::Runtime::new()?;
 
       // Start HTTP server on the runtime, signal readiness via channel
@@ -245,7 +268,7 @@ fn main() -> anyhow::Result<()> {
           shutdown_signal().await;
         });
       } else {
-        // Run Tauri on the main thread — webview loads from our HTTP server
+        // Run Tauri on the main thread -- webview loads from our HTTP server
         let url = format!("http://{}", bound_addr);
 
         tauri::Builder::default()

@@ -47,8 +47,26 @@ class AeorDashboard extends HTMLElement {
           <span class="info-label">Client Name</span>
           <span class="info-value mono" id="client-name">-</span>
         </div>
+        <div class="info-row">
+          <span class="info-label">Config Directory</span>
+          <span class="info-value mono" id="config-dir">-</span>
+          <button class="btn btn-small" id="open-config-dir" style="margin-left: 8px;">Open</button>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Data Directory</span>
+          <span class="info-value mono" id="data-dir">-</span>
+          <button class="btn btn-small" id="open-data-dir" style="margin-left: 8px;">Open</button>
+        </div>
       </div>
     `;
+
+    this.querySelector('#open-config-dir').addEventListener('click', () => {
+      this._openFolder(this.querySelector('#config-dir').textContent);
+    });
+
+    this.querySelector('#open-data-dir').addEventListener('click', () => {
+      this._openFolder(this.querySelector('#data-dir').textContent);
+    });
   }
 
   async _fetchData() {
@@ -73,6 +91,8 @@ class AeorDashboard extends HTMLElement {
       this._update('#uptime', this._formatUptime(status.uptime));
       this._update('#client-id', status.client_id || '-');
       this._update('#client-name', status.client_name || '-');
+      this._update('#config-dir', status.config_dir || '-');
+      this._update('#data-dir', status.data_dir || '-');
     } catch (error) {
       this._update('#status-value', 'error', 'card-value error');
     }
@@ -98,6 +118,21 @@ class AeorDashboard extends HTMLElement {
     const hours   = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     return `${hours}h ${minutes}m`;
+  }
+
+  async _openFolder(path) {
+    if (!path || path === '-')
+      return;
+
+    try {
+      await fetch('/api/v1/open-folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+    } catch (error) {
+      console.error('failed to open folder:', error);
+    }
   }
 }
 
