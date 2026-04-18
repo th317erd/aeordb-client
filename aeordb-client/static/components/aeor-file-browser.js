@@ -1,5 +1,10 @@
 'use strict';
 
+import {
+  formatSize, formatDate, fileIcon, syncBadgeClass,
+  escapeHtml, escapeAttr, isImageFile,
+} from './aeor-file-view-shared.js';
+
 class AeorFileBrowser extends HTMLElement {
   constructor() {
     super();
@@ -9,6 +14,7 @@ class AeorFileBrowser extends HTMLElement {
     this._current_entries = [];
     this._tab_counter = 0;
     this._loading = false;
+    this._view_mode = 'list'; // 'list' or 'grid'
   }
 
   connectedCallback() {
@@ -16,7 +22,6 @@ class AeorFileBrowser extends HTMLElement {
     this.render();
     this._fetchRelationships();
 
-    // If we restored tabs, re-fetch the active tab's listing
     if (this._active_tab_id) {
       const tab = this._tabs.find((t) => t.id === this._active_tab_id);
       if (tab)
@@ -30,24 +35,25 @@ class AeorFileBrowser extends HTMLElement {
         tabs:          this._tabs,
         active_tab_id: this._active_tab_id,
         tab_counter:   this._tab_counter,
+        view_mode:     this._view_mode,
       }));
     } catch (error) {
-      // localStorage unavailable — ignore silently
+      // localStorage unavailable
     }
   }
 
   _loadState() {
     try {
       const raw = localStorage.getItem('aeordb-file-browser');
-      if (!raw)
-        return;
+      if (!raw) return;
 
-      const state       = JSON.parse(raw);
-      this._tabs        = state.tabs || [];
+      const state         = JSON.parse(raw);
+      this._tabs          = state.tabs || [];
       this._active_tab_id = state.active_tab_id || null;
-      this._tab_counter = state.tab_counter || 0;
+      this._tab_counter   = state.tab_counter || 0;
+      this._view_mode     = state.view_mode || 'list';
     } catch (error) {
-      // Corrupt or missing — start fresh
+      // start fresh
     }
   }
 
@@ -56,9 +62,13 @@ class AeorFileBrowser extends HTMLElement {
       this.innerHTML = `
         <div class="page-header">
           <h1>Files</h1>
+          <div class="view-toggle">
+            <button class="small ${(this._view_mode === 'list') ? 'primary' : 'secondary'}" data-view="list" title="List view">&#9776;</button>
+            <button class="small ${(this._view_mode === 'grid') ? 'primary' : 'secondary'}" data-view="grid" title="Grid view">&#9638;</button>
+          </div>
         </div>
         ${this._renderTabBar()}
-        ${this._renderDirectoryListing()}
+        ${this._renderDirectoryView()}
       `;
     } else {
       this.innerHTML = `
@@ -80,33 +90,29 @@ class AeorFileBrowser extends HTMLElement {
 
     const cards = this._relationships.map((rel) => {
       const remoteName = rel.remote_path.replace(/\/$/, '').split('/').pop() || rel.remote_path;
-      const localName = rel.local_path.split('/').pop() || rel.local_path;
-      const arrow = (rel.direction === 'pull_only') ? '\u2190' : (rel.direction === 'push_only') ? '\u2192' : '\u2194';
+      const localName  = rel.local_path.split('/').pop() || rel.local_path;
+      const arrow      = (rel.direction === 'pull_only') ? '\u2190' : (rel.direction === 'push_only') ? '\u2192' : '\u2194';
       const displayName = rel.name || `${remoteName} ${arrow} ${localName}`;
 
       return `
-        <div class="relationship-card" data-id="${rel.id}" data-name="${this._escapeAttr(displayName)}">
-          <div class="relationship-card-name">${this._escapeHtml(displayName)}</div>
-          <div class="relationship-card-paths">${this._escapeHtml(rel.remote_path)} ${arrow} ${this._escapeHtml(rel.local_path)}</div>
+        <div class="relationship-card" data-id="${rel.id}" data-name="${escapeAttr(displayName)}">
+          <div class="relationship-card-name">${escapeHtml(displayName)}</div>
+          <div class="relationship-card-paths">${escapeHtml(rel.remote_path)} ${arrow} ${escapeHtml(rel.local_path)}</div>
         </div>
       `;
     }).join('');
 
-    return `
-      <div class="file-browser-relationships">
-        ${cards}
-      </div>
-    `;
+    return `<div class="file-browser-relationships">${cards}</div>`;
   }
 
   _renderTabBar() {
     const tabs = this._tabs.map((tab) => {
       const isActive = (tab.id === this._active_tab_id);
-      const label = this._truncate(`${tab.relationship_name} ${tab.path}`, 30);
+      const label    = this._truncate(`${tab.relationship_name} ${tab.path}`, 30);
 
       return `
         <div class="tab ${(isActive) ? 'active' : ''}" data-tab-id="${tab.id}">
-          <span class="tab-label">${this._escapeHtml(label)}</span>
+          <span class="tab-label">${escapeHtml(label)}</span>
           <span class="tab-close" data-tab-close="${tab.id}">&times;</span>
         </div>
       `;
@@ -120,7 +126,7 @@ class AeorFileBrowser extends HTMLElement {
     `;
   }
 
-  _renderDirectoryListing() {
+  _renderDirectoryView() {
     const tab = this._tabs.find((t) => t.id === this._active_tab_id);
     if (!tab) return '';
 
@@ -140,19 +146,26 @@ class AeorFileBrowser extends HTMLElement {
       return `${header}<div class="empty-state">This directory is empty.</div>`;
     }
 
+    if (this._view_mode === 'grid') {
+      return `${header}${this._renderGridView()}`;
+    }
+
+    return `${header}${this._renderListView()}`;
+  }
+
+  _renderListView() {
     const rows = this._current_entries.map((entry) => {
-      const isDir = (entry.entry_type === 3);
-      const isSymlink = (entry.entry_type === 8);
-      const icon = (isDir) ? '\uD83D\uDCC1' : (isSymlink) ? '\uD83D\uDD17' : '\uD83D\uDCC4';
-      const size = (isDir) ? '\u2014' : this._formatSize(entry.size);
-      const created = this._formatDate(entry.created_at);
-      const modified = this._formatDate(entry.updated_at);
-      const syncClass = (entry.sync_status === 'synced') ? 'synced' : (entry.sync_status === 'pending') ? 'pending' : 'not-synced';
+      const isDir     = (entry.entry_type === 3);
+      const icon      = fileIcon(entry.entry_type);
+      const size      = (isDir) ? '\u2014' : formatSize(entry.size);
+      const created   = formatDate(entry.created_at);
+      const modified  = formatDate(entry.updated_at);
+      const syncClass = syncBadgeClass(entry.sync_status);
       const syncTitle = entry.sync_status || 'unknown';
 
       return `
-        <tr class="file-entry" data-name="${this._escapeAttr(entry.name)}" data-type="${entry.entry_type}">
-          <td><span class="sync-badge ${syncClass}" title="${syncTitle}"></span><span class="file-icon">${icon}</span>${this._escapeHtml(entry.name)}</td>
+        <tr class="file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}">
+          <td><span class="sync-badge ${syncClass}" title="${syncTitle}"></span><span class="file-icon">${icon}</span>${escapeHtml(entry.name)}</td>
           <td>${size}</td>
           <td>${created}</td>
           <td>${modified}</td>
@@ -161,7 +174,6 @@ class AeorFileBrowser extends HTMLElement {
     }).join('');
 
     return `
-      ${header}
       <table>
         <thead>
           <tr><th>Name</th><th>Size</th><th>Created</th><th>Modified</th></tr>
@@ -171,6 +183,36 @@ class AeorFileBrowser extends HTMLElement {
     `;
   }
 
+  _renderGridView() {
+    const tab = this._tabs.find((t) => t.id === this._active_tab_id);
+
+    const cards = this._current_entries.map((entry) => {
+      const isDir     = (entry.entry_type === 3);
+      const icon      = fileIcon(entry.entry_type);
+      const syncClass = syncBadgeClass(entry.sync_status);
+      const size      = (isDir) ? 'Folder' : formatSize(entry.size);
+
+      let thumbnail = `<div class="grid-card-icon">${icon}</div>`;
+
+      // Show image thumbnail if it's an image and synced locally
+      if (!isDir && isImageFile(entry.name) && entry.has_local && tab) {
+        const encodedPath = encodeURIComponent(tab.path.replace(/\/$/, '') + '/' + entry.name);
+        thumbnail = `<div class="grid-card-thumbnail"><img src="/api/v1/files/${tab.relationship_id}/${encodedPath}" alt="${escapeAttr(entry.name)}" loading="lazy"></div>`;
+      }
+
+      return `
+        <div class="grid-card file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}">
+          <span class="sync-badge ${syncClass}" title="${entry.sync_status || 'unknown'}"></span>
+          ${thumbnail}
+          <div class="grid-card-name" title="${escapeAttr(entry.name)}">${escapeHtml(this._truncate(entry.name, 20))}</div>
+          <div class="grid-card-meta">${size}</div>
+        </div>
+      `;
+    }).join('');
+
+    return `<div class="file-grid">${cards}</div>`;
+  }
+
   _renderBreadcrumbs(path) {
     const segments = path.split('/').filter((s) => s.length > 0);
     let html = '<div class="breadcrumbs"><span class="breadcrumb-segment" data-path="/">Root</span>';
@@ -178,7 +220,7 @@ class AeorFileBrowser extends HTMLElement {
     let accumulated = '/';
     for (const segment of segments) {
       accumulated += segment + '/';
-      html += `<span class="breadcrumb-separator">/</span><span class="breadcrumb-segment" data-path="${this._escapeAttr(accumulated)}">${this._escapeHtml(segment)}</span>`;
+      html += `<span class="breadcrumb-separator">/</span><span class="breadcrumb-segment" data-path="${escapeAttr(accumulated)}">${escapeHtml(segment)}</span>`;
     }
 
     html += '</div>';
@@ -218,6 +260,15 @@ class AeorFileBrowser extends HTMLElement {
       });
     }
 
+    // View toggle
+    this.querySelectorAll('[data-view]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this._view_mode = btn.dataset.view;
+        this._saveState();
+        this.render();
+      });
+    });
+
     // Breadcrumbs
     this.querySelectorAll('.breadcrumb-segment').forEach((segment) => {
       segment.addEventListener('click', () => {
@@ -225,18 +276,17 @@ class AeorFileBrowser extends HTMLElement {
       });
     });
 
-    // File entries
-    this.querySelectorAll('.file-entry').forEach((row) => {
-      row.addEventListener('click', () => {
-        const entryType = parseInt(row.dataset.type, 10);
+    // File entries (both list rows and grid cards)
+    this.querySelectorAll('.file-entry').forEach((el) => {
+      el.addEventListener('click', () => {
+        const entryType = parseInt(el.dataset.type, 10);
         if (entryType === 3) {
           const tab = this._tabs.find((t) => t.id === this._active_tab_id);
           if (tab) {
-            const newPath = tab.path.replace(/\/$/, '') + '/' + row.dataset.name + '/';
+            const newPath = tab.path.replace(/\/$/, '') + '/' + el.dataset.name + '/';
             this._navigateTo(newPath);
           }
         }
-        // Files: no action for now (Phase 3)
       });
     });
   }
@@ -245,10 +295,10 @@ class AeorFileBrowser extends HTMLElement {
     this._tab_counter++;
     const tabId = 'tab-' + this._tab_counter;
     this._tabs.push({
-      relationship_id: relationshipId,
+      relationship_id:   relationshipId,
       relationship_name: relationshipName,
-      path: '/',
-      id: tabId,
+      path:              '/',
+      id:                tabId,
     });
     this._active_tab_id = tabId;
     this._saveState();
@@ -260,9 +310,8 @@ class AeorFileBrowser extends HTMLElement {
     this._active_tab_id = tabId;
     this._saveState();
     const tab = this._tabs.find((t) => t.id === tabId);
-    if (tab) {
+    if (tab)
       this._fetchListing(tab.relationship_id, tab.path);
-    }
   }
 
   _closeTab(tabId) {
@@ -295,7 +344,7 @@ class AeorFileBrowser extends HTMLElement {
 
   async _fetchRelationships() {
     try {
-      const response = await fetch('/api/v1/sync');
+      const response      = await fetch('/api/v1/sync');
       this._relationships = await response.json();
       this.render();
     } catch (error) {
@@ -309,11 +358,11 @@ class AeorFileBrowser extends HTMLElement {
 
     try {
       const encodedPath = (path === '/') ? '' : encodeURIComponent(path);
-      const url = (encodedPath)
+      const url         = (encodedPath)
         ? `/api/v1/browse/${relationshipId}/${encodedPath}`
         : `/api/v1/browse/${relationshipId}`;
       const response = await fetch(url);
-      const data = await response.json();
+      const data     = await response.json();
       this._current_entries = data.entries || [];
     } catch (error) {
       console.error('Failed to fetch listing:', error);
@@ -324,39 +373,9 @@ class AeorFileBrowser extends HTMLElement {
     this.render();
   }
 
-  _formatSize(bytes) {
-    if (bytes == null) return '\u2014';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  }
-
-  _formatDate(timestamp) {
-    if (!timestamp) return '\u2014';
-    const date = new Date(timestamp);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
-    return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`;
-  }
-
   _truncate(str, max) {
     if (str.length <= max) return str;
     return str.substring(0, max - 1) + '\u2026';
-  }
-
-  _escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
-  _escapeAttr(str) {
-    return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 }
 
