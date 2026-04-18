@@ -10,6 +10,7 @@ use tokio::sync::Notify;
 
 use crate::api::routes::conflicts;
 use crate::api::routes::connections;
+use crate::api::routes::files;
 use crate::api::routes::status::get_status;
 use crate::api::routes::sync;
 use crate::api::routes::system;
@@ -65,6 +66,10 @@ pub fn build_router(state: AppState) -> Router {
     .route("/conflicts/resolve", post(conflicts::resolve_conflict_handler))
     .route("/conflicts/dismiss", post(conflicts::dismiss_conflict_handler))
     .route("/conflicts/dismiss-all", post(conflicts::dismiss_all_conflicts))
+    .route("/browse/{relationship_id}", get(files::browse))
+    .route("/browse/{relationship_id}/{*path}", get(files::browse))
+    .route("/files/{relationship_id}/{*path}", get(files::serve_file).put(files::upload_file).delete(files::delete_file))
+    .route("/files/{relationship_id}/open", post(files::open_locally))
     .route("/open-folder", post(system::open_folder))
     .route("/shutdown", post(system::shutdown));
 

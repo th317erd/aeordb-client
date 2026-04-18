@@ -40,6 +40,10 @@ class AeorNav extends HTMLElement {
           <span class="nav-icon" style="color: var(--success)">&#8635;</span>
           Sync
         </div>
+        <div class="nav-item ${(active === 'files') ? 'active' : ''}" data-page="files">
+          <span class="nav-icon" style="color: #a78bfa">&#128193;</span>
+          Files
+        </div>
         <div class="nav-item ${(active === 'conflicts') ? 'active' : ''}" data-page="conflicts">
           <span class="nav-icon" style="color: var(--warning)">&#9888;</span>
           Conflicts

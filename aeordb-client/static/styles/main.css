@@ -454,3 +454,150 @@ td {
   align-items: center;
   margin-bottom: 24px;
 }
+
+/* ==========================================================================
+   File Browser
+   ========================================================================== */
+
+.file-browser-relationships {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.relationship-card {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.relationship-card:hover {
+  border-color: var(--accent);
+}
+
+.relationship-card-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.relationship-card-paths {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  font-family: var(--font-mono);
+}
+
+.tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+  overflow-x: auto;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  transition: background-color 0.15s;
+}
+
+.tab:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.tab.active {
+  background-color: var(--bg-secondary);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.tab-close {
+  font-size: 14px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.tab-close:hover {
+  color: var(--error);
+}
+
+.tab-new {
+  padding: 8px 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.tab-new:hover {
+  color: var(--text-primary);
+}
+
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.breadcrumb-segment {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.breadcrumb-segment:hover {
+  text-decoration: underline;
+}
+
+.breadcrumb-separator {
+  color: var(--text-muted);
+}
+
+.file-entry {
+  cursor: pointer;
+}
+
+.file-entry:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.file-icon {
+  margin-right: 8px;
+}
+
+.sync-badge {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.sync-badge.synced {
+  background-color: var(--success);
+}
+
+.sync-badge.not-synced {
+  background-color: var(--text-muted);
+}
+
+.sync-badge.pending {
+  background-color: var(--warning);
+}

@@ -5,6 +5,7 @@ import { AeorDashboard } from './aeor-dashboard.js';
 import { AeorConnections } from './aeor-connections.js';
 import { AeorSync } from './aeor-sync.js';
 import { AeorConflicts } from './aeor-conflicts.js';
+import { AeorFileBrowser } from './aeor-file-browser.js';
 
 class AeorApp extends HTMLElement {
   constructor() {
@@ -59,6 +60,8 @@ class AeorApp extends HTMLElement {
         return '<aeor-connections></aeor-connections>';
       case 'sync':
         return '<aeor-sync></aeor-sync>';
+      case 'files':
+        return '<aeor-file-browser></aeor-file-browser>';
       case 'conflicts':
         return '<aeor-conflicts></aeor-conflicts>';
       default:
