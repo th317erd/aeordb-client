@@ -6,45 +6,39 @@
 - **Architecture**: Single binary (headed/headless), HTTP control API, CLI is a thin HTTP client
 
 ## File Locations
-- **Config (YAML, human-editable)**: `~/.config/aeordb-client/config.yaml` — connections, relationships
-- **Data (aeordb state)**: `~/.local/share/aeordb-client/state.aeordb` — sync state, identity
-- **Uses dirs crate for XDG platform paths**
+- **Config (YAML, human-editable)**: `dirs::config_dir()/aeordb-client/config.yaml` — connections, relationships
+- **Data (aeordb metadata)**: `dirs::data_dir()/aeordb-client/state.aeordb` — sync metadata, identity
+- **NO file content stored locally in aeordb** — files live on filesystem, metadata only in aeordb
 
-## AeorDB Dependency
-- **Git dep**: `aeordb = { git = "ssh://git@github.com/th317erd/aeordb.git", branch = "main" }`
-- **Key API**: StorageEngine, DirectoryOps, RequestContext
-- **Replication API**: compute_sync_diff, get_needed_chunks, apply_sync_chunks
-- **Conflict API**: list_conflicts_typed, resolve_conflict, dismiss_conflict
-- **Version API**: file_history, file_restore_from_version
-
-## Architecture (Post-Restructure)
-- **Sync uses aeordb native replication** — no custom pull/push/merge
-- **Filesystem bridge**: local files ↔ local embedded aeordb (client's responsibility)
-- **Replication**: local aeordb ↔ remote aeordb via HTTP (POST /sync/diff + /sync/chunks)
+## Sync Architecture
+- **Push**: scan filesystem → hash → compare metadata → PUT /engine/{path} to remote
+- **Pull**: POST /sync/diff to remote → GET /engine/{path} → write to filesystem
+- **Local aeordb**: metadata only (FileSyncMeta, SyncCheckpoint, identity)
+- **No double storage**: files exist once (on filesystem), not duplicated in aeordb
+- **Direction control**: client-layer (pull_only, push_only, bidirectional)
 - **Conflicts**: aeordb native /.conflicts/ with winner/loser model (LWW)
-- **Direction control**: client-layer (aeordb always bidirectional)
-- **Selective sync**: server-side via sync_paths (recently fixed)
-- **Delete propagation**: client-layer pre-engine filtering
+- **Selective sync**: server-side via sync_paths
 
 ## Key Modules
 - `config.rs` — YAML config store (connections, relationships)
-- `state.rs` — Embedded aeordb state store (sync state, identity)
-- `sync/replication.rs` — aeordb replication orchestration
-- `sync/filesystem_bridge.rs` — local files ↔ local aeordb
-- `sync/runner.rs` — continuous sync lifecycle (watcher + SSE + replication)
+- `state.rs` — Embedded aeordb (sync metadata, identity only)
+- `sync/push.rs` — filesystem → remote (hash comparison, mtime fast-skip)
+- `sync/pull.rs` — remote → filesystem (POST /sync/diff + GET /engine/{path})
+- `sync/replication.rs` — thin orchestrator (calls push + pull based on direction)
+- `sync/metadata.rs` — FileSyncMeta, SyncCheckpoint, SyncMetadataStore
+- `sync/runner.rs` — continuous sync lifecycle (watcher + SSE + periodic)
 - `sync/fs_watcher.rs` — filesystem watcher with coalescing
-- `sync/sse_listener.rs` — SSE event listener
-- `sync/filter.rs` — glob filter matching (for filesystem bridge)
+- `sync/sse_listener.rs` — SSE event listener for remote changes
+- `sync/filter.rs` — glob filter matching
 - `sync/hierarchy.rs` — parent/child relationship exclusions
 - `sync/content_type.rs` — MIME type detection
 - `remote/mod.rs` — HTTP client for remote aeordb
 - `server.rs` — axum HTTP server + AppState
-- `connections.rs` — connection CRUD (reads from ConfigStore)
-- `sync/relationships.rs` — relationship CRUD (reads from ConfigStore)
-- `api/routes/conflicts.rs` — proxies aeordb native conflict APIs
+- `connections.rs` — connection CRUD (ConfigStore)
+- `sync/relationships.rs` — relationship CRUD (ConfigStore)
+
+## Test Count: 110 tests passing
 
 ## GitHub
 - **Repo**: `git@github.com:th317erd/aeordb-client.git`
 - **User**: `th317erd`
-
-## Test Count: 58 tests passing
