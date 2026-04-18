@@ -223,7 +223,7 @@ pub async fn browse(
     entries.push(BrowseEntry {
       name:         entry.name,
       entry_type:   entry.entry_type,
-      size:         entry.total_size,
+      size:         entry.size,
       content_type: entry.content_type,
       created_at:   entry.created_at,
       updated_at:   entry.updated_at,

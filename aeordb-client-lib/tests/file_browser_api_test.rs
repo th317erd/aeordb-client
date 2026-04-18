@@ -50,7 +50,7 @@ impl MockServerState {
   }
 }
 
-/// Handles GET /engine/{*path} — returns directory listing (JSON) or file content.
+/// Handles GET /files/{*path} — returns directory listing (JSON) or file content.
 async fn handle_get_engine(
   Path(path): Path<String>,
   AxumState(state): AxumState<MockServerState>,
@@ -76,8 +76,8 @@ async fn handle_get_engine(
       return axum::response::Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "application/octet-stream")
-        .header("x-path", &remote_path)
-        .header("x-total-size", data.len().to_string())
+        .header("x-aeordb-path", &remote_path)
+        .header("x-aeordb-size", data.len().to_string())
         .body(axum::body::Body::from(data.clone()))
         .unwrap();
     }
@@ -89,7 +89,7 @@ async fn handle_get_engine(
     .unwrap()
 }
 
-/// Handles PUT /engine/{*path} — accept uploads.
+/// Handles PUT /files/{*path} — accept uploads.
 async fn handle_put_engine(
   Path(path): Path<String>,
   AxumState(state): AxumState<MockServerState>,
@@ -100,7 +100,7 @@ async fn handle_put_engine(
   StatusCode::OK
 }
 
-/// Handles DELETE /engine/{*path} — accept deletes.
+/// Handles DELETE /files/{*path} — accept deletes.
 async fn handle_delete_engine(
   Path(path): Path<String>,
   AxumState(state): AxumState<MockServerState>,
@@ -116,8 +116,8 @@ async fn handle_health() -> StatusCode {
 
 async fn start_mock_aeordb(state: MockServerState) -> (SocketAddr, MockServerState) {
   let app = Router::new()
-    .route("/admin/health", get(handle_health))
-    .route("/engine/{*path}", get(handle_get_engine).put(handle_put_engine).delete(handle_delete_engine))
+    .route("/system/health", get(handle_health))
+    .route("/files/{*path}", get(handle_get_engine).put(handle_put_engine).delete(handle_delete_engine))
     .with_state(state.clone());
 
   let listener = TcpListener::bind("127.0.0.1:0").await.expect("failed to bind mock server");
@@ -211,43 +211,47 @@ relationships:
 }
 
 fn sample_directory_listing() -> serde_json::Value {
-  serde_json::json!([
-    {
-      "name": "readme.md",
-      "entry_type": 2,
-      "total_size": 24576,
-      "created_at": 1776288276000i64,
-      "updated_at": 1776288276101i64,
-      "content_type": "text/markdown",
-      "path": "/docs/readme.md",
-      "hash": "abc123"
-    },
-    {
-      "name": "images",
-      "entry_type": 3,
-      "total_size": 0,
-      "created_at": 1776288276000i64,
-      "updated_at": 1776288276000i64,
-      "content_type": null,
-      "path": "/docs/images/",
-      "hash": null
-    }
-  ])
+  serde_json::json!({
+    "items": [
+      {
+        "name": "readme.md",
+        "entry_type": 2,
+        "size": 24576,
+        "created_at": 1776288276000i64,
+        "updated_at": 1776288276101i64,
+        "content_type": "text/markdown",
+        "path": "/docs/readme.md",
+        "hash": "abc123"
+      },
+      {
+        "name": "images",
+        "entry_type": 3,
+        "size": 0,
+        "created_at": 1776288276000i64,
+        "updated_at": 1776288276000i64,
+        "content_type": null,
+        "path": "/docs/images/",
+        "hash": null
+      }
+    ]
+  })
 }
 
 fn subdirectory_listing() -> serde_json::Value {
-  serde_json::json!([
-    {
-      "name": "logo.png",
-      "entry_type": 2,
-      "total_size": 102400,
-      "created_at": 1776288276000i64,
-      "updated_at": 1776288276200i64,
-      "content_type": "image/png",
-      "path": "/docs/images/logo.png",
-      "hash": "def456"
-    }
-  ])
+  serde_json::json!({
+    "items": [
+      {
+        "name": "logo.png",
+        "entry_type": 2,
+        "size": 102400,
+        "created_at": 1776288276000i64,
+        "updated_at": 1776288276200i64,
+        "content_type": "image/png",
+        "path": "/docs/images/logo.png",
+        "hash": "def456"
+      }
+    ]
+  })
 }
 
 // ---------------------------------------------------------------------------

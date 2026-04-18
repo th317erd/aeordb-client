@@ -74,7 +74,7 @@ async fn connect_and_listen(
   sender: &mpsc::Sender<RemoteChange>,
 ) -> Result<()> {
   let mut url = format!(
-    "{}/events/stream?events=entries_created,entries_deleted",
+    "{}/system/events?events=entries_created,entries_deleted",
     connection.url,
   );
 

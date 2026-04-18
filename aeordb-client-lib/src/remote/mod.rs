@@ -8,13 +8,13 @@ pub const ENTRY_TYPE_FILE:      u8 = 2;
 pub const ENTRY_TYPE_DIRECTORY: u8 = 3;
 pub const ENTRY_TYPE_SYMLINK:   u8 = 8;
 
-/// A remote aeordb directory entry, as returned by GET /engine/{directory_path}
+/// A remote aeordb directory entry, as returned by GET /files/{directory_path}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteEntry {
   pub name:                        String,
   pub entry_type:                  u8,
   #[serde(default)]
-  pub total_size:                  u64,
+  pub size:                        u64,
   #[serde(default)]
   pub created_at:                  i64,
   #[serde(default)]
@@ -47,7 +47,7 @@ impl RemoteEntry {
 #[derive(Debug, Clone)]
 pub struct RemoteFileMetadata {
   pub path:         String,
-  pub total_size:   u64,
+  pub size:         u64,
   pub content_type: Option<String>,
   pub created_at:   Option<i64>,
   pub updated_at:   Option<i64>,
@@ -81,7 +81,7 @@ impl RemoteClient {
 
   /// List the contents of a remote directory.
   pub async fn list_directory(&self, remote_path: &str) -> Result<Vec<RemoteEntry>> {
-    let url = format!("{}/engine{}", self.base_url, remote_path);
+    let url = format!("{}/files{}", self.base_url, remote_path);
 
     let mut request = self.http_client.get(&url);
     if let Some(ref auth) = self.auth_header() {
@@ -99,17 +99,23 @@ impl RemoteClient {
       ));
     }
 
-    let entries: Vec<RemoteEntry> = response.json().await
+    /// Wrapper for the collection response format: `{items: [...]}`.
+    #[derive(Deserialize)]
+    struct ItemsWrapper {
+      items: Vec<RemoteEntry>,
+    }
+
+    let wrapper: ItemsWrapper = response.json().await
       .map_err(|error| ClientError::Server(
         format!("failed to parse directory listing for {}: {}", remote_path, error),
       ))?;
 
-    Ok(entries)
+    Ok(wrapper.items)
   }
 
   /// Download a file from the remote. Returns (bytes, metadata).
   pub async fn download_file(&self, remote_path: &str) -> Result<(Vec<u8>, RemoteFileMetadata)> {
-    let url = format!("{}/engine{}", self.base_url, remote_path);
+    let url = format!("{}/files{}", self.base_url, remote_path);
 
     let mut request = self.http_client.get(&url);
     if let Some(ref auth) = self.auth_header() {
@@ -129,12 +135,12 @@ impl RemoteClient {
 
     let headers = response.headers().clone();
 
-    let path = headers.get("x-path")
+    let path = headers.get("x-aeordb-path")
       .and_then(|value| value.to_str().ok())
       .unwrap_or(remote_path)
       .to_string();
 
-    let total_size = headers.get("x-total-size")
+    let size = headers.get("x-aeordb-size")
       .and_then(|value| value.to_str().ok())
       .and_then(|value| value.parse::<u64>().ok())
       .unwrap_or(0);
@@ -143,17 +149,17 @@ impl RemoteClient {
       .and_then(|value| value.to_str().ok())
       .map(|value| value.to_string());
 
-    let created_at = headers.get("x-created-at")
+    let created_at = headers.get("x-aeordb-created-at")
       .and_then(|value| value.to_str().ok())
       .and_then(|value| value.parse::<i64>().ok());
 
-    let updated_at = headers.get("x-updated-at")
+    let updated_at = headers.get("x-aeordb-updated-at")
       .and_then(|value| value.to_str().ok())
       .and_then(|value| value.parse::<i64>().ok());
 
     let metadata = RemoteFileMetadata {
       path,
-      total_size,
+      size,
       content_type,
       created_at,
       updated_at,
@@ -169,7 +175,7 @@ impl RemoteClient {
 
   /// Check if a remote path exists (HEAD request).
   pub async fn exists(&self, remote_path: &str) -> Result<bool> {
-    let url = format!("{}/engine{}", self.base_url, remote_path);
+    let url = format!("{}/files{}", self.base_url, remote_path);
 
     let mut request = self.http_client.head(&url);
     if let Some(ref auth) = self.auth_header() {
@@ -185,14 +191,14 @@ impl RemoteClient {
   }
 
   /// Upload a file to the remote aeordb instance.
-  /// Uses the simple PUT /engine/{path} endpoint.
+  /// Uses the simple PUT /files/{path} endpoint.
   pub async fn upload_file(
     &self,
     remote_path: &str,
     data: Vec<u8>,
     content_type: Option<&str>,
   ) -> Result<()> {
-    let url = format!("{}/engine{}", self.base_url, remote_path);
+    let url = format!("{}/files{}", self.base_url, remote_path);
 
     let mut request = self.http_client.put(&url).body(data);
 
@@ -220,7 +226,7 @@ impl RemoteClient {
 
   /// Delete a file on the remote aeordb instance.
   pub async fn delete_file(&self, remote_path: &str) -> Result<()> {
-    let url = format!("{}/engine{}", self.base_url, remote_path);
+    let url = format!("{}/files{}", self.base_url, remote_path);
 
     let mut request = self.http_client.delete(&url);
     if let Some(ref auth) = self.auth_header() {
@@ -242,12 +248,12 @@ impl RemoteClient {
   }
 
   /// Create a symlink on the remote aeordb instance.
-  /// Uses POST /engine-symlink/{path} with {"target": "..."} body.
+  /// Uses PUT /links/{path} with {"target": "..."} body.
   pub async fn create_symlink(&self, remote_path: &str, target: &str) -> Result<()> {
-    let url = format!("{}/engine-symlink{}", self.base_url, remote_path);
+    let url = format!("{}/links{}", self.base_url, remote_path);
 
     let mut request = self.http_client
-      .post(&url)
+      .put(&url)
       .json(&serde_json::json!({ "target": target }));
 
     if let Some(ref auth) = self.auth_header() {

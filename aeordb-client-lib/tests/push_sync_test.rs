@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, put};
 use axum::Router;
 use chrono::Utc;
 use tokio::net::TcpListener;
@@ -93,10 +93,10 @@ async fn start_mock_server() -> (SocketAddr, MockServerState) {
   let state = MockServerState::new();
 
   let app = Router::new()
-    .route("/admin/health", get(handle_health))
-    .route("/engine/{*path}", put(handle_upload))
-    .route("/engine/{*path}", delete(handle_delete))
-    .route("/engine-symlink/{*path}", post(handle_create_symlink))
+    .route("/system/health", get(handle_health))
+    .route("/files/{*path}", put(handle_upload))
+    .route("/files/{*path}", delete(handle_delete))
+    .route("/links/{*path}", put(handle_create_symlink))
     .with_state(state.clone());
 
   let listener = TcpListener::bind("127.0.0.1:0").await.expect("failed to bind");
@@ -597,8 +597,8 @@ async fn test_push_upload_failure_records_error() {
   }
 
   let app = Router::new()
-    .route("/admin/health", get(handle_health))
-    .route("/engine/{*path}", put(handle_upload_fail))
+    .route("/system/health", get(handle_health))
+    .route("/files/{*path}", put(handle_upload_fail))
     .with_state(failing_state);
 
   let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind failed");

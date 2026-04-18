@@ -59,8 +59,8 @@ async fn handle_download_file(
   request: axum::extract::Request,
 ) -> impl IntoResponse {
   let path = request.uri().path().to_string();
-  // Strip the "/engine" prefix to get the remote path.
-  let remote_path = path.strip_prefix("/engine").unwrap_or(&path);
+  // Strip the "/files" prefix to get the remote path.
+  let remote_path = path.strip_prefix("/files").unwrap_or(&path);
 
   let contents = state.file_contents.lock().unwrap();
 
@@ -68,8 +68,8 @@ async fn handle_download_file(
     Some(data) => {
       axum::response::Response::builder()
         .status(StatusCode::OK)
-        .header("x-path", remote_path)
-        .header("x-total-size", data.len().to_string())
+        .header("x-aeordb-path", remote_path)
+        .header("x-aeordb-size", data.len().to_string())
         .header("content-type", "application/octet-stream")
         .body(axum::body::Body::from(data.clone()))
         .unwrap()
@@ -91,7 +91,7 @@ async fn handle_health() -> impl IntoResponse {
 async fn start_mock_server(state: MockServerState) -> String {
   let app = Router::new()
     .route("/sync/diff", post(handle_sync_diff))
-    .route("/admin/health", get(handle_health))
+    .route("/system/health", get(handle_health))
     .fallback(handle_download_file)
     .with_state(state);
 
@@ -591,7 +591,7 @@ async fn test_pull_handles_server_error_on_diff() {
     .route("/sync/diff", post(|| async {
       (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
     }))
-    .route("/admin/health", get(|| async { "ok" }));
+    .route("/system/health", get(|| async { "ok" }));
 
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
     .await
@@ -629,7 +629,7 @@ async fn test_pull_handles_malformed_diff_response() {
     .route("/sync/diff", post(|| async {
       (StatusCode::OK, "this is not json")
     }))
-    .route("/admin/health", get(|| async { "ok" }));
+    .route("/system/health", get(|| async { "ok" }));
 
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
     .await

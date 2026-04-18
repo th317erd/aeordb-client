@@ -155,7 +155,7 @@ impl<'a> ConnectionManager<'a> {
         format!("connection not found: {}", id),
       ))?;
 
-    let health_url = format!("{}/admin/health", connection.url);
+    let health_url = format!("{}/system/health", connection.url);
     let client     = reqwest::Client::new();
 
     let start = std::time::Instant::now();
