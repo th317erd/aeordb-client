@@ -1,5 +1,4 @@
 pub mod content_type;
-pub mod filesystem_bridge;
 pub mod filter;
 pub mod fs_watcher;
 pub mod hierarchy;

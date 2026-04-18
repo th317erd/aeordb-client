@@ -3,7 +3,6 @@ use axum::http::StatusCode;
 use axum::response::Json;
 
 use crate::server::AppState;
-use crate::sync::replication::replicate;
 use crate::sync::relationships::{
   CreateSyncRelationshipRequest, RelationshipManager,
   SyncRelationship, UpdateSyncRelationshipRequest,
@@ -136,69 +135,65 @@ pub async fn trigger_sync(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-  use crate::sync::relationships::RelationshipManager;
-  use crate::sync::filesystem_bridge::{
-    WriteSuppressionSet, ingest_directory, project_to_filesystem,
-  };
   use crate::connections::ConnectionManager;
+  use crate::sync::replication::sync_relationship;
 
-  // Load relationship and connection
+  // Load relationship and connection.
   let relationship_manager = RelationshipManager::new(&state.config_store);
   let relationship = relationship_manager.get(&id)
-    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": error.to_string() }))))?
-    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": format!("sync relationship not found: {}", id) }))))?;
+    .map_err(|error| (
+      StatusCode::INTERNAL_SERVER_ERROR,
+      Json(serde_json::json!({ "error": error.to_string() })),
+    ))?
+    .ok_or_else(|| (
+      StatusCode::NOT_FOUND,
+      Json(serde_json::json!({ "error": format!("sync relationship not found: {}", id) })),
+    ))?;
 
   let connection_manager = ConnectionManager::new(&state.config_store);
   let connection = connection_manager.get(&relationship.remote_connection_id)
-    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": error.to_string() }))))?
-    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "connection not found" }))))?;
+    .map_err(|error| (
+      StatusCode::INTERNAL_SERVER_ERROR,
+      Json(serde_json::json!({ "error": error.to_string() })),
+    ))?
+    .ok_or_else(|| (
+      StatusCode::NOT_FOUND,
+      Json(serde_json::json!({ "error": "connection not found" })),
+    ))?;
 
-  let direction  = &relationship.direction;
-  let suppression = WriteSuppressionSet::new();
+  // Run the sync (push and/or pull based on direction).
+  let result = sync_relationship(&state.state_store, &connection, &relationship)
+    .await
+    .map_err(|error| (
+      StatusCode::INTERNAL_SERVER_ERROR,
+      Json(serde_json::json!({ "error": error.to_string() })),
+    ))?;
 
-  // Step 1: Ingest local filesystem → local aeordb (for push-capable directions)
-  let ingest_result = if *direction == crate::sync::relationships::SyncDirection::PushOnly
-    || *direction == crate::sync::relationships::SyncDirection::Bidirectional
-  {
-    ingest_directory(
-      state.state_store.engine(),
-      &relationship.local_path,
-      &relationship.remote_path,
-      relationship.filter.as_deref(),
-    ).ok()
-  } else {
-    None
-  };
+  // Build a response summarizing what happened.
+  let push_summary = result.push.map(|p| serde_json::json!({
+    "files_pushed":  p.files_pushed,
+    "files_skipped": p.files_skipped,
+    "files_failed":  p.files_failed,
+    "files_deleted": p.files_deleted,
+    "total_bytes":   p.total_bytes,
+    "duration_ms":   p.duration_ms,
+    "errors":        p.errors,
+  }));
 
-  // Step 2: Replicate local aeordb ↔ remote aeordb
-  let replication_result = replicate(
-    state.state_store.engine(),
-    &connection,
-    None,
-  ).await.map_err(|error| (
-    StatusCode::INTERNAL_SERVER_ERROR,
-    Json(serde_json::json!({ "error": error.to_string() })),
-  ))?;
-
-  // Step 3: Project changes to filesystem (for pull-capable directions)
-  let project_result = if *direction == crate::sync::relationships::SyncDirection::PullOnly
-    || *direction == crate::sync::relationships::SyncDirection::Bidirectional
-  {
-    project_to_filesystem(
-      state.state_store.engine(),
-      &relationship.local_path,
-      &relationship.remote_path,
-      relationship.filter.as_deref(),
-      &suppression,
-    ).ok()
-  } else {
-    None
-  };
+  let pull_summary = result.pull.map(|p| serde_json::json!({
+    "files_pulled":    p.files_pulled,
+    "files_skipped":   p.files_skipped,
+    "files_failed":    p.files_failed,
+    "files_deleted":   p.files_deleted,
+    "symlinks_pulled": p.symlinks_pulled,
+    "total_bytes":     p.total_bytes,
+    "duration_ms":     p.duration_ms,
+    "errors":          p.errors,
+  }));
 
   Ok(Json(serde_json::json!({
-    "replication": replication_result,
-    "ingest":      ingest_result,
-    "project":     project_result,
+    "push": push_summary,
+    "pull": pull_summary,
   })))
 }
 

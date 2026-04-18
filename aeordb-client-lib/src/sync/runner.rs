@@ -9,13 +9,11 @@ use crate::config::ConfigStore;
 use crate::connections::ConnectionManager;
 use crate::error::{ClientError, Result};
 use crate::state::StateStore;
-use crate::sync::filesystem_bridge::{
-  WriteSuppressionSet, ingest_directory, ingest_single_file,
-  delete_from_aeordb, project_to_filesystem,
-};
-use crate::sync::fs_watcher::{FsChange, FsChangeType, FsWatcherConfig, start_fs_watcher};
-use crate::sync::replication::replicate;
+use crate::sync::fs_watcher::{FsChangeType, FsWatcherConfig, start_fs_watcher};
+use crate::sync::pull::pull_sync;
+use crate::sync::push::push_sync;
 use crate::sync::relationships::{RelationshipManager, SyncDirection, SyncRelationship};
+use crate::sync::replication::sync_relationship;
 use crate::sync::sse_listener::start_sse_listener;
 
 /// Tracks running sync tasks for each relationship.
@@ -75,9 +73,9 @@ impl SyncRunner {
         format!("connection not found: {}", relationship.remote_connection_id),
       ))?;
 
-    let relationship_name   = relationship.name.clone();
+    let relationship_name     = relationship.name.clone();
     let relationship_id_owned = relationship_id.to_string();
-    let state_clone         = self.state.clone();
+    let state_clone           = self.state.clone();
 
     tracing::info!("starting sync for '{}' ({:?})", relationship.name, relationship.direction);
 
@@ -157,32 +155,26 @@ async fn run_sync_loop(
   relationship: SyncRelationship,
   connection: crate::connections::RemoteConnection,
 ) {
-  let direction       = relationship.direction.clone();
-  let filter          = relationship.filter.clone();
-  let suppression     = WriteSuppressionSet::new();
+  let direction = relationship.direction.clone();
+  let filter    = relationship.filter.clone();
 
   tracing::info!("sync loop active for '{}' ({:?})", relationship.name, direction);
 
-  // --- Step 1: Initial ingest -- filesystem -> local aeordb ---
-  if direction == SyncDirection::PushOnly || direction == SyncDirection::Bidirectional {
-    if let Err(error) = ingest_directory(
-      state.engine(),
-      &relationship.local_path,
-      &relationship.remote_path,
-      filter.as_deref(),
-    ) {
-      tracing::error!("initial ingest failed for '{}': {}", relationship.name, error);
+  // --- Step 1: Initial full sync (push + pull based on direction) ---
+  match sync_relationship(&state, &connection, &relationship).await {
+    Ok(result) => {
+      log_sync_result(&relationship.name, &result);
+    }
+    Err(error) => {
+      tracing::error!("initial sync failed for '{}': {}", relationship.name, error);
     }
   }
 
-  // --- Step 2: Initial replication --- local aeordb <-> remote aeordb ---
-  do_replication_cycle(&state, &connection, &relationship, &direction, &suppression).await;
-
-  // --- Step 3: Start watchers based on direction ---
-  let mut fs_receiver: Option<mpsc::Receiver<FsChange>> = None;
+  // --- Step 2: Start watchers based on direction ---
+  let mut fs_receiver: Option<mpsc::Receiver<crate::sync::fs_watcher::FsChange>> = None;
   let mut sse_receiver: Option<mpsc::Receiver<crate::sync::sse_listener::RemoteChange>> = None;
 
-  // Filesystem watcher for push-capable directions
+  // Filesystem watcher for push-capable directions.
   if direction == SyncDirection::PushOnly || direction == SyncDirection::Bidirectional {
     let local_path = Path::new(&relationship.local_path);
     match start_fs_watcher(local_path, FsWatcherConfig::default()) {
@@ -196,29 +188,26 @@ async fn run_sync_loop(
     }
   }
 
-  // SSE listener for pull-capable directions
+  // SSE listener for pull-capable directions.
   if direction == SyncDirection::PullOnly || direction == SyncDirection::Bidirectional {
     let path_prefixes = vec![relationship.remote_path.clone()];
     sse_receiver = Some(start_sse_listener(connection.clone(), path_prefixes));
     tracing::info!("SSE listener started for '{}'", relationship.name);
   }
 
-  // --- Step 4: Event loop -- react to changes from either side ---
+  // --- Step 3: Event loop -- react to changes from either side ---
   loop {
     tokio::select! {
-      // Local filesystem change
+      // Local filesystem change -- push to remote.
+      // The watcher might fire for files we just wrote during pull,
+      // but push_sync uses hash comparison and will skip unchanged files.
       Some(change) = async {
         match fs_receiver.as_mut() {
           Some(rx) => rx.recv().await,
           None => std::future::pending().await,
         }
       } => {
-        // Skip events caused by our own writes
-        if suppression.should_suppress(&change.path) {
-          continue;
-        }
-
-        // Apply filter
+        // Apply filter.
         let filename = change.path.file_name()
           .and_then(|n| n.to_str())
           .unwrap_or("");
@@ -226,91 +215,90 @@ async fn run_sync_loop(
           continue;
         }
 
-        // Ingest change into local aeordb
-        match change.change_type {
-          FsChangeType::Created | FsChangeType::Modified => {
-            if let Err(error) = ingest_single_file(
-              state.engine(),
-              &change.path,
-              &relationship.local_path,
-              &relationship.remote_path,
-            ) {
-              tracing::error!("failed to ingest {:?}: {}", change.path, error);
-              continue;
-            }
-          }
-          FsChangeType::Deleted => {
-            if relationship.delete_propagation.local_to_remote {
-              if let Err(error) = delete_from_aeordb(
-                state.engine(),
-                &change.path,
-                &relationship.local_path,
-                &relationship.remote_path,
-              ) {
-                tracing::warn!("failed to delete from aeordb: {}", error);
-              }
-            }
-            continue; // Don't need to replicate just for a local delete
-          }
+        // Skip delete events when delete propagation is disabled.
+        if change.change_type == FsChangeType::Deleted
+          && !relationship.delete_propagation.local_to_remote
+        {
+          continue;
         }
 
-        // Replicate to push our change to the remote
-        do_replication_cycle(&state, &connection, &relationship, &direction, &suppression).await;
+        // Push local changes to the remote.
+        match push_sync(&state, &connection, &relationship).await {
+          Ok(result) => {
+            if result.files_pushed > 0 || result.files_deleted > 0 || result.files_failed > 0 {
+              tracing::info!(
+                "push for '{}': pushed={}, deleted={}, skipped={}, failed={}",
+                relationship.name, result.files_pushed, result.files_deleted,
+                result.files_skipped, result.files_failed,
+              );
+            }
+          }
+          Err(error) => {
+            tracing::error!("push failed for '{}': {}", relationship.name, error);
+          }
+        }
       }
 
-      // Remote SSE change
+      // Remote SSE change -- pull from remote.
       Some(_change) = async {
         match sse_receiver.as_mut() {
           Some(rx) => rx.recv().await,
           None => std::future::pending().await,
         }
       } => {
-        // Remote changed -- replicate to pull their changes
-        do_replication_cycle(&state, &connection, &relationship, &direction, &suppression).await;
+        match pull_sync(&state, &connection, &relationship).await {
+          Ok(result) => {
+            if result.files_pulled > 0 || result.files_deleted > 0 || result.files_failed > 0 {
+              tracing::info!(
+                "pull for '{}': pulled={}, deleted={}, skipped={}, failed={}",
+                relationship.name, result.files_pulled, result.files_deleted,
+                result.files_skipped, result.files_failed,
+              );
+            }
+          }
+          Err(error) => {
+            tracing::error!("pull failed for '{}': {}", relationship.name, error);
+          }
+        }
       }
 
-      // Periodic safety net -- replicate every 60 seconds regardless
+      // Periodic safety net -- full sync every 60 seconds regardless.
       _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
-        do_replication_cycle(&state, &connection, &relationship, &direction, &suppression).await;
+        match sync_relationship(&state, &connection, &relationship).await {
+          Ok(result) => {
+            log_sync_result(&relationship.name, &result);
+          }
+          Err(error) => {
+            tracing::error!("periodic sync failed for '{}': {}", relationship.name, error);
+          }
+        }
       }
     }
   }
 }
 
-/// Execute a replication cycle, respecting direction, then project changes to filesystem.
-async fn do_replication_cycle(
-  state: &Arc<StateStore>,
-  connection: &crate::connections::RemoteConnection,
-  relationship: &SyncRelationship,
-  direction: &SyncDirection,
-  suppression: &WriteSuppressionSet,
+/// Log the results of a full sync_relationship call.
+fn log_sync_result(
+  name: &str,
+  result: &crate::sync::replication::SyncResult,
 ) {
-  match replicate(state.engine(), connection, None).await {
-    Ok(result) => {
-      if result.pulled_chunks > 0 || result.pushed_chunks > 0 || result.conflicts > 0 {
-        tracing::info!(
-          "replication for '{}': pulled={}, pushed={}, conflicts={}",
-          relationship.name, result.pulled_chunks, result.pushed_chunks, result.conflicts,
-        );
-      }
-
-      // Project remote changes to filesystem (for pull-capable directions)
-      if *direction == SyncDirection::PullOnly || *direction == SyncDirection::Bidirectional {
-        if result.pulled_chunks > 0 || result.files_changed > 0 {
-          if let Err(error) = project_to_filesystem(
-            state.engine(),
-            &relationship.local_path,
-            &relationship.remote_path,
-            relationship.filter.as_deref(),
-            suppression,
-          ) {
-            tracing::error!("failed to project changes for '{}': {}", relationship.name, error);
-          }
-        }
-      }
+  if let Some(ref pull) = result.pull {
+    if pull.files_pulled > 0 || pull.files_deleted > 0 || pull.files_failed > 0 {
+      tracing::info!(
+        "pull for '{}': pulled={}, deleted={}, skipped={}, failed={}",
+        name, pull.files_pulled, pull.files_deleted,
+        pull.files_skipped, pull.files_failed,
+      );
     }
-    Err(error) => {
-      tracing::error!("replication failed for '{}': {}", relationship.name, error);
+  }
+
+  if let Some(ref push) = result.push {
+    if push.files_pushed > 0 || push.files_deleted > 0 || push.files_failed > 0 {
+      tracing::info!(
+        "push for '{}': pushed={}, deleted={}, skipped={}, failed={}",
+        name, push.files_pushed, push.files_deleted,
+        push.files_skipped, push.files_failed,
+      );
     }
   }
 }
