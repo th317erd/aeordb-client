@@ -48,7 +48,7 @@ class AeorApp extends HTMLElement {
       if (connectionsElement)
         connectionsElement.openAddForm();
 
-      this._pageOptions = {}; // Clear after use
+      this._pageOptions = {};
     }
   }
 

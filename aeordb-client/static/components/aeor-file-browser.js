@@ -12,8 +12,43 @@ class AeorFileBrowser extends HTMLElement {
   }
 
   connectedCallback() {
+    this._loadState();
     this.render();
     this._fetchRelationships();
+
+    // If we restored tabs, re-fetch the active tab's listing
+    if (this._active_tab_id) {
+      const tab = this._tabs.find((t) => t.id === this._active_tab_id);
+      if (tab)
+        this._fetchListing(tab.relationship_id, tab.path);
+    }
+  }
+
+  _saveState() {
+    try {
+      localStorage.setItem('aeordb-file-browser', JSON.stringify({
+        tabs:          this._tabs,
+        active_tab_id: this._active_tab_id,
+        tab_counter:   this._tab_counter,
+      }));
+    } catch (error) {
+      // localStorage unavailable — ignore silently
+    }
+  }
+
+  _loadState() {
+    try {
+      const raw = localStorage.getItem('aeordb-file-browser');
+      if (!raw)
+        return;
+
+      const state       = JSON.parse(raw);
+      this._tabs        = state.tabs || [];
+      this._active_tab_id = state.active_tab_id || null;
+      this._tab_counter = state.tab_counter || 0;
+    } catch (error) {
+      // Corrupt or missing — start fresh
+    }
   }
 
   render() {
@@ -216,12 +251,14 @@ class AeorFileBrowser extends HTMLElement {
       id: tabId,
     });
     this._active_tab_id = tabId;
+    this._saveState();
     this._fetchListing(relationshipId, '/');
   }
 
   _switchTab(tabId) {
     if (this._active_tab_id === tabId) return;
     this._active_tab_id = tabId;
+    this._saveState();
     const tab = this._tabs.find((t) => t.id === tabId);
     if (tab) {
       this._fetchListing(tab.relationship_id, tab.path);
@@ -235,6 +272,7 @@ class AeorFileBrowser extends HTMLElement {
         this._active_tab_id = this._tabs[this._tabs.length - 1].id;
         const tab = this._tabs.find((t) => t.id === this._active_tab_id);
         if (tab) {
+          this._saveState();
           this._fetchListing(tab.relationship_id, tab.path);
           return;
         }
@@ -243,6 +281,7 @@ class AeorFileBrowser extends HTMLElement {
         this._current_entries = [];
       }
     }
+    this._saveState();
     this.render();
   }
 
@@ -250,6 +289,7 @@ class AeorFileBrowser extends HTMLElement {
     const tab = this._tabs.find((t) => t.id === this._active_tab_id);
     if (!tab) return;
     tab.path = path;
+    this._saveState();
     this._fetchListing(tab.relationship_id, path);
   }
 
