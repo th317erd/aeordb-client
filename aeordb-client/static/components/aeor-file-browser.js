@@ -14,7 +14,6 @@ class AeorFileBrowser extends HTMLElement {
     this._current_entries = [];
     this._tab_counter = 0;
     this._loading = false;
-    this._view_mode = 'list'; // 'list' or 'grid'
   }
 
   connectedCallback() {
@@ -35,7 +34,6 @@ class AeorFileBrowser extends HTMLElement {
         tabs:          this._tabs,
         active_tab_id: this._active_tab_id,
         tab_counter:   this._tab_counter,
-        view_mode:     this._view_mode,
       }));
     } catch (error) {
       // localStorage unavailable
@@ -51,7 +49,6 @@ class AeorFileBrowser extends HTMLElement {
       this._tabs          = state.tabs || [];
       this._active_tab_id = state.active_tab_id || null;
       this._tab_counter   = state.tab_counter || 0;
-      this._view_mode     = state.view_mode || 'list';
     } catch (error) {
       // start fresh
     }
@@ -62,10 +59,6 @@ class AeorFileBrowser extends HTMLElement {
       this.innerHTML = `
         <div class="page-header">
           <h1>Files</h1>
-          <div class="view-toggle">
-            <button class="small ${(this._view_mode === 'list') ? 'primary' : 'secondary'}" data-view="list" title="List view">&#9776;</button>
-            <button class="small ${(this._view_mode === 'grid') ? 'primary' : 'secondary'}" data-view="grid" title="Grid view">&#9638;</button>
-          </div>
         </div>
         ${this._renderTabBar()}
         ${this._renderDirectoryView()}
@@ -130,11 +123,18 @@ class AeorFileBrowser extends HTMLElement {
     const tab = this._tabs.find((t) => t.id === this._active_tab_id);
     if (!tab) return '';
 
+    const viewMode    = tab.view_mode || 'list';
     const breadcrumbs = this._renderBreadcrumbs(tab.path);
     const header = `
       <div class="page-header">
         ${breadcrumbs}
-        <button class="secondary small" disabled>Upload</button>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <div class="view-toggle">
+            <button class="small ${(viewMode === 'list') ? 'primary' : 'secondary'}" data-view="list" title="List view">&#9776;</button>
+            <button class="small ${(viewMode === 'grid') ? 'primary' : 'secondary'}" data-view="grid" title="Grid view">&#9638;</button>
+          </div>
+          <button class="secondary small" disabled>Upload</button>
+        </div>
       </div>
     `;
 
@@ -146,7 +146,7 @@ class AeorFileBrowser extends HTMLElement {
       return `${header}<div class="empty-state">This directory is empty.</div>`;
     }
 
-    if (this._view_mode === 'grid') {
+    if (viewMode === 'grid') {
       return `${header}${this._renderGridView()}`;
     }
 
@@ -260,12 +260,15 @@ class AeorFileBrowser extends HTMLElement {
       });
     }
 
-    // View toggle
+    // View toggle (per-tab)
     this.querySelectorAll('[data-view]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        this._view_mode = btn.dataset.view;
-        this._saveState();
-        this.render();
+        const tab = this._tabs.find((t) => t.id === this._active_tab_id);
+        if (tab) {
+          tab.view_mode = btn.dataset.view;
+          this._saveState();
+          this.render();
+        }
       });
     });
 
@@ -299,6 +302,7 @@ class AeorFileBrowser extends HTMLElement {
       relationship_name: relationshipName,
       path:              '/',
       id:                tabId,
+      view_mode:         'list',
     });
     this._active_tab_id = tabId;
     this._saveState();
