@@ -24,7 +24,6 @@ pub struct AppState {
   pub state_store:     Arc<StateStore>,
   pub config_store:    Arc<ConfigStore>,
   pub sync_runner:     SyncRunner,
-  pub auth_token:      Option<String>,
   pub shutdown_signal: Option<Arc<Notify>>,
   pub config_dir:      PathBuf,
   pub data_dir:        PathBuf,
@@ -35,7 +34,6 @@ pub struct ServerConfig {
   pub port:        u16,
   pub config_path: PathBuf,
   pub data_path:   PathBuf,
-  pub auth_token:  Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -45,7 +43,6 @@ impl Default for ServerConfig {
       port:        9400,
       config_path: default_config_path(),
       data_path:   default_data_path(),
-      auth_token:  None,
     }
   }
 }
@@ -101,21 +98,14 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
     state_store,
     config_store,
     sync_runner,
-    auth_token:      None,
     shutdown_signal: None,
     config_dir,
     data_dir,
   })
 }
 
-pub fn create_app_state_with_auth(config: &ServerConfig) -> Result<AppState> {
-  let mut state = create_app_state(config)?;
-  state.auth_token = config.auth_token.clone();
-  Ok(state)
-}
-
 pub async fn start_server(config: ServerConfig) -> Result<()> {
-  let state    = create_app_state_with_auth(&config)?;
+  let state    = create_app_state(&config)?;
   let router   = build_router(state);
   let address  = format!("{}:{}", config.host, config.port);
   let listener = TcpListener::bind(&address).await.map_err(|error| {
@@ -136,7 +126,7 @@ pub async fn start_server(config: ServerConfig) -> Result<()> {
 pub async fn start_server_with_handle(
   config: ServerConfig,
 ) -> Result<(SocketAddr, tokio::task::JoinHandle<Result<()>>)> {
-  let state    = create_app_state_with_auth(&config)?;
+  let state    = create_app_state(&config)?;
   let router   = build_router(state);
   let address  = format!("{}:{}", config.host, config.port);
   let listener = TcpListener::bind(&address).await.map_err(|error| {

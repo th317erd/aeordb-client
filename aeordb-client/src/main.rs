@@ -204,7 +204,6 @@ fn main() -> anyhow::Result<()> {
         port,
         config_path,
         data_path,
-        auth_token:  None,
       };
 
       let mut state = create_app_state(&server_config)

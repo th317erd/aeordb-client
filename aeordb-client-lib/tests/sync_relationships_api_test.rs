@@ -22,7 +22,6 @@ impl TestContext {
       port:        0,
       config_path,
       data_path,
-      auth_token:  None,
     };
 
     let (address, _handle) = start_server_with_handle(config)

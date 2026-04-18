@@ -11,7 +11,6 @@ fn test_config() -> ServerConfig {
     port:        0, // OS assigns a free port
     config_path,
     data_path,
-    auth_token:  None,
   }
 }
 

@@ -35,7 +35,6 @@ async fn test_conflicts_http_api_list_empty() {
     port:        0,
     config_path,
     data_path,
-    auth_token:  None,
   };
 
   let (address, _handle) = start_server_with_handle(config)
@@ -72,7 +71,6 @@ async fn test_conflicts_http_api_resolve_not_found() {
     port:        0,
     config_path,
     data_path,
-    auth_token:  None,
   };
 
   let (address, _handle) = start_server_with_handle(config)

@@ -14,7 +14,6 @@ fn test_config() -> ServerConfig {
     port:        0,
     config_path,
     data_path,
-    auth_token:  None,
   }
 }
 
