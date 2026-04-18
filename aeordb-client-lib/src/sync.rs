@@ -4,6 +4,8 @@ pub mod filter;
 pub mod fs_watcher;
 pub mod hierarchy;
 pub mod metadata;
+pub mod pull;
+pub mod push;
 pub mod relationships;
 pub mod replication;
 pub mod runner;

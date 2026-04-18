@@ -12,14 +12,14 @@ use crate::connections::{AuthType, RemoteConnection};
 use crate::error::{ClientError, Result};
 
 /// Response from POST /sync/diff on the remote.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct RemoteSyncDiffResponse {
   pub root_hash:           String,
   pub changes:             RemoteSyncChanges,
   pub chunk_hashes_needed: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct RemoteSyncChanges {
   pub files_added:      Vec<RemoteSyncFileEntry>,
   pub files_modified:   Vec<RemoteSyncFileEntry>,
@@ -29,7 +29,7 @@ pub struct RemoteSyncChanges {
   pub symlinks_deleted: Vec<RemoteSyncDeletedEntry>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct RemoteSyncFileEntry {
   pub path:         String,
   pub hash:         String,
@@ -38,14 +38,14 @@ pub struct RemoteSyncFileEntry {
   pub chunk_hashes: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct RemoteSyncSymlinkEntry {
   pub path:   String,
   pub hash:   String,
   pub target: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct RemoteSyncDeletedEntry {
   pub path: String,
 }
