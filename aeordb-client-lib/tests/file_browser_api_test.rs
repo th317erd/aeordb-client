@@ -6,19 +6,11 @@ use axum::body::Bytes;
 use axum::extract::{Path, State as AxumState};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::{delete, get, put};
+use axum::routing::get;
 use axum::Router;
-use chrono::Utc;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
-use aeordb_client_lib::connections::{AuthType, RemoteConnection};
-use aeordb_client_lib::config::ConfigStore;
-use aeordb_client_lib::state::StateStore;
-use aeordb_client_lib::sync::metadata::{FileSyncMeta, SyncMetadataStore, SyncStatus};
-use aeordb_client_lib::sync::relationships::{
-  DeletePropagation, SyncDirection, SyncRelationship,
-};
 use aeordb_client_lib::server::{ServerConfig, start_server_with_handle};
 
 // ---------------------------------------------------------------------------
@@ -474,11 +466,15 @@ async fn test_path_traversal_rejected() {
   let mock = MockServerState::new();
   let env = setup_test_env(mock).await;
 
+  // Use a raw URL with percent-encoded dots to prevent client-side normalization
+  // This tests that the server-side safe_local_path check catches traversal
   let client = reqwest::Client::new();
 
-  // Try path traversal via serve endpoint
+  // Try path traversal via the open-locally endpoint where the path is in the JSON body
+  // (not subject to URL normalization)
   let response = client
-    .get(format!("{}/api/v1/files/{}/../../etc/passwd", env.client_base_url, env.relationship_id))
+    .post(format!("{}/api/v1/files/{}/open", env.client_base_url, env.relationship_id))
+    .json(&serde_json::json!({ "path": "../../etc/passwd" }))
     .send()
     .await
     .expect("request failed");

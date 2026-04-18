@@ -109,19 +109,18 @@ class AeorFileBrowser extends HTMLElement {
       const isDir = (entry.entry_type === 3);
       const isSymlink = (entry.entry_type === 8);
       const icon = (isDir) ? '\uD83D\uDCC1' : (isSymlink) ? '\uD83D\uDD17' : '\uD83D\uDCC4';
-      const typeName = (isDir) ? 'Folder' : (isSymlink) ? 'Symlink' : (entry.content_type || 'File');
       const size = (isDir) ? '\u2014' : this._formatSize(entry.size);
-      const modified = this._formatTime(entry.updated_at);
+      const created = this._formatDate(entry.created_at);
+      const modified = this._formatDate(entry.updated_at);
       const syncClass = (entry.sync_status === 'synced') ? 'synced' : (entry.sync_status === 'pending') ? 'pending' : 'not-synced';
       const syncTitle = entry.sync_status || 'unknown';
 
       return `
         <tr class="file-entry" data-name="${this._escapeAttr(entry.name)}" data-type="${entry.entry_type}">
-          <td><span class="file-icon">${icon}</span>${this._escapeHtml(entry.name)}</td>
+          <td><span class="sync-badge ${syncClass}" title="${syncTitle}"></span><span class="file-icon">${icon}</span>${this._escapeHtml(entry.name)}</td>
           <td>${size}</td>
-          <td>${this._escapeHtml(typeName)}</td>
+          <td>${created}</td>
           <td>${modified}</td>
-          <td><span class="sync-badge ${syncClass}" title="${syncTitle}"></span></td>
         </tr>
       `;
     }).join('');
@@ -130,7 +129,7 @@ class AeorFileBrowser extends HTMLElement {
       ${header}
       <table>
         <thead>
-          <tr><th>Name</th><th>Size</th><th>Type</th><th>Modified</th><th>Status</th></tr>
+          <tr><th>Name</th><th>Size</th><th>Created</th><th>Modified</th></tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
@@ -293,22 +292,16 @@ class AeorFileBrowser extends HTMLElement {
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
   }
 
-  _formatTime(timestamp) {
+  _formatDate(timestamp) {
     if (!timestamp) return '\u2014';
-    const now = Date.now();
-    const diff = now - timestamp;
-    if (diff < 0) return 'just now';
-
-    const seconds = Math.floor(diff / 1000);
-    if (seconds < 60) return 'just now';
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return minutes + ' min ago';
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return hours + ' hr ago';
-    const days = Math.floor(hours / 24);
-    if (days < 30) return days + ' days ago';
-    const months = Math.floor(days / 30);
-    return months + ' months ago';
+    const date = new Date(timestamp);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`;
   }
 
   _truncate(str, max) {
