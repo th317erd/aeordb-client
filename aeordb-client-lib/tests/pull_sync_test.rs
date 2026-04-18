@@ -23,7 +23,7 @@ use aeordb_client_lib::sync::relationships::{
 #[derive(Clone)]
 struct MockServerState {
   diff_response: Arc<Mutex<serde_json::Value>>,
-  file_contents: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>>,
+  file_contents: Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>>,
   diff_call_count: Arc<Mutex<u64>>,
 }
 
@@ -31,14 +31,13 @@ impl MockServerState {
   fn new(diff_response: serde_json::Value) -> Self {
     Self {
       diff_response: Arc::new(Mutex::new(diff_response)),
-      file_contents: Arc::new(Mutex::new(std::collections::HashMap::new())),
+      file_contents: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
       diff_call_count: Arc::new(Mutex::new(0)),
     }
   }
 
   fn with_file(self, path: &str, content: &[u8]) -> Self {
-    let contents = self.file_contents.clone();
-    let mut map = contents.blocking_lock();
+    let mut map = self.file_contents.lock().unwrap();
     map.insert(path.to_string(), content.to_vec());
     drop(map);
     self
@@ -63,7 +62,7 @@ async fn handle_download_file(
   // Strip the "/engine" prefix to get the remote path.
   let remote_path = path.strip_prefix("/engine").unwrap_or(&path);
 
-  let contents = state.file_contents.lock().await;
+  let contents = state.file_contents.lock().unwrap();
 
   match contents.get(remote_path) {
     Some(data) => {
