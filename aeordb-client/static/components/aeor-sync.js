@@ -144,16 +144,14 @@ class AeorSync extends HTMLElement {
         </div>
         <div class="form-row">
           <label>Delete Propagation</label>
-          <div style="margin-top: 8px;">
-            <div style="margin-bottom: 8px;">
-              <input type="checkbox" id="form-delete-local-to-remote" ${(relationship.delete_propagation && relationship.delete_propagation.local_to_remote) ? 'checked' : ''}>
-              <span style="font-size: 13px; color: var(--text-secondary); margin-left: 6px;">When a file is deleted locally, also delete it on the remote</span>
-            </div>
-            <div>
-              <input type="checkbox" id="form-delete-remote-to-local" ${(relationship.delete_propagation && relationship.delete_propagation.remote_to_local) ? 'checked' : ''}>
-              <span style="font-size: 13px; color: var(--text-secondary); margin-left: 6px;">When a file is deleted on the remote, also delete it locally</span>
-            </div>
-          </div>
+          <label class="checkbox-row">
+            <input type="checkbox" class="checkbox-large" id="form-delete-local-to-remote" ${(relationship.delete_propagation && relationship.delete_propagation.local_to_remote) ? 'checked' : ''}>
+            When a file is deleted locally, also delete it on the remote
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" class="checkbox-large" id="form-delete-remote-to-local" ${(relationship.delete_propagation && relationship.delete_propagation.remote_to_local) ? 'checked' : ''}>
+            When a file is deleted on the remote, also delete it locally
+          </label>
         </div>
         <div class="form-actions">
           <button class="primary" id="form-submit">Save Changes</button>
