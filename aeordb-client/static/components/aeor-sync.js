@@ -121,11 +121,14 @@ class AeorSync extends HTMLElement {
         </div>
         <div class="form-row">
           <label>Remote Path</label>
-          <input type="text" id="form-remote-path" value="${relationship.remote_path}" disabled>
+          <input type="text" id="form-remote-path" value="${relationship.remote_path}">
         </div>
         <div class="form-row">
           <label>Local Path</label>
-          <input type="text" id="form-local-path" value="${relationship.local_path}" disabled>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="form-local-path" value="${relationship.local_path}" style="flex: 1;">
+            <button class="secondary small" type="button" id="browse-local-path">Browse</button>
+          </div>
         </div>
         <div class="form-row">
           <label>Direction</label>
@@ -141,14 +144,14 @@ class AeorSync extends HTMLElement {
         </div>
         <div class="form-row">
           <label>Delete Propagation</label>
-          <div style="display: flex; gap: 16px; margin-top: 4px;">
-            <label style="font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px;">
+          <div style="display: flex; gap: 24px; margin-top: 8px;">
+            <label style="font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 8px; cursor: pointer;">
               <input type="checkbox" id="form-delete-local-to-remote" ${(relationship.delete_propagation && relationship.delete_propagation.local_to_remote) ? 'checked' : ''}>
-              Local → Remote
+              Local deletes → Remote
             </label>
-            <label style="font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px;">
+            <label style="font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 8px; cursor: pointer;">
               <input type="checkbox" id="form-delete-remote-to-local" ${(relationship.delete_propagation && relationship.delete_propagation.remote_to_local) ? 'checked' : ''}>
-              Remote → Local
+              Remote deletes → Local
             </label>
           </div>
         </div>
@@ -171,7 +174,7 @@ class AeorSync extends HTMLElement {
         <td class="actions">
           <button class="success small trigger-btn" data-id="${relationship.id}">Sync</button>
           <button class="secondary small edit-btn" data-id="${relationship.id}">Edit</button>
-          <button class="secondary small toggle-btn" data-id="${relationship.id}" data-enabled="${relationship.enabled}">${(relationship.enabled) ? 'Pause' : 'Resume'}</button>
+          <button class="secondary small toggle-btn" data-id="${relationship.id}" data-enabled="${relationship.enabled}" style="min-width: 70px;">${(relationship.enabled) ? 'Pause' : 'Resume'}</button>
           <button class="danger small delete-btn" data-id="${relationship.id}">Delete</button>
         </td>
       </tr>
@@ -290,9 +293,11 @@ class AeorSync extends HTMLElement {
   }
 
   async _submitEdit() {
-    const name      = this.querySelector('#form-name').value;
-    const direction = this.querySelector('#form-direction').value;
-    const filter    = this.querySelector('#form-filter').value;
+    const name       = this.querySelector('#form-name').value;
+    const remotePath = this.querySelector('#form-remote-path').value;
+    const localPath  = this.querySelector('#form-local-path').value;
+    const direction  = this.querySelector('#form-direction').value;
+    const filter     = this.querySelector('#form-filter').value;
 
     const localToRemote = this.querySelector('#form-delete-local-to-remote')?.checked || false;
     const remoteToLocal = this.querySelector('#form-delete-remote-to-local')?.checked || false;
@@ -303,6 +308,8 @@ class AeorSync extends HTMLElement {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
           name:               (name) ? name : null,
+          remote_path:        (remotePath) ? remotePath : null,
+          local_path:         (localPath) ? localPath : null,
           direction,
           filter:             (filter) ? filter : null,
           delete_propagation: {

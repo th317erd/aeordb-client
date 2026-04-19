@@ -58,6 +58,8 @@ pub struct CreateSyncRelationshipRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateSyncRelationshipRequest {
   pub name:               Option<String>,
+  pub remote_path:        Option<String>,
+  pub local_path:         Option<String>,
   pub direction:          Option<SyncDirection>,
   pub filter:             Option<String>,
   pub delete_propagation: Option<DeletePropagation>,
@@ -158,6 +160,12 @@ impl<'a> RelationshipManager<'a> {
       if let Some(name) = request.name {
         relationship.name = name;
       }
+      if let Some(remote_path) = request.remote_path {
+        relationship.remote_path = crate::sync::relationships::normalize_remote_path(&remote_path);
+      }
+      if let Some(local_path) = request.local_path {
+        relationship.local_path = local_path;
+      }
       if let Some(direction) = request.direction {
         relationship.direction = direction;
       }
@@ -207,20 +215,22 @@ impl<'a> RelationshipManager<'a> {
 
   pub fn enable(&self, id: &str) -> Result<SyncRelationship> {
     self.update(id, UpdateSyncRelationshipRequest {
-      name: None, direction: None, filter: None,
+      name: None, remote_path: None, local_path: None,
+      direction: None, filter: None,
       delete_propagation: None, enabled: Some(true),
     })
   }
 
   pub fn disable(&self, id: &str) -> Result<SyncRelationship> {
     self.update(id, UpdateSyncRelationshipRequest {
-      name: None, direction: None, filter: None,
+      name: None, remote_path: None, local_path: None,
+      direction: None, filter: None,
       delete_propagation: None, enabled: Some(false),
     })
   }
 }
 
-fn normalize_remote_path(path: &str) -> String {
+pub(crate) fn normalize_remote_path(path: &str) -> String {
   let mut normalized = path.to_string();
 
   if !normalized.starts_with('/') {
