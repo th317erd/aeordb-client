@@ -301,7 +301,7 @@ select {
   margin-bottom: 12px;
 }
 
-.form-row label {
+.form-row label:not(.checkbox-row) {
   display: block;
   font-size: 12px;
   color: var(--text-secondary);
