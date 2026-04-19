@@ -860,11 +860,27 @@ aeor-file-browser {
   border-bottom: 1px solid var(--border);
 }
 
-.preview-header h3 {
+input.preview-title {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
-  margin: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-sans);
+}
+
+input.preview-title:hover {
+  border-color: var(--border);
+}
+
+input.preview-title:focus {
+  border-color: var(--accent);
+  background: var(--bg-primary);
+  outline: none;
 }
 
 .preview-actions {

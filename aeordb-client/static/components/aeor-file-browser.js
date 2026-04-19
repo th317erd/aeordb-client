@@ -234,7 +234,7 @@ class AeorFileBrowser extends HTMLElement {
       <div class="preview-panel" style="display:none; ${tab.preview_height ? 'height:' + tab.preview_height + 'px' : ''}">
         <div class="preview-resize-handle"></div>
         <div class="preview-header">
-          <h3 class="preview-title"></h3>
+          <input type="text" class="preview-title" spellcheck="false">
           <div class="preview-actions"></div>
         </div>
         <div class="preview-content"></div>
@@ -330,8 +330,10 @@ class AeorFileBrowser extends HTMLElement {
       return;
     }
 
-    // Update header
-    panel.querySelector('.preview-title').textContent = entry.name;
+    // Update header — editable filename input
+    const titleInput = panel.querySelector('.preview-title');
+    titleInput.value = entry.name;
+    titleInput.dataset.original = entry.name;
 
     // Update action buttons
     panel.querySelector('.preview-actions').innerHTML = `
@@ -339,7 +341,6 @@ class AeorFileBrowser extends HTMLElement {
         ? '<button class="primary small" data-action="open-local">Open Locally</button>'
         : ''
       }
-      <button class="secondary small" data-action="rename">Rename</button>
       <button class="danger small" data-action="delete">Delete</button>
       <button class="secondary small" data-action="close-preview">\u2715</button>
     `;
@@ -374,6 +375,25 @@ class AeorFileBrowser extends HTMLElement {
         event.stopPropagation();
         this._handlePreviewAction(button.dataset.action);
       });
+    });
+
+    // Bind rename on Enter or blur
+    const self = this;
+    titleInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        titleInput.blur();
+      } else if (event.key === 'Escape') {
+        titleInput.value = titleInput.dataset.original;
+        titleInput.blur();
+      }
+    });
+    titleInput.addEventListener('blur', () => {
+      const newName = titleInput.value.trim();
+      const oldName = titleInput.dataset.original;
+      if (newName && newName !== oldName) {
+        self._renamePreviewFile(newName);
+      }
     });
 
     // Show it
@@ -719,6 +739,35 @@ class AeorFileBrowser extends HTMLElement {
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
+  async _renamePreviewFile(newName) {
+    const tab = this._activeTab();
+    if (!tab || !tab.preview_entry) return;
+
+    const oldName = tab.preview_entry.name;
+    const fromPath = tab.path.replace(/\/$/, '') + '/' + oldName;
+    const toPath = tab.path.replace(/\/$/, '') + '/' + newName;
+
+    try {
+      await fetch(`/api/v1/files/${tab.relationship_id}/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: fromPath, to: toPath }),
+      });
+      tab.preview_entry.name = newName;
+      // Update the input's original value to the new name
+      const container = this.querySelector(`#tab-content-${tab.id}`);
+      const titleInput = container && container.querySelector('.preview-title');
+      if (titleInput) titleInput.dataset.original = newName;
+      this._fetchListing();
+    } catch (error) {
+      alert('Rename failed: ' + error.message);
+      // Revert the input
+      const container = this.querySelector(`#tab-content-${tab.id}`);
+      const titleInput = container && container.querySelector('.preview-title');
+      if (titleInput) titleInput.value = oldName;
+    }
+  }
+
   async _handlePreviewAction(action) {
     const tab = this._activeTab();
     if (!tab || !tab.preview_entry) return;
@@ -735,24 +784,6 @@ class AeorFileBrowser extends HTMLElement {
         });
         break;
 
-      case 'rename': {
-        const newName = prompt('New name:', entry.name);
-        if (!newName || newName === entry.name) break;
-        const fromPath = tab.path.replace(/\/$/, '') + '/' + entry.name;
-        const toPath = tab.path.replace(/\/$/, '') + '/' + newName;
-        try {
-          await fetch(`/api/v1/files/${tab.relationship_id}/rename`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ from: fromPath, to: toPath }),
-          });
-          tab.preview_entry = null;
-          this._fetchListing();
-        } catch (error) {
-          alert('Rename failed: ' + error.message);
-        }
-        break;
-      }
 
       case 'delete':
         if (!confirm(`Delete "${entry.name}"? This cannot be undone.`)) break;
@@ -815,7 +846,6 @@ class AeorFileBrowser extends HTMLElement {
         : ''
       }
       <div class="context-menu-item" data-context="preview">Preview</div>
-      <div class="context-menu-item" data-context="rename">Rename</div>
       <div class="context-menu-item context-menu-danger" data-context="delete">Delete</div>
     `;
 
