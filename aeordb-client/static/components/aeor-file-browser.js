@@ -760,7 +760,7 @@ class AeorFileBrowser extends HTMLElement {
       if (titleInput) titleInput.dataset.original = newName;
       this._fetchListing();
     } catch (error) {
-      alert('Rename failed: ' + error.message);
+      window.aeorToast('Rename failed: ' + error.message, 'error');
       // Revert the input
       const container = this.querySelector(`#tab-content-${tab.id}`);
       const titleInput = container && container.querySelector('.preview-title');
@@ -795,7 +795,7 @@ class AeorFileBrowser extends HTMLElement {
           tab.preview_entry = null;
           this._fetchListing();
         } catch (error) {
-          alert('Delete failed: ' + error.message);
+          window.aeorToast('Delete failed: ' + error.message, 'error');
         }
         break;
 
@@ -824,7 +824,7 @@ class AeorFileBrowser extends HTMLElement {
           body: arrayBuffer,
         });
       } catch (error) {
-        alert(`Upload failed for ${file.name}: ${error.message}`);
+        window.aeorToast(`Upload failed for ${file.name}: ${error.message}`, 'error');
       }
     }
 

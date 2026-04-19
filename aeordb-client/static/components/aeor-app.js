@@ -7,6 +7,7 @@ import { AeorSync } from './aeor-sync.js';
 import { AeorConflicts } from './aeor-conflicts.js';
 import { AeorFileBrowser } from './aeor-file-browser.js';
 import { AeorSettings } from './aeor-settings.js';
+import { AeorToasts } from './aeor-toasts.js';
 
 class AeorApp extends HTMLElement {
   constructor() {
@@ -25,6 +26,7 @@ class AeorApp extends HTMLElement {
       <div class="app-content">
         ${this._renderPage()}
       </div>
+      <aeor-toasts></aeor-toasts>
     `;
 
     // Listen for navigation from nav bar

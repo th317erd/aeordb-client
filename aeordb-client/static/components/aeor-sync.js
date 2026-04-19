@@ -517,13 +517,13 @@ class AeorSync extends HTMLElement {
       const result   = await response.json();
       const pull     = result.pull || {};
       const push     = result.push || {};
-      alert(`Sync complete!\nPulled: ${pull.files_pulled || 0} files\nPushed: ${push.files_pushed || 0} files`);
+      window.aeorToast(`Sync complete: ${pull.files_pulled || 0} pulled, ${push.files_pushed || 0} pushed`, 'success');
       // Refresh activity if this relationship is selected
       if (this._selectedId === id) {
         this._fetchActivity(id);
       }
     } catch (error) {
-      alert(`Sync failed: ${error.message}`);
+      window.aeorToast(`Sync failed: ${error.message}`, 'error', 6000);
     }
   }
 

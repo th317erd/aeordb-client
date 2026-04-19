@@ -270,9 +270,12 @@ class AeorConnections extends HTMLElement {
     try {
       const response = await fetch(`/api/v1/connections/${id}/test`, { method: 'POST' });
       const result   = await response.json();
-      alert((result.success) ? `Connected! (${result.latency_ms}ms)` : `Failed: ${result.message}`);
+      window.aeorToast(
+        (result.success) ? `Connected! (${result.latency_ms}ms)` : `Failed: ${result.message}`,
+        (result.success) ? 'success' : 'error',
+      );
     } catch (error) {
-      alert(`Test failed: ${error.message}`);
+      window.aeorToast(`Test failed: ${error.message}`, 'error');
     }
   }
 
