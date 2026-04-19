@@ -273,4 +273,87 @@ impl RemoteClient {
 
     Ok(())
   }
+
+  /// Rename/move a file or directory on the remote.
+  /// Uses PATCH /files/ with {"from": "...", "to": "..."} body.
+  pub async fn rename_file(&self, from_path: &str, to_path: &str) -> Result<()> {
+    let url = format!("{}/files/", self.base_url);
+
+    let mut request = self.http_client
+      .patch(&url)
+      .json(&serde_json::json!({ "from": from_path, "to": to_path }));
+
+    if let Some(ref auth) = self.auth_header() {
+      request = request.header("Authorization", auth);
+    }
+
+    let response = request.send().await
+      .map_err(|error| ClientError::Server(
+        format!("failed to rename {} to {}: {}", from_path, to_path, error),
+      ))?;
+
+    if !response.status().is_success() {
+      return Err(ClientError::Server(
+        format!("remote returned HTTP {} for rename {} to {}", response.status(), from_path, to_path),
+      ));
+    }
+
+    Ok(())
+  }
+
+  /// List directory with pagination. Returns entries plus pagination metadata.
+  pub async fn list_directory_paginated(
+    &self,
+    remote_path: &str,
+    limit: Option<u64>,
+    offset: Option<u64>,
+  ) -> Result<DirectoryListingResponse> {
+    let mut url = format!("{}/files{}", self.base_url, remote_path);
+
+    let mut params = Vec::new();
+    if let Some(limit) = limit {
+      params.push(format!("limit={}", limit));
+    }
+    if let Some(offset) = offset {
+      params.push(format!("offset={}", offset));
+    }
+    if !params.is_empty() {
+      url = format!("{}?{}", url, params.join("&"));
+    }
+
+    let mut request = self.http_client.get(&url);
+    if let Some(ref auth) = self.auth_header() {
+      request = request.header("Authorization", auth);
+    }
+
+    let response = request.send().await
+      .map_err(|error| ClientError::Server(
+        format!("failed to list remote directory {}: {}", remote_path, error),
+      ))?;
+
+    if !response.status().is_success() {
+      return Err(ClientError::Server(
+        format!("remote returned HTTP {} for {}", response.status(), remote_path),
+      ));
+    }
+
+    let listing: DirectoryListingResponse = response.json().await
+      .map_err(|error| ClientError::Server(
+        format!("failed to parse directory listing for {}: {}", remote_path, error),
+      ))?;
+
+    Ok(listing)
+  }
+}
+
+/// Paginated directory listing response from GET /files/{path}?limit=N&offset=M.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectoryListingResponse {
+  pub items:  Vec<RemoteEntry>,
+  #[serde(default)]
+  pub total:  Option<u64>,
+  #[serde(default)]
+  pub limit:  Option<u64>,
+  #[serde(default)]
+  pub offset: Option<u64>,
 }
