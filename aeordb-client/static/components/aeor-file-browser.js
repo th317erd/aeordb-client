@@ -196,7 +196,7 @@ class AeorFileBrowser extends HTMLElement {
 
   _renderDirectoryViewFor(tab) {
     const viewMode    = tab.view_mode || 'list';
-    const breadcrumbs = this._renderBreadcrumbs(tab.path);
+    const breadcrumbs = this._renderBreadcrumbs(tab);
     const header = `
       <div class="page-header">
         ${breadcrumbs}
@@ -298,9 +298,11 @@ class AeorFileBrowser extends HTMLElement {
     return `<div class="file-grid">${cards}</div>`;
   }
 
-  _renderBreadcrumbs(path) {
+  _renderBreadcrumbs(tab) {
+    const path = tab.path;
+    const rootLabel = tab.relationship_name || 'Root';
     const segments = path.split('/').filter((s) => s.length > 0);
-    let html = '<div class="breadcrumbs"><span class="breadcrumb-segment" data-path="/">Root</span>';
+    let html = `<div class="breadcrumbs"><span class="breadcrumb-segment" data-path="/">${escapeHtml(rootLabel)}</span>`;
 
     let accumulated = '/';
     for (const segment of segments) {

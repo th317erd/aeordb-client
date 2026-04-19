@@ -213,12 +213,18 @@ fn main() -> anyhow::Result<()> {
       let api_shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
       state.shutdown_signal = Some(api_shutdown.clone());
 
+      let sync_runner   = state.sync_runner.clone();
       let api_router    = build_router(state);
       let static_router = static_files::static_routes();
       let app           = api_router.merge(static_router);
 
       // Create the tokio runtime manually -- Tauri must own the main thread
       let runtime = tokio::runtime::Runtime::new()?;
+
+      // Start continuous sync for all enabled relationships
+      runtime.spawn(async move {
+        sync_runner.start_all_enabled().await;
+      });
 
       // Start HTTP server on the runtime, signal readiness via channel
       let (ready_tx, ready_rx) = std::sync::mpsc::channel();
