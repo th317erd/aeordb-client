@@ -77,7 +77,7 @@ class AeorConnections extends HTMLElement {
         </div>
         <div class="form-row">
           <label>URL</label>
-          <input type="text" id="form-url" placeholder="http://localhost:3000">
+          <input type="text" id="form-url" placeholder="http://localhost:6830">
         </div>
         <div class="form-row">
           <label>API Key (optional)</label>
@@ -211,7 +211,7 @@ class AeorConnections extends HTMLElement {
 
     // Set iframe src — use the portal URL with frame=true for future support
     const iframe = panel.querySelector('.connection-iframe');
-    const portalUrl = `${connection.url}/system/portal?frame=true#dashboard`;
+    const portalUrl = `${connection.url}/system/portal?page=dashboard&frame=true`;
     if (iframe.src !== portalUrl) {
       iframe.src = portalUrl;
     }

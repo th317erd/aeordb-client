@@ -428,6 +428,53 @@ td {
 .card-value.error   { color: var(--error); }
 
 /* ==========================================================================
+   Dashboard — Sync Status Cards
+   ========================================================================== */
+
+.sync-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.sync-status-card {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.sync-status-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.sync-status-name {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sync-status-details {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.sync-status-detail {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.sync-status-state.success {
+  color: var(--success);
+}
+
+/* ==========================================================================
    Info Sections
    ========================================================================== */
 
