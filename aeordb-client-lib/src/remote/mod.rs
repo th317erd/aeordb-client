@@ -61,7 +61,7 @@ pub struct RemoteClient {
 }
 
 impl RemoteClient {
-  pub fn from_connection(connection: &RemoteConnection) -> Self {
+  pub fn from_connection(connection: &RemoteConnection, http_client: &reqwest::Client) -> Self {
     let api_key = if connection.auth_type == AuthType::ApiKey {
       connection.api_key.clone()
     } else {
@@ -69,7 +69,7 @@ impl RemoteClient {
     };
 
     Self {
-      http_client: reqwest::Client::new(),
+      http_client: http_client.clone(),
       base_url:    connection.url.clone(),
       api_key,
     }

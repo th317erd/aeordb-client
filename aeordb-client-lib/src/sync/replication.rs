@@ -19,6 +19,7 @@ pub async fn sync_relationship(
   state: &StateStore,
   connection: &RemoteConnection,
   relationship: &SyncRelationship,
+  http_client: &reqwest::Client,
 ) -> Result<SyncResult> {
   let direction = &relationship.direction;
   let mut result = SyncResult { push: None, pull: None };
@@ -26,12 +27,12 @@ pub async fn sync_relationship(
   // Pull first (if direction allows) so we have the latest remote state
   // before pushing local changes.
   if *direction == SyncDirection::PullOnly || *direction == SyncDirection::Bidirectional {
-    result.pull = Some(pull_sync(state, connection, relationship).await?);
+    result.pull = Some(pull_sync(state, connection, relationship, http_client).await?);
   }
 
   // Push if direction allows.
   if *direction == SyncDirection::PushOnly || *direction == SyncDirection::Bidirectional {
-    result.push = Some(push_sync(state, connection, relationship).await?);
+    result.push = Some(push_sync(state, connection, relationship, http_client).await?);
   }
 
   Ok(result)

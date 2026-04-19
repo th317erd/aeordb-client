@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Json;
 use serde::Deserialize;

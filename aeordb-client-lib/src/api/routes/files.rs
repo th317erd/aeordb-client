@@ -203,7 +203,7 @@ pub async fn browse(
 
   tracing::info!("browsing {} (remote: {})", relationship_id, remote_path);
 
-  let remote_client = RemoteClient::from_connection(&connection);
+  let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
   let listing = remote_client
     .list_directory_paginated(&remote_path, query.limit, query.offset)
     .await
@@ -213,7 +213,7 @@ pub async fn browse(
 
   let mut entries = Vec::with_capacity(listing.items.len());
   for entry in listing.items {
-    let entry_remote_path = format!("{}{}", remote_path.trim_end_matches('/'), format!("/{}", entry.name));
+    let entry_remote_path = format!("{}/{}", remote_path.trim_end_matches('/'), entry.name);
 
     // Determine sync status
     let sync_status = match metadata_store.get_file_meta(relationship_id, &entry_remote_path) {
@@ -309,7 +309,7 @@ pub async fn serve_file(
   let remote_path = compute_remote_path(&relationship, &relative_path);
   tracing::info!("serving remote file: {}", remote_path);
 
-  let remote_client = RemoteClient::from_connection(&connection);
+  let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
   let (bytes, metadata) = remote_client
     .download_file(&remote_path)
     .await
@@ -350,7 +350,7 @@ pub async fn upload_file(
 
   tracing::info!("uploading to remote: {}", remote_path);
 
-  let remote_client = RemoteClient::from_connection(&connection);
+  let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
   remote_client
     .upload_file(&remote_path, body.to_vec(), content_type.as_deref())
     .await
@@ -376,7 +376,7 @@ pub async fn delete_file(
 
   tracing::info!("deleting from remote: {}", remote_path);
 
-  let remote_client = RemoteClient::from_connection(&connection);
+  let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
   remote_client
     .delete_file(&remote_path)
     .await
@@ -433,7 +433,7 @@ pub async fn rename_file(
 ) -> Result<Json<serde_json::Value>, ApiError> {
   let (_, connection) = load_relationship_and_connection(&state, &relationship_id).await?;
 
-  let remote_client = RemoteClient::from_connection(&connection);
+  let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
 
   remote_client.rename_file(&request.from, &request.to).await
     .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;

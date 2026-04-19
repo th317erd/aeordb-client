@@ -1,5 +1,7 @@
 'use strict';
 
+import { escapeHtml, escapeAttr } from './aeor-file-view-shared.js';
+
 class AeorConflicts extends HTMLElement {
   constructor() {
     super();
@@ -60,11 +62,11 @@ class AeorConflicts extends HTMLElement {
         : '';
 
       return `
-        <tr class="conflict-row ${isSelected ? 'selected' : ''}" data-path="${conflict.path}">
+        <tr class="conflict-row ${isSelected ? 'selected' : ''}" data-path="${escapeAttr(conflict.path)}">
           <td>
-            <div style="font-weight: 500;">${conflict.path}</div>
+            <div style="font-weight: 500;">${escapeHtml(conflict.path)}</div>
             <div class="mono muted" style="margin-top: 4px; font-size: 11px;">
-              ${conflict.conflict_type || 'modify/modify'}
+              ${escapeHtml(conflict.conflict_type || 'modify/modify')}
             </div>
           </td>
           <td>
@@ -77,8 +79,8 @@ class AeorConflicts extends HTMLElement {
           </td>
           <td class="muted">${new Date(conflict.created_at).toLocaleString()}</td>
           <td class="actions">
-            <button class="success small dismiss-btn" data-path="${conflict.path}">Accept</button>
-            <button class="primary small resolve-btn" data-path="${conflict.path}" data-pick="loser">Pick Loser</button>
+            <button class="success small dismiss-btn" data-path="${escapeAttr(conflict.path)}">Accept</button>
+            <button class="primary small resolve-btn" data-path="${escapeAttr(conflict.path)}" data-pick="loser">Pick Loser</button>
           </td>
         </tr>
       `;
@@ -203,7 +205,7 @@ class AeorConflicts extends HTMLElement {
           <div class="conflict-version-meta">
             <div class="info-row">
               <span class="info-label">Hash</span>
-              <span class="info-value mono">${winner.hash || '?'}</span>
+              <span class="info-value mono">${escapeHtml(winner.hash || '?')}</span>
             </div>
             <div class="info-row">
               <span class="info-label">Size</span>
@@ -211,15 +213,15 @@ class AeorConflicts extends HTMLElement {
             </div>
             <div class="info-row">
               <span class="info-label">Content Type</span>
-              <span class="info-value">${winner.content_type || 'Unknown'}</span>
+              <span class="info-value">${escapeHtml(winner.content_type || 'Unknown')}</span>
             </div>
             <div class="info-row">
               <span class="info-label">Node ID</span>
-              <span class="info-value mono">${winner.node_id || '?'}</span>
+              <span class="info-value mono">${escapeHtml(winner.node_id || '?')}</span>
             </div>
             <div class="info-row">
               <span class="info-label">Version Clock</span>
-              <span class="info-value mono">${winner.virtual_time || '?'}</span>
+              <span class="info-value mono">${escapeHtml(String(winner.virtual_time || '?'))}</span>
             </div>
           </div>
         </div>
@@ -228,7 +230,7 @@ class AeorConflicts extends HTMLElement {
           <div class="conflict-version-meta">
             <div class="info-row">
               <span class="info-label">Hash</span>
-              <span class="info-value mono">${loser.hash || '?'}</span>
+              <span class="info-value mono">${escapeHtml(loser.hash || '?')}</span>
             </div>
             <div class="info-row">
               <span class="info-label">Size</span>
@@ -236,21 +238,21 @@ class AeorConflicts extends HTMLElement {
             </div>
             <div class="info-row">
               <span class="info-label">Content Type</span>
-              <span class="info-value">${loser.content_type || 'Unknown'}</span>
+              <span class="info-value">${escapeHtml(loser.content_type || 'Unknown')}</span>
             </div>
             <div class="info-row">
               <span class="info-label">Node ID</span>
-              <span class="info-value mono">${loser.node_id || '?'}</span>
+              <span class="info-value mono">${escapeHtml(loser.node_id || '?')}</span>
             </div>
             <div class="info-row">
               <span class="info-label">Version Clock</span>
-              <span class="info-value mono">${loser.virtual_time || '?'}</span>
+              <span class="info-value mono">${escapeHtml(String(loser.virtual_time || '?'))}</span>
             </div>
           </div>
         </div>
       </div>
       <div class="conflict-info">
-        <span class="muted">Conflict type: <strong>${conflict.conflict_type || 'modify/modify'}</strong></span>
+        <span class="muted">Conflict type: <strong>${escapeHtml(conflict.conflict_type || 'modify/modify')}</strong></span>
         <span class="muted">\u00B7 Detected: ${new Date(conflict.created_at).toLocaleString()}</span>
       </div>
     `;

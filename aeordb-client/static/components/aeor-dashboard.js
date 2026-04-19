@@ -1,5 +1,7 @@
 'use strict';
 
+import { escapeHtml } from './aeor-file-view-shared.js';
+
 class AeorDashboard extends HTMLElement {
   connectedCallback() {
     this.render();
@@ -133,7 +135,7 @@ class AeorDashboard extends HTMLElement {
           <div class="sync-status-header">
             <div class="sync-status-name">
               <span class="sync-badge ${dotClass}"></span>
-              ${rel.name}
+              ${escapeHtml(rel.name)}
             </div>
             <div class="sync-status-actions">
               <button class="secondary small sync-now-btn" data-id="${rel.id}">Sync Now</button>
@@ -141,7 +143,7 @@ class AeorDashboard extends HTMLElement {
           </div>
           <div class="sync-status-details">
             <span class="sync-status-detail">${directionLabel(rel.direction)}</span>
-            <span class="sync-status-detail">${rel.remote_path}</span>
+            <span class="sync-status-detail">${escapeHtml(rel.remote_path)}</span>
             <span class="sync-status-detail sync-status-state ${running ? 'success' : ''}">${statusText}</span>
           </div>
         </div>

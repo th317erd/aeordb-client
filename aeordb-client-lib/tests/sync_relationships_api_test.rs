@@ -269,6 +269,8 @@ async fn test_update_relationship() {
     .patch(format!("{}/api/v1/sync/{}", ctx.base_url, created.id))
     .json(&UpdateSyncRelationshipRequest {
       name:               Some("Updated Name".to_string()),
+      remote_path:        None,
+      local_path:         None,
       direction:          Some(SyncDirection::Bidirectional),
       filter:             Some("*.md".to_string()),
       delete_propagation: Some(DeletePropagation {

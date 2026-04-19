@@ -1,5 +1,7 @@
 'use strict';
 
+import { escapeHtml, escapeAttr } from './aeor-file-view-shared.js';
+
 class AeorSettings extends HTMLElement {
   constructor() {
     super();
@@ -20,7 +22,7 @@ class AeorSettings extends HTMLElement {
         <h1>Settings</h1>
       </div>
 
-      ${(this._error) ? `<div class="error-banner">${this._error}</div>` : ''}
+      ${(this._error) ? `<div class="error-banner">${escapeHtml(this._error)}</div>` : ''}
 
       ${(this._settings === null)
         ? '<div class="empty-state">Loading settings...</div>'
@@ -40,7 +42,7 @@ class AeorSettings extends HTMLElement {
         <h2>General</h2>
         <div class="form-row">
           <label for="setting-client-name">Client Name</label>
-          <input type="text" id="setting-client-name" value="${s.client_name || ''}" placeholder="${this._hostname || 'my-machine'}">
+          <input type="text" id="setting-client-name" value="${escapeAttr(s.client_name || '')}" placeholder="${escapeAttr(this._hostname || 'my-machine')}">
         </div>
         <div class="form-row">
           <label for="setting-sync-interval">Sync Interval (seconds)</label>
@@ -60,14 +62,14 @@ class AeorSettings extends HTMLElement {
           <div class="form-row">
             <label>Config Directory</label>
             <div style="display: flex; gap: 8px; align-items: center;">
-              <code style="flex: 1; padding: 8px; background: var(--bg-secondary); border-radius: 4px; font-size: 13px; color: var(--text-secondary);">${s.config_dir}</code>
+              <code style="flex: 1; padding: 8px; background: var(--bg-secondary); border-radius: 4px; font-size: 13px; color: var(--text-secondary);">${escapeHtml(s.config_dir)}</code>
               <button class="secondary small" id="open-config-dir">Open</button>
             </div>
           </div>
           <div class="form-row">
             <label>Data Directory</label>
             <div style="display: flex; gap: 8px; align-items: center;">
-              <code style="flex: 1; padding: 8px; background: var(--bg-secondary); border-radius: 4px; font-size: 13px; color: var(--text-secondary);">${s.data_dir}</code>
+              <code style="flex: 1; padding: 8px; background: var(--bg-secondary); border-radius: 4px; font-size: 13px; color: var(--text-secondary);">${escapeHtml(s.data_dir)}</code>
               <button class="secondary small" id="open-data-dir">Open</button>
             </div>
           </div>
@@ -132,19 +134,19 @@ class AeorSettings extends HTMLElement {
   async _saveSettings() {
     if (this._saving) return;
 
+    // Read input values BEFORE any re-render destroys the DOM inputs.
+    const clientNameInput   = this.querySelector('#setting-client-name');
+    const syncIntervalInput = this.querySelector('#setting-sync-interval');
+    const autoStartInput    = this.querySelector('#setting-auto-start');
+
+    const clientName   = clientNameInput?.value?.trim() || null;
+    const syncInterval = parseInt(syncIntervalInput?.value, 10);
+    const autoStart    = autoStartInput?.checked ?? true;
+
     this._saving = true;
     this._saved  = false;
     this._error  = null;
     this.render();
-
-    const clientNameInput  = this.querySelector('#setting-client-name');
-    const syncIntervalInput = this.querySelector('#setting-sync-interval');
-    const autoStartInput   = this.querySelector('#setting-auto-start');
-
-    // Read values before re-render.
-    const clientName   = clientNameInput?.value?.trim() || null;
-    const syncInterval = parseInt(syncIntervalInput?.value, 10);
-    const autoStart    = autoStartInput?.checked ?? true;
 
     if (isNaN(syncInterval) || syncInterval < 10 || syncInterval > 3600) {
       this._saving = false;

@@ -37,7 +37,7 @@ impl SyncActivityLog {
 
   /// Store a sync event at `/sync/activity/{relationship_id}/{timestamp}-{short_id}.json`.
   pub fn log_event(&self, event: &SyncEvent) -> Result<()> {
-    let short_id = &event.id[..8];
+    let short_id = event.id.get(..8).unwrap_or(&event.id);
     let path = format!(
       "/sync/activity/{}/{}-{}.json",
       event.relationship_id, event.timestamp, short_id,

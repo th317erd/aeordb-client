@@ -37,15 +37,19 @@ class AeorToasts extends HTMLElement {
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
     toast.dataset.id = id;
-    toast.innerHTML = `
-      <span class="toast-message">${message}</span>
-      <button class="toast-dismiss">\u2715</button>
-    `;
 
-    // Dismiss on click
-    toast.querySelector('.toast-dismiss').addEventListener('click', () => {
+    const messageSpan = document.createElement('span');
+    messageSpan.className = 'toast-message';
+    messageSpan.textContent = message;
+    toast.appendChild(messageSpan);
+
+    const dismissButton = document.createElement('button');
+    dismissButton.className = 'toast-dismiss';
+    dismissButton.textContent = '\u2715';
+    dismissButton.addEventListener('click', () => {
       this._removeToast(toast);
     });
+    toast.appendChild(dismissButton);
 
     container.appendChild(toast);
 

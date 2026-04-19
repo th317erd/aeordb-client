@@ -29,12 +29,6 @@ export function fileIcon(entryType) {
   return '\uD83D\uDCC4'; // file
 }
 
-export function syncBadgeClass(syncStatus) {
-  if (syncStatus === 'synced') return 'synced';
-  if (syncStatus === 'pending') return 'pending';
-  return 'not-synced';
-}
-
 export function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
@@ -43,6 +37,74 @@ export function escapeHtml(str) {
 
 export function escapeAttr(str) {
   return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Entry type constants (from aeordb)
+export const ENTRY_TYPE_FILE    = 2;
+export const ENTRY_TYPE_DIR     = 3;
+export const ENTRY_TYPE_SYMLINK = 8;
+
+export function formatRelativeTime(ms) {
+  const diff = Date.now() - ms;
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  const date = new Date(ms);
+  return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+export function directionLabel(direction) {
+  switch (direction) {
+    case 'pull_only':     return '\u2190 Pull';
+    case 'push_only':     return 'Push \u2192';
+    case 'bidirectional': return '\u2194 Bidirectional';
+    default:              return direction;
+  }
+}
+
+export function directionArrow(direction) {
+  switch (direction) {
+    case 'pull_only':     return '\u2190';
+    case 'push_only':     return '\u2192';
+    case 'bidirectional': return '\u2194';
+    default:              return '\u2194';
+  }
+}
+
+export function bindResizeHandle(handle, panel, { minHeight = 150, maxRatio = 0.8, onResize } = {}) {
+  handle.addEventListener('mousedown', (event) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = panel.offsetHeight;
+
+    const onMouseMove = (moveEvent) => {
+      const delta = startY - moveEvent.clientY;
+      const newHeight = Math.max(minHeight, Math.min(window.innerHeight * maxRatio, startHeight + delta));
+      panel.style.height = newHeight + 'px';
+      if (onResize) onResize(newHeight);
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+}
+
+export async function openFolder(path) {
+  if (!path || path === '-') return;
+  try {
+    await fetch('/api/v1/open-folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+  } catch (error) {
+    console.error('Failed to open folder:', error);
+  }
 }
 
 export function fileExtension(name) {

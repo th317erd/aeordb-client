@@ -1,5 +1,7 @@
 'use strict';
 
+import { escapeHtml } from '../aeor-file-view-shared.js';
+
 class AeorPreviewText extends HTMLElement {
   constructor() {
     super();
@@ -32,10 +34,10 @@ class AeorPreviewText extends HTMLElement {
       if (this._isMarkdown(filename, contentType)) {
         this.innerHTML = `<div class="preview-markdown">${this._renderMarkdown(content)}</div>`;
       } else {
-        this.innerHTML = `<pre class="preview-text"><code>${this._escapeHtml(content)}</code></pre>`;
+        this.innerHTML = `<pre class="preview-text"><code>${escapeHtml(content)}</code></pre>`;
       }
     } catch (error) {
-      this.innerHTML = `<div class="preview-binary">Failed to load preview: ${error.message}</div>`;
+      this.innerHTML = `<div class="preview-binary">Failed to load preview: ${escapeHtml(error.message)}</div>`;
     }
   }
 
@@ -48,7 +50,7 @@ class AeorPreviewText extends HTMLElement {
   _renderMarkdown(text) {
     // Simple markdown to HTML conversion
     // Handles: headers, bold, italic, code blocks, inline code, links, lists, paragraphs
-    let html = this._escapeHtml(text);
+    let html = escapeHtml(text);
 
     // Code blocks (``` ... ```)
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="preview-code-block"><code>$2</code></pre>');
@@ -86,11 +88,6 @@ class AeorPreviewText extends HTMLElement {
     return html;
   }
 
-  _escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-  }
 }
 
 customElements.define('aeor-preview-text', AeorPreviewText);

@@ -162,7 +162,7 @@ pub async fn trigger_sync(
     ))?;
 
   // Run the sync (push and/or pull based on direction).
-  let result = sync_relationship(&state.state_store, &connection, &relationship)
+  let result = sync_relationship(&state.state_store, &connection, &relationship, &state.http_client)
     .await
     .map_err(|error| (
       StatusCode::INTERNAL_SERVER_ERROR,

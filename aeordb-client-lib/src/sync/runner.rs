@@ -20,10 +20,11 @@ use crate::sync::sse_listener::start_sse_listener;
 /// Tracks running sync tasks for each relationship.
 #[derive(Clone)]
 pub struct SyncRunner {
-  running:  Arc<Mutex<HashMap<String, RunningSync>>>,
-  state:    Arc<StateStore>,
-  config:   Arc<ConfigStore>,
-  activity: SyncActivityLog,
+  running:     Arc<Mutex<HashMap<String, RunningSync>>>,
+  state:       Arc<StateStore>,
+  config:      Arc<ConfigStore>,
+  activity:    SyncActivityLog,
+  http_client: reqwest::Client,
 }
 
 struct RunningSync {
@@ -39,14 +40,15 @@ pub struct SyncRunnerStatus {
 }
 
 impl SyncRunner {
-  pub fn new(state: Arc<StateStore>, config: Arc<ConfigStore>) -> Self {
+  pub fn new(state: Arc<StateStore>, config: Arc<ConfigStore>, http_client: reqwest::Client) -> Self {
     let activity = SyncActivityLog::new(state.clone());
 
     Self {
-      running: Arc::new(Mutex::new(HashMap::new())),
+      running:     Arc::new(Mutex::new(HashMap::new())),
       state,
       config,
       activity,
+      http_client,
     }
   }
 
@@ -87,11 +89,16 @@ impl SyncRunner {
     let relationship_id_owned = relationship_id.to_string();
     let state_clone           = self.state.clone();
     let activity_clone        = self.activity.clone();
+    let http_client_clone     = self.http_client.clone();
+
+    let sync_interval = self.config.get()
+      .map(|c| c.settings.sync_interval_seconds)
+      .unwrap_or(60);
 
     tracing::info!("starting sync for '{}' ({:?})", relationship.name, relationship.direction);
 
     let handle = tokio::spawn(async move {
-      run_sync_loop(state_clone, activity_clone, relationship, connection).await;
+      run_sync_loop(state_clone, activity_clone, relationship, connection, http_client_clone, sync_interval).await;
     });
 
     running.insert(relationship_id_owned, RunningSync {
@@ -166,6 +173,8 @@ async fn run_sync_loop(
   activity: SyncActivityLog,
   relationship: SyncRelationship,
   connection: crate::connections::RemoteConnection,
+  http_client: reqwest::Client,
+  sync_interval_seconds: u64,
 ) {
   let direction = relationship.direction.clone();
   let filter    = relationship.filter.clone();
@@ -173,7 +182,7 @@ async fn run_sync_loop(
   tracing::info!("sync loop active for '{}' ({:?})", relationship.name, direction);
 
   // --- Step 1: Initial full sync (push + pull based on direction) ---
-  match sync_relationship(&state, &connection, &relationship).await {
+  match sync_relationship(&state, &connection, &relationship, &http_client).await {
     Ok(result) => {
       log_sync_result(&relationship.name, &result);
       if let Err(error) = activity.log_full_sync(&relationship.id, &relationship.name, &result) {
@@ -241,7 +250,7 @@ async fn run_sync_loop(
         }
 
         // Push local changes to the remote.
-        match push_sync(&state, &connection, &relationship).await {
+        match push_sync(&state, &connection, &relationship, &http_client).await {
           Ok(result) => {
             if result.files_pushed > 0 || result.files_deleted > 0 || result.files_failed > 0 {
               tracing::info!(
@@ -270,7 +279,7 @@ async fn run_sync_loop(
           None => std::future::pending().await,
         }
       } => {
-        match pull_sync(&state, &connection, &relationship).await {
+        match pull_sync(&state, &connection, &relationship, &http_client).await {
           Ok(result) => {
             if result.files_pulled > 0 || result.files_deleted > 0 || result.files_failed > 0 {
               tracing::info!(
@@ -292,9 +301,9 @@ async fn run_sync_loop(
         }
       }
 
-      // Periodic safety net -- full sync every 60 seconds regardless.
-      _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
-        match sync_relationship(&state, &connection, &relationship).await {
+      // Periodic safety net -- full sync at configured interval.
+      _ = tokio::time::sleep(std::time::Duration::from_secs(sync_interval_seconds)) => {
+        match sync_relationship(&state, &connection, &relationship, &http_client).await {
           Ok(result) => {
             log_sync_result(&relationship.name, &result);
             if let Err(error) = activity.log_full_sync(&relationship.id, &relationship.name, &result) {

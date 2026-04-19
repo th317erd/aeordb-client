@@ -26,6 +26,7 @@ pub struct AppState {
   pub state_store:     Arc<StateStore>,
   pub config_store:    Arc<ConfigStore>,
   pub sync_runner:     SyncRunner,
+  pub http_client:     reqwest::Client,
   pub shutdown_signal: Option<Arc<Notify>>,
   pub config_dir:      PathBuf,
   pub data_dir:        PathBuf,
@@ -94,9 +95,14 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
 
   let config_store = ConfigStore::load(&config.config_path)?;
 
+  let http_client = reqwest::Client::builder()
+    .timeout(std::time::Duration::from_secs(30))
+    .build()
+    .map_err(|error| ClientError::Server(format!("failed to create HTTP client: {}", error)))?;
+
   let state_store  = Arc::new(state_store);
   let config_store = Arc::new(config_store);
-  let sync_runner  = SyncRunner::new(state_store.clone(), config_store.clone());
+  let sync_runner  = SyncRunner::new(state_store.clone(), config_store.clone(), http_client.clone());
 
   let config_dir = config.config_path.parent()
     .unwrap_or_else(|| std::path::Path::new("."))
@@ -110,6 +116,7 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
     state_store,
     config_store,
     sync_runner,
+    http_client,
     shutdown_signal: None,
     config_dir,
     data_dir,

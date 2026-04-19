@@ -171,7 +171,7 @@ async fn test_push_uploads_new_files() {
 
   let relationship = make_relationship(&local_path.to_string_lossy());
 
-  let result = push_sync(&state, &connection, &relationship)
+  let result = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("push_sync failed");
 
@@ -201,7 +201,7 @@ async fn test_push_skips_unchanged_files() {
   let relationship = make_relationship(&local_path.to_string_lossy());
 
   // First push: should upload the file.
-  let result_1 = push_sync(&state, &connection, &relationship)
+  let result_1 = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("first push failed");
 
@@ -209,7 +209,7 @@ async fn test_push_skips_unchanged_files() {
 
   // Second push without modifying the file: mtime has not changed,
   // so the file should be skipped.
-  let result_2 = push_sync(&state, &connection, &relationship)
+  let result_2 = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("second push failed");
 
@@ -231,7 +231,7 @@ async fn test_push_detects_modified_files() {
   let relationship = make_relationship(&local_path.to_string_lossy());
 
   // First push.
-  let result_1 = push_sync(&state, &connection, &relationship)
+  let result_1 = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("first push failed");
 
@@ -243,7 +243,7 @@ async fn test_push_detects_modified_files() {
   std::fs::write(local_path.join("mutable.txt"), b"version 2").expect("write failed");
 
   // Second push: should detect the modification and re-upload.
-  let result_2 = push_sync(&state, &connection, &relationship)
+  let result_2 = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("second push failed");
 
@@ -274,7 +274,7 @@ async fn test_push_respects_filter() {
   let mut relationship = make_relationship(&local_path.to_string_lossy());
   relationship.filter = Some("*.pdf".to_string());
 
-  let result = push_sync(&state, &connection, &relationship)
+  let result = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("push_sync failed");
 
@@ -305,7 +305,7 @@ async fn test_push_handles_symlinks() {
 
   let relationship = make_relationship(&local_path.to_string_lossy());
 
-  let result = push_sync(&state, &connection, &relationship)
+  let result = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("push_sync failed");
 
@@ -344,7 +344,7 @@ async fn test_push_deletes_removed_files() {
   };
 
   // First push: both files uploaded.
-  let result_1 = push_sync(&state, &connection, &relationship)
+  let result_1 = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("first push failed");
 
@@ -354,7 +354,7 @@ async fn test_push_deletes_removed_files() {
   std::fs::remove_file(local_path.join("remove.txt")).expect("remove failed");
 
   // Second push: should detect the deletion and propagate it.
-  let result_2 = push_sync(&state, &connection, &relationship)
+  let result_2 = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("second push failed");
 
@@ -382,14 +382,14 @@ async fn test_push_does_not_delete_when_propagation_disabled() {
   };
 
   // Push, then delete local file.
-  push_sync(&state, &connection, &relationship)
+  push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("first push failed");
 
   std::fs::remove_file(local_path.join("file.txt")).expect("remove failed");
 
   // Second push: should NOT delete from remote.
-  let result = push_sync(&state, &connection, &relationship)
+  let result = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("second push failed");
 
@@ -410,7 +410,7 @@ async fn test_push_empty_directory() {
 
   let relationship = make_relationship(&local_path.to_string_lossy());
 
-  let result = push_sync(&state, &connection, &relationship)
+  let result = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("push_sync failed");
 
@@ -430,7 +430,7 @@ async fn test_push_nonexistent_local_path_errors() {
 
   let relationship = make_relationship("/nonexistent/path/that/does/not/exist");
 
-  let result = push_sync(&state, &connection, &relationship).await;
+  let result = push_sync(&state, &connection, &relationship, &reqwest::Client::new()).await;
 
   assert!(result.is_err(), "should fail for nonexistent local path");
 }
@@ -449,7 +449,7 @@ async fn test_push_metadata_stored_correctly() {
 
   let relationship = make_relationship(&local_path.to_string_lossy());
 
-  push_sync(&state, &connection, &relationship)
+  push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("push_sync failed");
 
@@ -487,7 +487,7 @@ async fn test_push_hash_skip_updates_mtime() {
   let relationship = make_relationship(&local_path.to_string_lossy());
 
   // First push: uploads the file.
-  push_sync(&state, &connection, &relationship)
+  push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("first push failed");
 
@@ -509,7 +509,7 @@ async fn test_push_hash_skip_updates_mtime() {
   mock_state.files.lock().await.clear();
 
   // Second push: mtime differs -> reads file -> hashes -> same hash -> skip.
-  let result = push_sync(&state, &connection, &relationship)
+  let result = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("second push failed");
 
@@ -545,7 +545,7 @@ async fn test_push_nested_directories() {
 
   let relationship = make_relationship(&local_path.to_string_lossy());
 
-  let result = push_sync(&state, &connection, &relationship)
+  let result = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("push_sync failed");
 
@@ -573,7 +573,7 @@ async fn test_push_exclude_filter() {
   let mut relationship = make_relationship(&local_path.to_string_lossy());
   relationship.filter = Some("!*.tmp, !.DS_Store".to_string());
 
-  let result = push_sync(&state, &connection, &relationship)
+  let result = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("push_sync failed");
 
@@ -618,7 +618,7 @@ async fn test_push_upload_failure_records_error() {
 
   let relationship = make_relationship(&local_path.to_string_lossy());
 
-  let result = push_sync(&state, &connection, &relationship)
+  let result = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("push_sync should still return Ok with errors recorded");
 
@@ -644,7 +644,7 @@ async fn test_push_duration_is_recorded() {
 
   let relationship = make_relationship(&local_path.to_string_lossy());
 
-  let result = push_sync(&state, &connection, &relationship)
+  let result = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("push_sync failed");
 
@@ -670,7 +670,7 @@ async fn test_push_large_number_of_files() {
 
   let relationship = make_relationship(&local_path.to_string_lossy());
 
-  let result = push_sync(&state, &connection, &relationship)
+  let result = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("push_sync failed");
 
@@ -697,7 +697,7 @@ async fn test_push_remote_path_computation() {
   let mut relationship = make_relationship(&local_path.to_string_lossy());
   relationship.remote_path = "/my-remote-base/".to_string();
 
-  let result = push_sync(&state, &connection, &relationship)
+  let result = push_sync(&state, &connection, &relationship, &reqwest::Client::new())
     .await
     .expect("push_sync failed");
 

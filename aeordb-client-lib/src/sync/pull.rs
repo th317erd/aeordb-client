@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::time::Instant;
 
+use super::file_mtime;
 use crate::connections::{AuthType, RemoteConnection};
 use crate::error::{ClientError, Result};
 use crate::remote::RemoteClient;
@@ -36,10 +37,11 @@ pub async fn pull_sync(
   state: &StateStore,
   connection: &RemoteConnection,
   relationship: &SyncRelationship,
+  http_client: &reqwest::Client,
 ) -> Result<PullResult> {
   let start = Instant::now();
 
-  let remote_client = RemoteClient::from_connection(connection);
+  let remote_client = RemoteClient::from_connection(connection, http_client);
   let metadata_store = SyncMetadataStore::new(state);
 
   let local_base = Path::new(&relationship.local_path);
@@ -60,7 +62,7 @@ pub async fn pull_sync(
   let since_root_hash = checkpoint.as_ref().map(|c| c.remote_root_hash.clone());
 
   // Fetch the diff from the remote.
-  let diff = fetch_remote_diff(connection, since_root_hash.as_deref()).await?;
+  let diff = fetch_remote_diff(connection, since_root_hash.as_deref(), http_client).await?;
   let new_root_hash = diff.root_hash.clone();
 
   // Process added and modified files.
@@ -323,15 +325,15 @@ pub async fn pull_sync(
 async fn fetch_remote_diff(
   connection: &RemoteConnection,
   since_root_hash: Option<&str>,
+  http_client: &reqwest::Client,
 ) -> Result<RemoteSyncDiffResponse> {
   let url = format!("{}/sync/diff", connection.url);
-  let client = reqwest::Client::new();
 
   let body = serde_json::json!({
     "since_root_hash": since_root_hash,
   });
 
-  let mut request = client.post(&url).json(&body);
+  let mut request = http_client.post(&url).json(&body);
 
   if connection.auth_type == AuthType::ApiKey {
     if let Some(ref api_key) = connection.api_key {
@@ -385,22 +387,6 @@ fn compute_local_path(
   let relative = relative.trim_start_matches('/');
 
   local_base.join(relative)
-}
-
-/// Get the file modification time as milliseconds since the Unix epoch.
-fn file_mtime(path: &Path) -> Result<i64> {
-  let metadata = path.metadata()?;
-  let modified = metadata.modified()?;
-  let duration = modified
-    .duration_since(std::time::UNIX_EPOCH)
-    .map_err(|error| ClientError::Io(
-      std::io::Error::new(
-        std::io::ErrorKind::Other,
-        format!("system time error: {}", error),
-      ),
-    ))?;
-
-  Ok(duration.as_millis() as i64)
 }
 
 #[cfg(test)]

@@ -1,5 +1,7 @@
 'use strict';
 
+import { escapeHtml, escapeAttr } from './aeor-file-view-shared.js';
+
 class AeorSync extends HTMLElement {
   constructor() {
     super();
@@ -84,7 +86,7 @@ class AeorSync extends HTMLElement {
 
   _renderAddForm() {
     const connectionOptions = this._connections.map((connection) =>
-      `<option value="${connection.id}">${connection.name} (${connection.url})</option>`
+      `<option value="${escapeAttr(connection.id)}">${escapeHtml(connection.name)} (${escapeHtml(connection.url)})</option>`
     ).join('');
 
     return `
@@ -138,16 +140,16 @@ class AeorSync extends HTMLElement {
         <h2>Edit Sync Relationship</h2>
         <div class="form-row">
           <label>Name</label>
-          <input type="text" id="form-name" value="${relationship.name || ''}">
+          <input type="text" id="form-name" value="${escapeAttr(relationship.name || '')}">
         </div>
         <div class="form-row">
           <label>Remote Path</label>
-          <input type="text" id="form-remote-path" value="${relationship.remote_path}">
+          <input type="text" id="form-remote-path" value="${escapeAttr(relationship.remote_path)}">
         </div>
         <div class="form-row">
           <label>Local Path</label>
           <div style="display: flex; gap: 8px;">
-            <input type="text" id="form-local-path" value="${relationship.local_path}" style="flex: 1;">
+            <input type="text" id="form-local-path" value="${escapeAttr(relationship.local_path)}" style="flex: 1;">
             <button class="secondary small" type="button" id="browse-local-path">Browse</button>
           </div>
         </div>
@@ -161,7 +163,7 @@ class AeorSync extends HTMLElement {
         </div>
         <div class="form-row">
           <label>Filter (optional, comma-separated globs)</label>
-          <input type="text" id="form-filter" value="${relationship.filter || ''}">
+          <input type="text" id="form-filter" value="${escapeAttr(relationship.filter || '')}">
         </div>
         <div class="form-row">
           <label>Delete Propagation</label>
@@ -187,10 +189,10 @@ class AeorSync extends HTMLElement {
       const isSelected = (relationship.id === this._selectedId);
       return `
         <tr class="sync-row ${isSelected ? 'selected' : ''}" data-id="${relationship.id}">
-          <td class="mono muted">${relationship.id.substring(0, 8)}...</td>
-          <td>${relationship.name}</td>
-          <td>${relationship.remote_path}</td>
-          <td>${relationship.direction}</td>
+          <td class="mono muted">${escapeHtml(relationship.id.substring(0, 8))}...</td>
+          <td>${escapeHtml(relationship.name)}</td>
+          <td>${escapeHtml(relationship.remote_path)}</td>
+          <td>${escapeHtml(relationship.direction)}</td>
           <td><span class="badge ${(relationship.enabled) ? 'success' : 'warning'}" style="min-width: 72px; text-align: center; display: inline-block;">${(relationship.enabled) ? 'enabled' : 'disabled'}</span></td>
           <td class="actions">
             <button class="success small trigger-btn" data-id="${relationship.id}">Sync</button>
@@ -368,7 +370,7 @@ class AeorSync extends HTMLElement {
       const hasErrors = event.errors && event.errors.length > 0;
       const errorClass = hasErrors ? ' activity-item-error' : '';
 
-      let detail = event.summary;
+      let detail = escapeHtml(event.summary);
       if (event.files_affected > 0) {
         detail += ` \u00B7 ${event.files_affected} files`;
       }
@@ -381,7 +383,7 @@ class AeorSync extends HTMLElement {
 
       let errorHtml = '';
       if (hasErrors) {
-        errorHtml = `<div class="activity-errors">${event.errors.map((e) => `<div class="activity-error">${e}</div>`).join('')}</div>`;
+        errorHtml = `<div class="activity-errors">${event.errors.map((e) => `<div class="activity-error">${escapeHtml(e)}</div>`).join('')}</div>`;
       }
 
       return `

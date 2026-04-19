@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::Instant;
 
+use super::file_mtime;
 use crate::connections::RemoteConnection;
 use crate::error::{ClientError, Result};
 use crate::remote::RemoteClient;
@@ -32,10 +33,11 @@ pub async fn push_sync(
   state: &StateStore,
   connection: &RemoteConnection,
   relationship: &SyncRelationship,
+  http_client: &reqwest::Client,
 ) -> Result<PushResult> {
   let start = Instant::now();
 
-  let remote_client = RemoteClient::from_connection(connection);
+  let remote_client = RemoteClient::from_connection(connection, http_client);
   let metadata_store = SyncMetadataStore::new(state);
 
   let local_base = Path::new(&relationship.local_path);
@@ -297,17 +299,4 @@ fn compute_remote_path(relative: &Path, remote_base: &str) -> String {
   let base = remote_base.trim_end_matches('/');
 
   format!("{}/{}", base, relative_str)
-}
-
-/// Get the file modification time as milliseconds since the Unix epoch.
-fn file_mtime(path: &Path) -> Result<i64> {
-  let metadata = path.metadata()?;
-  let modified = metadata.modified()?;
-  let duration = modified
-    .duration_since(std::time::UNIX_EPOCH)
-    .map_err(|error| ClientError::Io(
-      std::io::Error::new(std::io::ErrorKind::Other, format!("system time error: {}", error)),
-    ))?;
-
-  Ok(duration.as_millis() as i64)
 }

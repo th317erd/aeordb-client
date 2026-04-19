@@ -243,7 +243,7 @@ async fn test_pull_downloads_new_files() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship).await
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_pulled, 2);
@@ -286,7 +286,7 @@ async fn test_pull_downloads_nested_files() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship).await
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_pulled, 1);
@@ -318,7 +318,7 @@ async fn test_pull_saves_checkpoint() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  pull_sync(&store, &connection, &relationship).await
+  pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
     .expect("pull_sync failed");
 
   // Verify the checkpoint was saved with the remote root hash.
@@ -353,7 +353,7 @@ async fn test_pull_saves_file_metadata() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  pull_sync(&store, &connection, &relationship).await
+  pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
     .expect("pull_sync failed");
 
   // Verify file metadata was stored.
@@ -403,7 +403,7 @@ async fn test_pull_respects_filter() {
   );
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship).await
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_pulled, 1, "only the .pdf should be pulled");
@@ -451,7 +451,7 @@ async fn test_pull_handles_deletions() {
   };
   metadata_store.set_file_meta("test-rel-001", &doomed_meta).expect("failed to set meta");
 
-  let result = pull_sync(&store, &connection, &relationship).await
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_deleted, 1);
@@ -487,7 +487,7 @@ async fn test_pull_deletion_skipped_when_propagation_disabled() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship).await
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_deleted, 0, "no files should be deleted when propagation is off");
@@ -510,7 +510,7 @@ async fn test_pull_empty_diff_saves_checkpoint() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship).await
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_pulled, 0);
@@ -553,7 +553,7 @@ async fn test_pull_handles_download_failure() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship).await
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
     .expect("pull_sync should not fail entirely due to single file error");
 
   assert_eq!(result.files_pulled, 1, "the existing file should be pulled");
@@ -573,7 +573,7 @@ async fn test_pull_fails_when_server_unreachable() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship).await;
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await;
 
   assert!(result.is_err(), "pull_sync should fail when server is unreachable");
   let error_message = format!("{}", result.unwrap_err());
@@ -611,7 +611,7 @@ async fn test_pull_handles_server_error_on_diff() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship).await;
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await;
 
   assert!(result.is_err(), "pull_sync should fail when server returns 500");
   let error_message = format!("{}", result.unwrap_err());
@@ -649,7 +649,7 @@ async fn test_pull_handles_malformed_diff_response() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship).await;
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await;
 
   assert!(result.is_err(), "pull_sync should fail with malformed response");
   let error_message = format!("{}", result.unwrap_err());
@@ -682,7 +682,7 @@ async fn test_pull_creates_local_directory_if_missing() {
   let relationship = make_relationship(&local_path_str, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship).await
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
     .expect("pull_sync should create missing directories");
 
   assert_eq!(result.files_pulled, 1);
@@ -726,7 +726,7 @@ async fn test_pull_exclude_filter() {
   );
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship).await
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_pulled, 1);
@@ -758,7 +758,7 @@ async fn test_pull_deletion_of_nonexistent_local_file() {
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
   // Should not panic or error -- just a no-op deletion.
-  let result = pull_sync(&store, &connection, &relationship).await
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
     .expect("pull_sync should handle deletion of nonexistent file gracefully");
 
   assert_eq!(result.files_deleted, 1);
@@ -802,7 +802,7 @@ async fn test_pull_modified_file_overwrites() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship).await
+  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_pulled, 1);

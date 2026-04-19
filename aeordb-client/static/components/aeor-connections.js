@@ -1,5 +1,7 @@
 'use strict';
 
+import { escapeHtml, escapeAttr } from './aeor-file-view-shared.js';
+
 class AeorConnections extends HTMLElement {
   constructor() {
     super();
@@ -96,10 +98,10 @@ class AeorConnections extends HTMLElement {
       const isSelected = (connection.id === this._selectedId);
       return `
         <tr class="connection-row ${isSelected ? 'selected' : ''}" data-id="${connection.id}">
-          <td class="mono muted">${connection.id.substring(0, 8)}...</td>
-          <td>${connection.name}</td>
-          <td>${connection.url}</td>
-          <td>${connection.auth_type}</td>
+          <td class="mono muted">${escapeHtml(connection.id.substring(0, 8))}...</td>
+          <td>${escapeHtml(connection.name)}</td>
+          <td>${escapeHtml(connection.url)}</td>
+          <td>${escapeHtml(connection.auth_type)}</td>
           <td class="actions">
             <button class="secondary small test-btn" data-id="${connection.id}">Test</button>
             <button class="danger small delete-btn" data-id="${connection.id}">Delete</button>
