@@ -1,27 +1,18 @@
 'use strict';
 
 class AeorPreviewImage extends HTMLElement {
-  static get observedAttributes() {
-    return ['src', 'filename'];
-  }
-
   connectedCallback() {
-    this.render();
-  }
-
-  attributeChangedCallback() {
-    this.render();
+    this.innerHTML = '<img class="preview-image" loading="lazy">';
   }
 
   load() {
-    this.render();
-  }
-
-  render() {
-    const src = this.getAttribute('src') || '';
-    const filename = this.getAttribute('filename') || '';
-
-    this.innerHTML = `<img src="${src}" alt="${filename}" class="preview-image" loading="lazy">`;
+    let img = this.querySelector('img');
+    if (!img) {
+      this.innerHTML = '<img class="preview-image" loading="lazy">';
+      img = this.querySelector('img');
+    }
+    img.src = this.getAttribute('src') || '';
+    img.alt = this.getAttribute('filename') || '';
   }
 }
 

@@ -1,37 +1,31 @@
 'use strict';
 
 class AeorPreviewDefault extends HTMLElement {
-  static get observedAttributes() {
-    return ['src', 'filename', 'size', 'content-type'];
-  }
-
   connectedCallback() {
-    this.render();
-  }
-
-  attributeChangedCallback() {
-    this.render();
-  }
-
-  load() {
-    this.render();
-  }
-
-  render() {
-    const filename = this.getAttribute('filename') || 'Unknown';
-    const size = parseInt(this.getAttribute('size') || '0', 10);
-    const contentType = this.getAttribute('content-type') || 'application/octet-stream';
-
     this.innerHTML = `
       <div class="preview-binary-info">
         <div class="preview-binary-icon">\uD83D\uDCC4</div>
         <div class="preview-binary-details">
-          <div class="preview-binary-name">${filename}</div>
-          <div class="preview-binary-meta">${contentType}</div>
-          <div class="preview-binary-meta">${this._formatSize(size)}</div>
+          <div class="preview-binary-name"></div>
+          <div class="preview-binary-meta preview-binary-type"></div>
+          <div class="preview-binary-meta preview-binary-size"></div>
         </div>
       </div>
     `;
+  }
+
+  load() {
+    const filename = this.getAttribute('filename') || 'Unknown';
+    const size = parseInt(this.getAttribute('size') || '0', 10);
+    const contentType = this.getAttribute('content-type') || 'application/octet-stream';
+
+    const nameEl = this.querySelector('.preview-binary-name');
+    const typeEl = this.querySelector('.preview-binary-type');
+    const sizeEl = this.querySelector('.preview-binary-size');
+
+    if (nameEl) nameEl.textContent = filename;
+    if (typeEl) typeEl.textContent = contentType;
+    if (sizeEl) sizeEl.textContent = this._formatSize(size);
   }
 
   _formatSize(bytes) {

@@ -1,19 +1,19 @@
 'use strict';
 
 class AeorPreviewText extends HTMLElement {
-  static get observedAttributes() {
-    return ['src', 'filename', 'content-type'];
+  constructor() {
+    super();
+    this._currentSrc = null;
   }
 
   connectedCallback() {
-    this.render();
-  }
-
-  attributeChangedCallback() {
-    // Don't re-fetch on every attribute change — wait for load()
+    this.innerHTML = '<div class="loading">Loading preview...</div>';
   }
 
   async load() {
+    const newSrc = this.getAttribute('src');
+    if (newSrc === this._currentSrc) return;
+    this._currentSrc = newSrc;
     const src = this.getAttribute('src');
     if (!src) {
       this.innerHTML = '<div class="preview-binary">No source URL</div>';
@@ -37,10 +37,6 @@ class AeorPreviewText extends HTMLElement {
     } catch (error) {
       this.innerHTML = `<div class="preview-binary">Failed to load preview: ${error.message}</div>`;
     }
-  }
-
-  render() {
-    this.innerHTML = '<div class="loading">Loading preview...</div>';
   }
 
   _isMarkdown(filename, contentType) {

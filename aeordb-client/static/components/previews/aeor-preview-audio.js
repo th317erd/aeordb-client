@@ -1,26 +1,18 @@
 'use strict';
 
 class AeorPreviewAudio extends HTMLElement {
-  static get observedAttributes() {
-    return ['src'];
-  }
-
   connectedCallback() {
-    this.render();
-  }
-
-  attributeChangedCallback() {
-    this.render();
+    this.innerHTML = '<audio controls class="preview-media"></audio>';
   }
 
   load() {
-    this.render();
-  }
-
-  render() {
-    const src = this.getAttribute('src') || '';
-
-    this.innerHTML = `<audio controls class="preview-media"><source src="${src}">Your browser does not support audio.</audio>`;
+    let audio = this.querySelector('audio');
+    if (!audio) {
+      this.innerHTML = '<audio controls class="preview-media"></audio>';
+      audio = this.querySelector('audio');
+    }
+    audio.src = this.getAttribute('src') || '';
+    audio.load();
   }
 }
 

@@ -1,26 +1,18 @@
 'use strict';
 
 class AeorPreviewVideo extends HTMLElement {
-  static get observedAttributes() {
-    return ['src'];
-  }
-
   connectedCallback() {
-    this.render();
-  }
-
-  attributeChangedCallback() {
-    this.render();
+    this.innerHTML = '<video controls class="preview-media"></video>';
   }
 
   load() {
-    this.render();
-  }
-
-  render() {
-    const src = this.getAttribute('src') || '';
-
-    this.innerHTML = `<video controls class="preview-media"><source src="${src}">Your browser does not support video.</video>`;
+    let video = this.querySelector('video');
+    if (!video) {
+      this.innerHTML = '<video controls class="preview-media"></video>';
+      video = this.querySelector('video');
+    }
+    video.src = this.getAttribute('src') || '';
+    video.load();
   }
 }
 

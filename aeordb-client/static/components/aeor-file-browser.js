@@ -40,11 +40,11 @@ class AeorFileBrowser extends HTMLElement {
     this._active_tab_id = null;
     this._relationships = [];
     this._tab_counter = 0;
-    this._loading = false;
-    this._preview_entry = null;
-    this._preview_component = null;
-    this._preview_height = null;
     this._scroll_listener = null;
+  }
+
+  _activeTab() {
+    return this._tabs.find((t) => t.id === this._active_tab_id) || null;
   }
 
   connectedCallback() {
@@ -52,16 +52,13 @@ class AeorFileBrowser extends HTMLElement {
     this.render();
     this._fetchRelationships();
 
-    if (this._active_tab_id) {
-      const tab = this._tabs.find((t) => t.id === this._active_tab_id);
-      if (tab)
-        this._fetchListing(tab.relationship_id, tab.path);
+    if (this._active_tab_id && this._activeTab()) {
+      this._fetchListing();
     }
   }
 
   _saveState() {
     try {
-      // Only persist tab metadata — entries are fetched fresh each time
       const serializable_tabs = this._tabs.map((tab) => ({
         id:                tab.id,
         relationship_id:   tab.relationship_id,
@@ -69,6 +66,7 @@ class AeorFileBrowser extends HTMLElement {
         path:              tab.path,
         view_mode:         tab.view_mode,
         page_size:         tab.page_size,
+        preview_height:    tab.preview_height,
       }));
       localStorage.setItem('aeordb-file-browser', JSON.stringify({
         tabs:          serializable_tabs,
@@ -89,39 +87,68 @@ class AeorFileBrowser extends HTMLElement {
       this._active_tab_id = state.active_tab_id || null;
       this._tab_counter   = state.tab_counter || 0;
 
-      // Restore tabs with runtime fields initialized
       this._tabs = (state.tabs || []).map((tab) => ({
         ...tab,
-        entries:      [],
-        total:        null,
-        loading_more: false,
-        page_size:    tab.page_size || 100,
+        entries:           [],
+        total:             null,
+        loading:           false,
+        loading_more:      false,
+        page_size:         tab.page_size || 100,
+        preview_entry:     null,
+        preview_component: null,
+        preview_height:    tab.preview_height || null,
       }));
     } catch (error) {
       // start fresh
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Full render — rebuilds the entire DOM. Used for structural changes
+  // (open/close tab, new tab button, relationship selector).
+  // ---------------------------------------------------------------------------
   render() {
-    if (this._active_tab_id) {
-      this.innerHTML = `
-        <div class="page-header">
-          <h1>Files</h1>
-        </div>
-        ${this._renderTabBar()}
-        ${this._renderDirectoryView()}
-      `;
-    } else {
-      this.innerHTML = `
-        <div class="page-header">
-          <h1>Files</h1>
-        </div>
-        ${(this._tabs.length > 0) ? this._renderTabBar() : ''}
-        ${this._renderRelationshipSelector()}
-      `;
+    let html = '<div class="page-header"><h1>Files</h1></div>';
+
+    if (this._tabs.length > 0) {
+      html += this._renderTabBar();
     }
 
-    this._bindEvents();
+    if (!this._active_tab_id) {
+      html += this._renderRelationshipSelector();
+      this.innerHTML = html;
+      this._bindShellEvents();
+      return;
+    }
+
+    // Render all tab content containers — only the active one is visible
+    for (const tab of this._tabs) {
+      const isActive = (tab.id === this._active_tab_id);
+      html += `<div class="tab-content" id="tab-content-${tab.id}" style="${isActive ? '' : 'display:none'}">`;
+      html += this._renderDirectoryViewFor(tab);
+      html += '</div>';
+    }
+
+    this.innerHTML = html;
+    this._bindShellEvents();
+    this._bindTabContentEvents(this._active_tab_id);
+    this._hydratePreview();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Update only a single tab's content container — no structural DOM change.
+  // ---------------------------------------------------------------------------
+  _updateTabContent(tabId) {
+    const container = this.querySelector(`#tab-content-${tabId}`);
+    const tab = this._tabs.find((t) => t.id === tabId);
+    if (!container || !tab) return;
+
+    container.innerHTML = this._renderDirectoryViewFor(tab);
+    this._bindTabContentEvents(tabId);
+
+    if (tabId === this._active_tab_id) {
+      this._hydratePreview();
+    }
   }
 
   _renderRelationshipSelector() {
@@ -167,10 +194,7 @@ class AeorFileBrowser extends HTMLElement {
     `;
   }
 
-  _renderDirectoryView() {
-    const tab = this._tabs.find((t) => t.id === this._active_tab_id);
-    if (!tab) return '';
-
+  _renderDirectoryViewFor(tab) {
     const viewMode    = tab.view_mode || 'list';
     const breadcrumbs = this._renderBreadcrumbs(tab.path);
     const header = `
@@ -181,18 +205,18 @@ class AeorFileBrowser extends HTMLElement {
             <button class="small ${(viewMode === 'list') ? 'primary' : 'secondary'}" data-view="list" title="List view">&#9776;</button>
             <button class="small ${(viewMode === 'grid') ? 'primary' : 'secondary'}" data-view="grid" title="Grid view">&#9638;</button>
           </div>
-          <button class="primary small" id="upload-button">Upload</button>
-          <input type="file" id="upload-input" style="display:none" multiple>
+          <button class="primary small upload-button">Upload</button>
+          <input type="file" class="upload-input" style="display:none" multiple>
         </div>
       </div>
     `;
 
-    if (this._loading) {
-      return `${header}<div class="loading">Loading...</div>`;
+    if (tab.loading) {
+      return `${header}<div class="tab-listing"><div class="loading">Loading...</div></div>`;
     }
 
     if (tab.entries.length === 0) {
-      return `${header}<div class="empty-state">This directory is empty.</div>`;
+      return `${header}<div class="tab-listing"><div class="empty-state">This directory is empty.</div></div>`;
     }
 
     const countText = (tab.total != null)
@@ -203,24 +227,29 @@ class AeorFileBrowser extends HTMLElement {
       : '';
 
     const listing = (viewMode === 'grid')
-      ? this._renderGridView()
-      : this._renderListView();
+      ? this._renderGridViewFor(tab)
+      : this._renderListViewFor(tab);
 
-    return `${header}${listing}<div class="entry-count">${countText}</div>${loadingMore}${this._renderPreviewPanel()}`;
+    return `${header}<div class="tab-listing">${listing}<div class="entry-count">${countText}</div>${loadingMore}</div>
+      <div class="preview-panel" style="display:none; ${tab.preview_height ? 'height:' + tab.preview_height + 'px' : ''}">
+        <div class="preview-resize-handle"></div>
+        <div class="preview-header">
+          <h3 class="preview-title"></h3>
+          <div class="preview-actions"></div>
+        </div>
+        <div class="preview-content"></div>
+        <div class="preview-meta"></div>
+      </div>`;
   }
 
-  _renderListView() {
-    const tab = this._tabs.find((t) => t.id === this._active_tab_id);
-    if (!tab) return '';
-
+  _renderListViewFor(tab) {
     const rows = tab.entries.map((entry) => {
       const isDir     = (entry.entry_type === 3);
       const icon      = fileIcon(entry.entry_type);
       const size      = (isDir) ? '\u2014' : formatSize(entry.size);
       const created   = formatDate(entry.created_at);
       const modified  = formatDate(entry.updated_at);
-      const syncClass = (entry.has_local) ? 'synced' : 'not-synced';
-      const syncTitle = (entry.has_local) ? 'Available locally' : 'Remote only';
+      const [syncClass, syncTitle] = this._syncBadge(entry);
 
       return `
         <tr class="file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}">
@@ -242,21 +271,16 @@ class AeorFileBrowser extends HTMLElement {
     `;
   }
 
-  _renderGridView() {
-    const tab = this._tabs.find((t) => t.id === this._active_tab_id);
-    if (!tab) return '';
-
+  _renderGridViewFor(tab) {
     const cards = tab.entries.map((entry) => {
       const isDir     = (entry.entry_type === 3);
       const icon      = fileIcon(entry.entry_type);
-      const syncClass = (entry.has_local) ? 'synced' : 'not-synced';
-      const syncTitle = (entry.has_local) ? 'Available locally' : 'Remote only';
+      const [syncClass, syncTitle] = this._syncBadge(entry);
       const size      = (isDir) ? 'Folder' : formatSize(entry.size);
 
       let thumbnail = `<div class="grid-card-icon">${icon}</div>`;
 
-      // Show image thumbnail if it's an image and synced locally
-      if (!isDir && isImageFile(entry.name) && entry.has_local && tab) {
+      if (!isDir && isImageFile(entry.name) && entry.has_local) {
         const encodedPath = encodeURIComponent(tab.path.replace(/\/$/, '') + '/' + entry.name);
         thumbnail = `<div class="grid-card-thumbnail"><img src="/api/v1/files/${tab.relationship_id}/${encodedPath}" alt="${escapeAttr(entry.name)}" loading="lazy"></div>`;
       }
@@ -288,7 +312,76 @@ class AeorFileBrowser extends HTMLElement {
     return html;
   }
 
-  _bindEvents() {
+  // Update the persistent preview panel's contents in place — no DOM destruction.
+  _showPreview(tab) {
+    const container = this.querySelector(`#tab-content-${tab.id}`);
+    if (!container) return;
+
+    const panel = container.querySelector('.preview-panel');
+    if (!panel) return;
+
+    const entry = tab.preview_entry;
+    const componentName = tab.preview_component;
+
+    if (!entry || !componentName) {
+      panel.style.display = 'none';
+      return;
+    }
+
+    // Update header
+    panel.querySelector('.preview-title').textContent = entry.name;
+
+    // Update action buttons
+    panel.querySelector('.preview-actions').innerHTML = `
+      ${(entry.has_local)
+        ? '<button class="primary small" data-action="open-local">Open Locally</button>'
+        : ''
+      }
+      <button class="secondary small" data-action="rename">Rename</button>
+      <button class="danger small" data-action="delete">Delete</button>
+      <button class="secondary small" data-action="close-preview">\u2715</button>
+    `;
+
+    // Update preview component — only swap if the component type changed
+    const contentEl = panel.querySelector('.preview-content');
+    const existingPreview = contentEl.firstElementChild;
+    if (!existingPreview || existingPreview.tagName.toLowerCase() !== componentName) {
+      contentEl.innerHTML = `<${componentName}></${componentName}>`;
+    }
+
+    // Set attributes on the preview element
+    const previewEl = contentEl.querySelector(componentName);
+    if (previewEl) {
+      const contentType = entry.content_type || 'application/octet-stream';
+      const filePath = tab.path.replace(/\/$/, '') + '/' + entry.name;
+      const fileUrl = `/api/v1/files/${tab.relationship_id}/${encodeURIComponent(filePath)}`;
+      previewEl.setAttribute('src', fileUrl);
+      previewEl.setAttribute('filename', entry.name);
+      previewEl.setAttribute('size', entry.size || 0);
+      previewEl.setAttribute('content-type', contentType);
+      if (previewEl.load) previewEl.load();
+    }
+
+    // Update meta
+    panel.querySelector('.preview-meta').textContent =
+      `${formatSize(entry.size)} \u00B7 ${entry.content_type || 'Unknown type'} \u00B7 ${formatDate(entry.created_at)}`;
+
+    // Bind action buttons
+    panel.querySelectorAll('[data-action]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._handlePreviewAction(button.dataset.action);
+      });
+    });
+
+    // Show it
+    panel.style.display = '';
+  }
+
+  // ---------------------------------------------------------------------------
+  // Event binding — split into shell (tab bar) and tab content (per-tab).
+  // ---------------------------------------------------------------------------
+  _bindShellEvents() {
     // Relationship cards
     this.querySelectorAll('.relationship-card').forEach((card) => {
       card.addEventListener('click', () => {
@@ -298,9 +391,9 @@ class AeorFileBrowser extends HTMLElement {
 
     // Tab clicks
     this.querySelectorAll('.tab-label').forEach((label) => {
-      const tab = label.closest('.tab');
+      const tabEl = label.closest('.tab');
       label.addEventListener('click', () => {
-        this._switchTab(tab.dataset.tabId);
+        this._switchTab(tabEl.dataset.tabId);
       });
     });
 
@@ -320,79 +413,69 @@ class AeorFileBrowser extends HTMLElement {
         this.render();
       });
     }
+  }
 
-    // View toggle (per-tab)
-    this.querySelectorAll('[data-view]').forEach((btn) => {
+  _bindTabContentEvents(tabId) {
+    const container = this.querySelector(`#tab-content-${tabId}`);
+    if (!container) return;
+
+    const tab = this._tabs.find((t) => t.id === tabId);
+    if (!tab) return;
+
+    // View toggle
+    container.querySelectorAll('[data-view]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const tab = this._tabs.find((t) => t.id === this._active_tab_id);
-        if (tab) {
-          tab.view_mode = btn.dataset.view;
-          this._saveState();
-          this.render();
-        }
+        tab.view_mode = btn.dataset.view;
+        this._saveState();
+        this._updateTabContent(tabId);
       });
     });
 
     // Breadcrumbs
-    this.querySelectorAll('.breadcrumb-segment').forEach((segment) => {
+    container.querySelectorAll('.breadcrumb-segment').forEach((segment) => {
       segment.addEventListener('click', () => {
         this._navigateTo(segment.dataset.path);
       });
     });
 
     // File entries (both list rows and grid cards)
-    this.querySelectorAll('.file-entry').forEach((el) => {
+    container.querySelectorAll('.file-entry').forEach((el) => {
       el.addEventListener('click', () => {
         const entryType = parseInt(el.dataset.type, 10);
         if (entryType === 3) {
-          const tab = this._tabs.find((t) => t.id === this._active_tab_id);
-          if (tab) {
-            const newPath = tab.path.replace(/\/$/, '') + '/' + el.dataset.name + '/';
-            this._navigateTo(newPath);
-          }
+          const newPath = tab.path.replace(/\/$/, '') + '/' + el.dataset.name + '/';
+          this._navigateTo(newPath);
         } else {
-          const tab = this._tabs.find((t) => t.id === this._active_tab_id);
-          const entries = (tab && tab.entries) || [];
-          this._preview_entry = entries.find((e) => e.name === el.dataset.name) || null;
-          this._preview_component = null;
+          tab.preview_entry = tab.entries.find((e) => e.name === el.dataset.name) || null;
+          tab.preview_component = null;
           this._loadPreview();
         }
       });
 
-      // Context menu (right-click) for file entries
+      // Context menu
       el.addEventListener('contextmenu', (event) => {
         event.preventDefault();
         const entryType = parseInt(el.dataset.type, 10);
         if (entryType === 3) return;
 
-        const tab = this._tabs.find((t) => t.id === this._active_tab_id);
-        const entries = (tab && tab.entries) || [];
-        const entry = entries.find((e) => e.name === el.dataset.name);
+        const entry = tab.entries.find((e) => e.name === el.dataset.name);
         if (!entry) return;
 
         this._showContextMenu(event.clientX, event.clientY, entry);
       });
     });
 
-    // Preview action buttons
-    this.querySelectorAll('[data-action]').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        this._handlePreviewAction(button.dataset.action);
-      });
-    });
-
     // Upload
-    const uploadButton = this.querySelector('#upload-button');
-    const uploadInput = this.querySelector('#upload-input');
+    const uploadButton = container.querySelector('.upload-button');
+    const uploadInput = container.querySelector('.upload-input');
     if (uploadButton && uploadInput) {
       uploadButton.addEventListener('click', () => uploadInput.click());
       uploadInput.addEventListener('change', (event) => this._handleUpload(event));
     }
 
-    // Preview panel resize handle
-    const resizeHandle = this.querySelector('#preview-resize-handle');
-    const previewPanel = this.querySelector('#preview-panel');
+    // Preview panel resize handle (persistent — bound once per tab)
+    const resizeHandle = container.querySelector('.preview-resize-handle');
+    const previewPanel = container.querySelector('.preview-panel');
     if (resizeHandle && previewPanel) {
       resizeHandle.addEventListener('mousedown', (event) => {
         event.preventDefault();
@@ -404,13 +487,13 @@ class AeorFileBrowser extends HTMLElement {
           const delta     = startY - moveEvent.clientY;
           const newHeight = Math.max(150, Math.min(window.innerHeight * 0.8, startHeight + delta));
           previewPanel.style.height = newHeight + 'px';
-          self._preview_height = newHeight;
-          self._updateContentPadding();
+          tab.preview_height = newHeight;
         };
 
         const onMouseUp = () => {
           document.removeEventListener('mousemove', onMouseMove);
           document.removeEventListener('mouseup', onMouseUp);
+          self._saveState();
         };
 
         document.addEventListener('mousemove', onMouseMove);
@@ -419,6 +502,9 @@ class AeorFileBrowser extends HTMLElement {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Tab lifecycle
+  // ---------------------------------------------------------------------------
   _openTab(relationshipId, relationshipName) {
     this._tab_counter++;
     const tabId = 'tab-' + this._tab_counter;
@@ -430,76 +516,116 @@ class AeorFileBrowser extends HTMLElement {
       view_mode:         'list',
       entries:           [],
       total:             null,
+      loading:           false,
       loading_more:      false,
       page_size:         100,
+      preview_entry:     null,
+      preview_component: null,
+      preview_height:    null,
     });
     this._active_tab_id = tabId;
     this._saveState();
-    this._fetchListing(relationshipId, '/');
+    this.render();
+    this._fetchListing();
   }
 
   _switchTab(tabId) {
     if (this._active_tab_id === tabId) return;
+
+    // Hide current tab content
+    const currentContainer = this.querySelector(`#tab-content-${this._active_tab_id}`);
+    if (currentContainer) currentContainer.style.display = 'none';
+
+    const currentTabEl = this.querySelector(`.tab[data-tab-id="${this._active_tab_id}"]`);
+    if (currentTabEl) currentTabEl.classList.remove('active');
+
+    // Show new tab content
     this._active_tab_id = tabId;
+
+    const newContainer = this.querySelector(`#tab-content-${tabId}`);
+    if (newContainer) newContainer.style.display = '';
+
+    const newTabEl = this.querySelector(`.tab[data-tab-id="${tabId}"]`);
+    if (newTabEl) newTabEl.classList.add('active');
+
     this._saveState();
-    const tab = this._tabs.find((t) => t.id === tabId);
-    if (tab)
-      this._fetchListing(tab.relationship_id, tab.path);
+
+    // Load data if this tab hasn't been fetched yet
+    const tab = this._activeTab();
+    if (tab && tab.entries.length === 0 && !tab.loading) {
+      this._fetchListing();
+    } else {
+      this._hydratePreview();
+      this._attachScrollListener();
+    }
   }
 
   _closeTab(tabId) {
+    // Remove the tab's DOM container
+    const container = this.querySelector(`#tab-content-${tabId}`);
+    if (container) container.remove();
+
     this._tabs = this._tabs.filter((t) => t.id !== tabId);
+
     if (this._active_tab_id === tabId) {
       if (this._tabs.length > 0) {
         this._active_tab_id = this._tabs[this._tabs.length - 1].id;
-        const tab = this._tabs.find((t) => t.id === this._active_tab_id);
-        if (tab) {
-          this._saveState();
-          this._fetchListing(tab.relationship_id, tab.path);
-          return;
-        }
       } else {
         this._active_tab_id = null;
       }
     }
+
     this._saveState();
     this.render();
   }
 
   _navigateTo(path) {
-    const tab = this._tabs.find((t) => t.id === this._active_tab_id);
+    const tab = this._activeTab();
     if (!tab) return;
     tab.path = path;
-    this._preview_entry = null; // Close preview when navigating
+    tab.preview_entry = null;
     this._saveState();
-    this._fetchListing(tab.relationship_id, path);
+    // Update tab bar label (breadcrumb changed)
+    this._updateTabBarLabel(tab);
+    this._fetchListing();
   }
 
+  _updateTabBarLabel(tab) {
+    const tabEl = this.querySelector(`.tab[data-tab-id="${tab.id}"] .tab-label`);
+    if (tabEl) {
+      tabEl.textContent = this._truncate(`${tab.relationship_name} ${tab.path}`, 30);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Data fetching
+  // ---------------------------------------------------------------------------
   async _fetchRelationships() {
     try {
       const response      = await fetch('/api/v1/sync');
       this._relationships = await response.json();
-      this.render();
+      // Only full-render if we're on the selector screen
+      if (!this._active_tab_id) this.render();
     } catch (error) {
       console.error('Failed to fetch relationships:', error);
     }
   }
 
-  async _fetchListing(relationshipId, path) {
-    const tab = this._tabs.find((t) => t.id === this._active_tab_id);
+  async _fetchListing() {
+    const tab = this._activeTab();
     if (!tab) return;
 
     tab.entries = [];
     tab.total = null;
     tab.loading_more = false;
-    this._loading = true;
-    this.render();
+    tab.loading = true;
+    this._updateTabContent(tab.id);
 
     try {
-      const encodedPath = (path === '/') ? '' : encodeURIComponent(path);
+      const encodedPath = (tab.path === '/') ? '' : encodeURIComponent(tab.path);
       const baseUrl = (encodedPath)
-        ? `/api/v1/browse/${relationshipId}/${encodedPath}`
-        : `/api/v1/browse/${relationshipId}`;
+        ? `/api/v1/browse/${tab.relationship_id}/${encodedPath}`
+        : `/api/v1/browse/${tab.relationship_id}`;
       const url = `${baseUrl}?limit=${tab.page_size || 100}&offset=0`;
       const response = await fetch(url);
       const data = await response.json();
@@ -510,18 +636,18 @@ class AeorFileBrowser extends HTMLElement {
       tab.entries = [];
     }
 
-    this._loading = false;
-    this.render();
+    tab.loading = false;
+    this._updateTabContent(tab.id);
     this._attachScrollListener();
   }
 
   async _fetchNextPage() {
-    const tab = this._tabs.find((t) => t.id === this._active_tab_id);
+    const tab = this._activeTab();
     if (!tab || tab.loading_more) return;
     if (tab.entries.length >= (tab.total || 0)) return;
 
     tab.loading_more = true;
-    this.render();
+    this._updateTabContent(tab.id);
 
     try {
       const encodedPath = (tab.path === '/') ? '' : encodeURIComponent(tab.path);
@@ -541,112 +667,61 @@ class AeorFileBrowser extends HTMLElement {
     }
 
     tab.loading_more = false;
-    this.render();
+    this._updateTabContent(tab.id);
     this._attachScrollListener();
   }
 
   _attachScrollListener() {
-    const content = this.closest('.app-content');
-    if (!content) return;
+    const activeContainer = this.querySelector(`#tab-content-${this._active_tab_id}`);
+    const listing = activeContainer && activeContainer.querySelector('.tab-listing');
+    if (!listing) return;
 
-    // Remove previous listener to avoid duplicates
-    if (this._scroll_listener) {
-      content.removeEventListener('scroll', this._scroll_listener);
+    if (this._scroll_listener && this._scroll_listener_target) {
+      this._scroll_listener_target.removeEventListener('scroll', this._scroll_listener);
     }
 
+    this._scroll_listener_target = listing;
     this._scroll_listener = () => {
-      const tab = this._tabs.find((t) => t.id === this._active_tab_id);
+      const tab = this._activeTab();
       if (!tab || tab.loading_more) return;
       if (tab.total == null) return;
       if (tab.entries.length >= tab.total) return;
 
-      const scrollBottom = content.scrollHeight - content.scrollTop - content.clientHeight;
+      const scrollBottom = listing.scrollHeight - listing.scrollTop - listing.clientHeight;
       if (scrollBottom < 200) {
         this._fetchNextPage();
       }
     };
 
-    content.addEventListener('scroll', this._scroll_listener);
+    listing.addEventListener('scroll', this._scroll_listener);
   }
 
-  _renderPreviewPanel() {
-    if (!this._preview_entry || !this._preview_component) return '';
-
-    const entry = this._preview_entry;
-    const componentName = this._preview_component;
-
-    return `
-      <div class="preview-panel" id="preview-panel" style="${this._preview_height ? 'height:' + this._preview_height + 'px' : ''}">
-        <div class="preview-resize-handle" id="preview-resize-handle"></div>
-        <div class="preview-header">
-          <h3>${escapeHtml(entry.name)}</h3>
-          <div class="preview-actions">
-            ${(entry.has_local)
-              ? '<button class="primary small" data-action="open-local">Open Locally</button>'
-              : '<button class="secondary small" data-action="download">Download</button>'
-            }
-            <button class="secondary small" data-action="rename">Rename</button>
-            <button class="danger small" data-action="delete">Delete</button>
-            <button class="secondary small" data-action="close-preview">\u2715</button>
-          </div>
-        </div>
-        <div class="preview-content">
-          <${componentName}></${componentName}>
-        </div>
-        <div class="preview-meta">
-          ${formatSize(entry.size)} \u00B7 ${entry.content_type || 'Unknown type'} \u00B7 ${formatDate(entry.created_at)}
-        </div>
-      </div>
-    `;
-  }
-
+  // ---------------------------------------------------------------------------
+  // Preview
+  // ---------------------------------------------------------------------------
   async _loadPreview() {
-    if (!this._preview_entry) return;
+    const tab = this._activeTab();
+    if (!tab || !tab.preview_entry) return;
 
-    const contentType = this._preview_entry.content_type || 'application/octet-stream';
-    this._preview_component = await loadPreviewComponent(contentType);
-    this.render();
-
-    // After render, the custom element is in the DOM — set its attributes
-    const previewEl = this.querySelector(this._preview_component);
-    if (previewEl) {
-      const tab = this._tabs.find((t) => t.id === this._active_tab_id);
-      if (tab) {
-        const filePath = tab.path.replace(/\/$/, '') + '/' + this._preview_entry.name;
-        const fileUrl = `/api/v1/files/${tab.relationship_id}/${encodeURIComponent(filePath)}`;
-        previewEl.setAttribute('src', fileUrl);
-        previewEl.setAttribute('filename', this._preview_entry.name);
-        previewEl.setAttribute('size', this._preview_entry.size || 0);
-        previewEl.setAttribute('content-type', contentType);
-        if (previewEl.load) previewEl.load();
-      }
-    }
-
-    this._updateContentPadding();
+    const contentType = tab.preview_entry.content_type || 'application/octet-stream';
+    tab.preview_component = await loadPreviewComponent(contentType);
+    this._showPreview(tab);
   }
 
-  _updateContentPadding() {
-    const content = this.closest('.app-content');
-    if (!content) return;
-
-    const panel = this.querySelector('#preview-panel');
-    if (panel) {
-      const panelHeight = panel.offsetHeight;
-      content.style.paddingBottom = '24px';
-      content.style.height = `calc(100vh - ${panelHeight}px)`;
-      content.style.maxHeight = `calc(100vh - ${panelHeight}px)`;
-    } else {
-      content.style.paddingBottom = '';
-      content.style.height = '';
-      content.style.maxHeight = '';
-    }
+  _hydratePreview() {
+    const tab = this._activeTab();
+    if (!tab) return;
+    this._showPreview(tab);
   }
 
+  // ---------------------------------------------------------------------------
+  // Actions
+  // ---------------------------------------------------------------------------
   async _handlePreviewAction(action) {
-    const tab = this._tabs.find((t) => t.id === this._active_tab_id);
-    if (!tab || !this._preview_entry) return;
+    const tab = this._activeTab();
+    if (!tab || !tab.preview_entry) return;
 
-    const entry = this._preview_entry;
+    const entry = tab.preview_entry;
     const filePath = tab.path.replace(/\/$/, '') + '/' + entry.name;
 
     switch (action) {
@@ -657,15 +732,6 @@ class AeorFileBrowser extends HTMLElement {
           body: JSON.stringify({ path: filePath.replace(/^\//, '') }),
         });
         break;
-
-      case 'download': {
-        const url = `/api/v1/files/${tab.relationship_id}/${encodeURIComponent(filePath)}`;
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = entry.name;
-        anchor.click();
-        break;
-      }
 
       case 'rename': {
         const newName = prompt('New name:', entry.name);
@@ -678,8 +744,8 @@ class AeorFileBrowser extends HTMLElement {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ from: fromPath, to: toPath }),
           });
-          this._preview_entry = null;
-          this._fetchListing(tab.relationship_id, tab.path);
+          tab.preview_entry = null;
+          this._fetchListing();
         } catch (error) {
           alert('Rename failed: ' + error.message);
         }
@@ -693,24 +759,23 @@ class AeorFileBrowser extends HTMLElement {
           await fetch(`/api/v1/files/${tab.relationship_id}/${encodedPath}`, {
             method: 'DELETE',
           });
-          this._preview_entry = null;
-          this._fetchListing(tab.relationship_id, tab.path);
+          tab.preview_entry = null;
+          this._fetchListing();
         } catch (error) {
           alert('Delete failed: ' + error.message);
         }
         break;
 
       case 'close-preview':
-        this._preview_entry = null;
-        this._preview_component = null;
-        this.render();
-        this._updateContentPadding();
+        tab.preview_entry = null;
+        tab.preview_component = null;
+        this._showPreview(tab);
         break;
     }
   }
 
   async _handleUpload(event) {
-    const tab = this._tabs.find((t) => t.id === this._active_tab_id);
+    const tab = this._activeTab();
     if (!tab) return;
 
     const files = event.target.files;
@@ -731,7 +796,7 @@ class AeorFileBrowser extends HTMLElement {
     }
 
     event.target.value = '';
-    this._fetchListing(tab.relationship_id, tab.path);
+    this._fetchListing();
   }
 
   _showContextMenu(x, y, entry) {
@@ -745,7 +810,7 @@ class AeorFileBrowser extends HTMLElement {
     menu.innerHTML = `
       ${(entry.has_local)
         ? '<div class="context-menu-item" data-context="open-local">Open Locally</div>'
-        : '<div class="context-menu-item" data-context="download">Download</div>'
+        : ''
       }
       <div class="context-menu-item" data-context="preview">Preview</div>
       <div class="context-menu-item" data-context="rename">Rename</div>
@@ -757,12 +822,15 @@ class AeorFileBrowser extends HTMLElement {
     menu.querySelectorAll('.context-menu-item').forEach((item) => {
       item.addEventListener('click', () => {
         menu.remove();
+        const activeTab = this._activeTab();
         if (item.dataset.context === 'preview') {
-          this._preview_entry = entry;
-          this._preview_component = null;
+          if (activeTab) {
+            activeTab.preview_entry = entry;
+            activeTab.preview_component = null;
+          }
           this._loadPreview();
         } else {
-          this._preview_entry = entry;
+          if (activeTab) activeTab.preview_entry = entry;
           this._handlePreviewAction(item.dataset.context);
         }
       });
@@ -775,6 +843,19 @@ class AeorFileBrowser extends HTMLElement {
       }
     };
     setTimeout(() => document.addEventListener('click', closeMenu), 0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Utilities
+  // ---------------------------------------------------------------------------
+  _syncBadge(entry) {
+    switch (entry.sync_status) {
+      case 'synced':       return ['synced', 'Synced'];
+      case 'pending_pull': return ['pending', 'Pending pull'];
+      case 'pending_push': return ['pending', 'Pending push'];
+      case 'error':        return ['error', 'Sync error'];
+      default:             return ['not-synced', 'Not synced'];
+    }
   }
 
   _truncate(str, max) {
