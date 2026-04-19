@@ -381,6 +381,7 @@ class AeorFileBrowser extends HTMLElement {
   _switchTab(tabId) {
     if (this._active_tab_id === tabId) return;
     this._active_tab_id = tabId;
+    this._preview_entry = null;
     this._saveState();
     const tab = this._tabs.find((t) => t.id === tabId);
     if (tab)
@@ -410,6 +411,7 @@ class AeorFileBrowser extends HTMLElement {
     const tab = this._tabs.find((t) => t.id === this._active_tab_id);
     if (!tab) return;
     tab.path = path;
+    this._preview_entry = null; // Close preview when navigating
     this._saveState();
     this._fetchListing(tab.relationship_id, path);
   }

@@ -162,21 +162,23 @@ fn guess_content_type(path: &str) -> &'static str {
 
 /// Compute the full remote path for a relative path within a relationship.
 fn compute_remote_path(relationship: &SyncRelationship, relative_path: &str) -> String {
-  let base = relationship.remote_path.trim_end_matches('/');
-  if relative_path.is_empty() {
+  let base     = relationship.remote_path.trim_end_matches('/');
+  let relative = relative_path.trim_start_matches('/');
+  if relative.is_empty() {
     format!("{}/", base)
   } else {
-    format!("{}/{}", base, relative_path)
+    format!("{}/{}", base, relative)
   }
 }
 
 /// Compute the local subdirectory path string for a relative path within a relationship.
 fn compute_local_subpath(relationship: &SyncRelationship, relative_path: &str) -> String {
-  let base = relationship.local_path.trim_end_matches('/');
-  if relative_path.is_empty() {
+  let base     = relationship.local_path.trim_end_matches('/');
+  let relative = relative_path.trim_start_matches('/');
+  if relative.is_empty() {
     format!("{}/", base)
   } else {
-    format!("{}/{}", base, relative_path)
+    format!("{}/{}", base, relative)
   }
 }
 
