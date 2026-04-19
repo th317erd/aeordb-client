@@ -170,7 +170,7 @@ class AeorSync extends HTMLElement {
         <td>${relationship.name}</td>
         <td>${relationship.remote_path}</td>
         <td>${relationship.direction}</td>
-        <td><span class="badge ${(relationship.enabled) ? 'success' : 'warning'}">${(relationship.enabled) ? 'enabled' : 'disabled'}</span></td>
+        <td><span class="badge ${(relationship.enabled) ? 'success' : 'warning'}" style="min-width: 60px; text-align: center; display: inline-block;">${(relationship.enabled) ? 'enabled' : 'disabled'}</span></td>
         <td class="actions">
           <button class="success small trigger-btn" data-id="${relationship.id}">Sync</button>
           <button class="secondary small edit-btn" data-id="${relationship.id}">Edit</button>

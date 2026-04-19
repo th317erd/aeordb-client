@@ -286,8 +286,8 @@ fn main() -> anyhow::Result<()> {
               tauri::WebviewUrl::External(parsed_url),
             )
             .title("AeorDB Client")
-            .inner_size(1024.0, 768.0)
-            .min_inner_size(800.0, 600.0)
+            .inner_size(1200.0, 850.0)
+            .min_inner_size(900.0, 650.0)
             .build()?;
 
             // --- Close-to-tray: hide window on close instead of quitting ---
