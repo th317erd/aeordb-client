@@ -755,12 +755,25 @@ td {
   left: 220px;
   right: 0;
   background-color: var(--bg-secondary);
-  border-top: 1px solid var(--border);
+  border-top: 2px solid var(--border);
   overflow: hidden;
   z-index: 100;
-  max-height: 50vh;
+  height: 40vh;
+  min-height: 150px;
+  max-height: 80vh;
   display: flex;
   flex-direction: column;
+}
+
+.preview-resize-handle {
+  height: 6px;
+  cursor: ns-resize;
+  background: linear-gradient(to bottom, var(--border) 0%, transparent 100%);
+  flex-shrink: 0;
+}
+
+.preview-resize-handle:hover {
+  background: linear-gradient(to bottom, var(--accent) 0%, transparent 100%);
 }
 
 .preview-header {
@@ -791,15 +804,16 @@ td {
 
 .preview-image {
   max-width: 100%;
-  max-height: 460px;
+  max-height: 100%;
   display: block;
   margin: 0 auto;
   border-radius: 4px;
+  object-fit: contain;
 }
 
 .preview-media {
   width: 100%;
-  max-height: 400px;
+  max-height: 100%;
   border-radius: 4px;
 }
 

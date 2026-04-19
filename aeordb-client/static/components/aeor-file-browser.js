@@ -388,6 +388,31 @@ class AeorFileBrowser extends HTMLElement {
       uploadButton.addEventListener('click', () => uploadInput.click());
       uploadInput.addEventListener('change', (event) => this._handleUpload(event));
     }
+
+    // Preview panel resize handle
+    const resizeHandle = this.querySelector('#preview-resize-handle');
+    const previewPanel = this.querySelector('#preview-panel');
+    if (resizeHandle && previewPanel) {
+      resizeHandle.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        const startY      = event.clientY;
+        const startHeight = previewPanel.offsetHeight;
+
+        const onMouseMove = (moveEvent) => {
+          const delta     = startY - moveEvent.clientY;
+          const newHeight = Math.max(150, Math.min(window.innerHeight * 0.8, startHeight + delta));
+          previewPanel.style.height = newHeight + 'px';
+        };
+
+        const onMouseUp = () => {
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      });
+    }
   }
 
   _openTab(relationshipId, relationshipName) {
@@ -547,7 +572,8 @@ class AeorFileBrowser extends HTMLElement {
     const componentName = this._preview_component;
 
     return `
-      <div class="preview-panel">
+      <div class="preview-panel" id="preview-panel">
+        <div class="preview-resize-handle" id="preview-resize-handle"></div>
         <div class="preview-header">
           <h3>${escapeHtml(entry.name)}</h3>
           <div class="preview-actions">
