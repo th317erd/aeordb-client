@@ -398,10 +398,12 @@ class AeorFileBrowser extends HTMLElement {
         const startY      = event.clientY;
         const startHeight = previewPanel.offsetHeight;
 
+        const self = this;
         const onMouseMove = (moveEvent) => {
           const delta     = startY - moveEvent.clientY;
           const newHeight = Math.max(150, Math.min(window.innerHeight * 0.8, startHeight + delta));
           previewPanel.style.height = newHeight + 'px';
+          self._updateContentPadding();
         };
 
         const onMouseUp = () => {
@@ -617,6 +619,20 @@ class AeorFileBrowser extends HTMLElement {
         if (previewEl.load) previewEl.load();
       }
     }
+
+    this._updateContentPadding();
+  }
+
+  _updateContentPadding() {
+    const content = this.closest('.app-content');
+    if (!content) return;
+
+    const panel = this.querySelector('#preview-panel');
+    if (panel) {
+      content.style.paddingBottom = panel.offsetHeight + 'px';
+    } else {
+      content.style.paddingBottom = '';
+    }
   }
 
   async _handlePreviewAction(action) {
@@ -679,7 +695,9 @@ class AeorFileBrowser extends HTMLElement {
 
       case 'close-preview':
         this._preview_entry = null;
+        this._preview_component = null;
         this.render();
+        this._updateContentPadding();
         break;
     }
   }
