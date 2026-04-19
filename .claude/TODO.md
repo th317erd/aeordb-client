@@ -1,19 +1,24 @@
-# TODO — File Browser Phase 3
+# TODO — Preview Components + Sync Dot Fix
 
-## Track A: Infinite scroll with pagination
-- [ ] Update browse API to pass limit/offset to remote and return pagination metadata
-- [ ] Update file browser UI to fetch pages on scroll
-- [ ] Virtual DOM recycling (only render visible rows/cards)
-- [ ] Loading indicator at bottom while fetching next page
+## Phase 1: Preview loader + fallback + default preview
+- [ ] Create previews/ directory under static/components/
+- [ ] Build preview loader with three-tier fallback (exact → group → default)
+- [ ] aeor-preview-default.js — binary metadata preview (size, type, versions, hash)
+- [ ] Refactor file browser to use dynamic preview loading
+- [ ] Remove old inline _renderPreviewPanel logic
 
-## Track B: File interactions
-- [ ] File preview panel (click file → show preview)
-  - Text: rendered content
-  - Images: <img> from /api/v1/files/{id}/{path}
-  - Video/audio: <video>/<audio> tags
-  - Binary: metadata only
-- [ ] "Open Locally" button → POST /api/v1/files/{id}/open
-- [ ] Upload button → file picker → PUT /api/v1/files/{id}/{path}
-- [ ] Delete with confirmation → DELETE /api/v1/files/{id}/{path}
-- [ ] Rename → prompt for new name → remote_client.rename_file()
-- [ ] Context menu (right-click: open, preview, rename, delete, download)
+## Phase 2: Group preview components
+- [ ] aeor-preview-image.js — <img> for all standard image types
+- [ ] aeor-preview-text.js — <pre><code> for plain text, code files
+- [ ] aeor-preview-video.js — <video> player
+- [ ] aeor-preview-audio.js — <audio> player
+
+## Phase 3: Text subtypes
+- [ ] Markdown rendering in aeor-preview-text.js (detect .md, render HTML)
+- [ ] Code block styling for source files
+
+## Fix: Sync dots
+- [ ] Green dot = file exists locally (use has_local, not sync_status)
+- [ ] No dot / hidden = not local
+- [ ] "Download" only shows when NOT local
+- [ ] "Open Locally" only shows when local

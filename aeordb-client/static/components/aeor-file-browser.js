@@ -1,7 +1,7 @@
 'use strict';
 
 import {
-  formatSize, formatDate, fileIcon, syncBadgeClass,
+  formatSize, formatDate, fileIcon,
   escapeHtml, escapeAttr, isImageFile, isVideoFile, isAudioFile, isTextFile,
 } from './aeor-file-view-shared.js';
 
@@ -189,8 +189,8 @@ class AeorFileBrowser extends HTMLElement {
       const size      = (isDir) ? '\u2014' : formatSize(entry.size);
       const created   = formatDate(entry.created_at);
       const modified  = formatDate(entry.updated_at);
-      const syncClass = syncBadgeClass(entry.sync_status);
-      const syncTitle = entry.sync_status || 'unknown';
+      const syncClass = (entry.has_local) ? 'synced' : 'not-synced';
+      const syncTitle = (entry.has_local) ? 'Available locally' : 'Remote only';
 
       return `
         <tr class="file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}">
@@ -219,7 +219,8 @@ class AeorFileBrowser extends HTMLElement {
     const cards = tab.entries.map((entry) => {
       const isDir     = (entry.entry_type === 3);
       const icon      = fileIcon(entry.entry_type);
-      const syncClass = syncBadgeClass(entry.sync_status);
+      const syncClass = (entry.has_local) ? 'synced' : 'not-synced';
+      const syncTitle = (entry.has_local) ? 'Available locally' : 'Remote only';
       const size      = (isDir) ? 'Folder' : formatSize(entry.size);
 
       let thumbnail = `<div class="grid-card-icon">${icon}</div>`;
@@ -232,7 +233,7 @@ class AeorFileBrowser extends HTMLElement {
 
       return `
         <div class="grid-card file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}">
-          <span class="sync-badge ${syncClass}" title="${entry.sync_status || 'unknown'}"></span>
+          <span class="sync-badge ${syncClass}" title="${syncTitle}"></span>
           ${thumbnail}
           <div class="grid-card-name" title="${escapeAttr(entry.name)}">${escapeHtml(this._truncate(entry.name, 20))}</div>
           <div class="grid-card-meta">${size}</div>
@@ -542,8 +543,10 @@ class AeorFileBrowser extends HTMLElement {
         <div class="preview-header">
           <h3>${escapeHtml(entry.name)}</h3>
           <div class="preview-actions">
-            ${(entry.has_local) ? '<button class="primary small" data-action="open-local">Open Locally</button>' : ''}
-            <button class="secondary small" data-action="download">Download</button>
+            ${(entry.has_local)
+              ? '<button class="primary small" data-action="open-local">Open Locally</button>'
+              : '<button class="secondary small" data-action="download">Download</button>'
+            }
             <button class="secondary small" data-action="rename">Rename</button>
             <button class="danger small" data-action="delete">Delete</button>
             <button class="secondary small" data-action="close-preview">✕</button>
@@ -672,9 +675,11 @@ class AeorFileBrowser extends HTMLElement {
     menu.style.left = x + 'px';
     menu.style.top = y + 'px';
     menu.innerHTML = `
-      ${(entry.has_local) ? '<div class="context-menu-item" data-context="open-local">Open Locally</div>' : ''}
+      ${(entry.has_local)
+        ? '<div class="context-menu-item" data-context="open-local">Open Locally</div>'
+        : '<div class="context-menu-item" data-context="download">Download</div>'
+      }
       <div class="context-menu-item" data-context="preview">Preview</div>
-      <div class="context-menu-item" data-context="download">Download</div>
       <div class="context-menu-item" data-context="rename">Rename</div>
       <div class="context-menu-item context-menu-danger" data-context="delete">Delete</div>
     `;
