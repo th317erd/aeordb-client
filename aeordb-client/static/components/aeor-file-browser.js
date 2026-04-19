@@ -629,9 +629,14 @@ class AeorFileBrowser extends HTMLElement {
 
     const panel = this.querySelector('#preview-panel');
     if (panel) {
-      content.style.paddingBottom = panel.offsetHeight + 'px';
+      const panelHeight = panel.offsetHeight;
+      content.style.paddingBottom = '24px';
+      content.style.height = `calc(100vh - ${panelHeight}px)`;
+      content.style.maxHeight = `calc(100vh - ${panelHeight}px)`;
     } else {
       content.style.paddingBottom = '';
+      content.style.height = '';
+      content.style.maxHeight = '';
     }
   }
 
