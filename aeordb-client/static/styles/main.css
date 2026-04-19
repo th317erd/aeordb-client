@@ -707,11 +707,17 @@ td {
    ========================================================================== */
 
 .preview-panel {
+  position: fixed;
+  bottom: 0;
+  left: 220px;
+  right: 0;
   background-color: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  margin-top: 16px;
+  border-top: 1px solid var(--border);
   overflow: hidden;
+  z-index: 100;
+  max-height: 50vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .preview-header {
@@ -736,7 +742,7 @@ td {
 
 .preview-content {
   padding: 16px;
-  max-height: 500px;
+  flex: 1;
   overflow: auto;
 }
 

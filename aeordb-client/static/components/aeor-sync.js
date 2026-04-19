@@ -144,15 +144,15 @@ class AeorSync extends HTMLElement {
         </div>
         <div class="form-row">
           <label>Delete Propagation</label>
-          <div style="display: flex; gap: 24px; margin-top: 8px;">
-            <label style="font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 8px; cursor: pointer;">
+          <div style="margin-top: 8px;">
+            <div style="margin-bottom: 8px;">
               <input type="checkbox" id="form-delete-local-to-remote" ${(relationship.delete_propagation && relationship.delete_propagation.local_to_remote) ? 'checked' : ''}>
-              Local deletes → Remote
-            </label>
-            <label style="font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <span style="font-size: 13px; color: var(--text-secondary); margin-left: 6px;">When a file is deleted locally, also delete it on the remote</span>
+            </div>
+            <div>
               <input type="checkbox" id="form-delete-remote-to-local" ${(relationship.delete_propagation && relationship.delete_propagation.remote_to_local) ? 'checked' : ''}>
-              Remote deletes → Local
-            </label>
+              <span style="font-size: 13px; color: var(--text-secondary); margin-left: 6px;">When a file is deleted on the remote, also delete it locally</span>
+            </div>
           </div>
         </div>
         <div class="form-actions">
@@ -170,7 +170,7 @@ class AeorSync extends HTMLElement {
         <td>${relationship.name}</td>
         <td>${relationship.remote_path}</td>
         <td>${relationship.direction}</td>
-        <td><span class="badge ${(relationship.enabled) ? 'success' : 'warning'}" style="min-width: 60px; text-align: center; display: inline-block;">${(relationship.enabled) ? 'enabled' : 'disabled'}</span></td>
+        <td><span class="badge ${(relationship.enabled) ? 'success' : 'warning'}" style="min-width: 72px; text-align: center; display: inline-block;">${(relationship.enabled) ? 'enabled' : 'disabled'}</span></td>
         <td class="actions">
           <button class="success small trigger-btn" data-id="${relationship.id}">Sync</button>
           <button class="secondary small edit-btn" data-id="${relationship.id}">Edit</button>
