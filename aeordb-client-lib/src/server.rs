@@ -70,6 +70,7 @@ pub fn build_router(state: AppState) -> Router {
     .route("/browse/{relationship_id}/{*path}", get(files::browse))
     .route("/files/{relationship_id}/{*path}", get(files::serve_file).put(files::upload_file).delete(files::delete_file))
     .route("/files/{relationship_id}/open", post(files::open_locally))
+    .route("/files/{relationship_id}/rename", post(files::rename_file))
     .route("/open-folder", post(system::open_folder))
     .route("/shutdown", post(system::shutdown));
 

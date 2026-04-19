@@ -23,6 +23,15 @@ pub struct BrowseResponse {
   pub remote_path:       String,
   pub local_path:        String,
   pub entries:           Vec<BrowseEntry>,
+  pub total:             Option<u64>,
+  pub limit:             Option<u64>,
+  pub offset:            Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BrowseQuery {
+  pub limit:  Option<u64>,
+  pub offset: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -180,6 +189,7 @@ fn compute_local_subpath(relationship: &SyncRelationship, relative_path: &str) -
 pub async fn browse(
   State(state): State<AppState>,
   AxumPath(params): AxumPath<BrowseParams>,
+  Query(query): Query<BrowseQuery>,
 ) -> Result<Json<BrowseResponse>, ApiError> {
   let relationship_id = &params.relationship_id;
   let relative_path = params.path.as_deref().unwrap_or("");
@@ -192,15 +202,15 @@ pub async fn browse(
   tracing::info!("browsing {} (remote: {})", relationship_id, remote_path);
 
   let remote_client = RemoteClient::from_connection(&connection);
-  let remote_entries = remote_client
-    .list_directory(&remote_path)
+  let listing = remote_client
+    .list_directory_paginated(&remote_path, query.limit, query.offset)
     .await
     .map_err(|error| api_error(StatusCode::BAD_GATEWAY, &error.to_string()))?;
 
   let metadata_store = SyncMetadataStore::new(&state.state_store);
 
-  let mut entries = Vec::with_capacity(remote_entries.len());
-  for entry in remote_entries {
+  let mut entries = Vec::with_capacity(listing.items.len());
+  for entry in listing.items {
     let entry_remote_path = format!("{}{}", remote_path.trim_end_matches('/'), format!("/{}", entry.name));
 
     // Determine sync status
@@ -238,6 +248,9 @@ pub async fn browse(
     remote_path,
     local_path:        local_subpath,
     entries,
+    total:             listing.total,
+    limit:             listing.limit,
+    offset:            listing.offset,
   }))
 }
 
@@ -401,5 +414,33 @@ pub async fn open_locally(
 
   Ok(Json(serde_json::json!({
     "message": format!("opened {}", local_path.display()),
+  })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RenameRequest {
+  pub from: String,
+  pub to:   String,
+}
+
+/// POST /api/v1/files/{relationship_id}/rename — rename/move a file on the remote.
+pub async fn rename_file(
+  State(state): State<AppState>,
+  AxumPath(relationship_id): AxumPath<String>,
+  Json(request): Json<RenameRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+  let (_, connection) = load_relationship_and_connection(&state, &relationship_id).await?;
+
+  let remote_client = RemoteClient::from_connection(&connection);
+
+  remote_client.rename_file(&request.from, &request.to).await
+    .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
+
+  tracing::info!("renamed {} to {}", request.from, request.to);
+
+  Ok(Json(serde_json::json!({
+    "renamed": true,
+    "from":    request.from,
+    "to":      request.to,
   })))
 }

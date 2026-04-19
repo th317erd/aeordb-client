@@ -65,3 +65,12 @@ export function isAudioFile(name) {
   const ext = fileExtension(name);
   return ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a'].includes(ext);
 }
+
+export function isTextFile(name) {
+  const ext = fileExtension(name);
+  return ['txt', 'md', 'json', 'yaml', 'yml', 'toml', 'xml', 'csv',
+    'html', 'htm', 'css', 'js', 'mjs', 'ts', 'jsx', 'tsx',
+    'rs', 'py', 'go', 'java', 'c', 'cpp', 'h', 'hpp',
+    'sh', 'bash', 'zsh', 'fish', 'conf', 'cfg', 'ini', 'env',
+    'log', 'sql', 'graphql', 'proto', 'dockerfile'].includes(ext);
+}
