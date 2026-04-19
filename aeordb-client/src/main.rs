@@ -310,8 +310,10 @@ fn main() -> anyhow::Result<()> {
             let icon = Image::from_bytes(icon_bytes)
               .unwrap_or_else(|_| Image::new(&[255, 255, 255, 255], 1, 1));
 
-            let window_for_open    = window.clone();
+            let window_for_open     = window.clone();
             let app_handle_for_quit = app.handle().clone();
+            let api_base            = format!("http://{}", bound_addr);
+            let paused              = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
             let open_item  = MenuItemBuilder::with_id("open", "Open AeorDB Client").build(app)?;
             let pause_item = MenuItemBuilder::with_id("pause", "Pause All Sync").build(app)?;
@@ -325,19 +327,40 @@ fn main() -> anyhow::Result<()> {
               .item(&quit_item)
               .build()?;
 
+            let paused_clone = paused.clone();
+
             TrayIconBuilder::new()
               .icon(icon)
               .tooltip("AeorDB Client")
               .menu(&tray_menu)
-              .on_menu_event(move |app, event| {
+              .on_menu_event(move |_app, event| {
                 match event.id().as_ref() {
                   "open" => {
                     let _ = window_for_open.show();
                     let _ = window_for_open.set_focus();
                   }
                   "pause" => {
-                    // TODO: toggle pause/resume via API
-                    tracing::info!("pause/resume sync requested from tray");
+                    let is_paused = paused_clone.load(std::sync::atomic::Ordering::Relaxed);
+                    let endpoint = if is_paused {
+                      format!("{}/api/v1/sync/resume-all", api_base)
+                    } else {
+                      format!("{}/api/v1/sync/pause-all", api_base)
+                    };
+
+                    match reqwest::blocking::Client::new().post(&endpoint).send() {
+                      Ok(_) => {
+                        let new_paused = !is_paused;
+                        paused_clone.store(new_paused, std::sync::atomic::Ordering::Relaxed);
+
+                        let new_text = if new_paused { "Resume All Sync" } else { "Pause All Sync" };
+                        let _ = pause_item.set_text(new_text);
+
+                        tracing::info!("sync {}", if new_paused { "paused" } else { "resumed" });
+                      }
+                      Err(error) => {
+                        tracing::error!("failed to toggle sync: {}", error);
+                      }
+                    }
                   }
                   "quit" => {
                     tracing::info!("quit requested from tray");

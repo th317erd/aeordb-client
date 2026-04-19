@@ -237,6 +237,20 @@ pub async fn stop_sync(
     })
 }
 
+pub async fn pause_all_sync(
+  State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+  state.sync_runner.stop_all().await;
+  Json(serde_json::json!({ "message": "all sync runners paused" }))
+}
+
+pub async fn resume_all_sync(
+  State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+  state.sync_runner.start_all_enabled().await;
+  Json(serde_json::json!({ "message": "all enabled sync runners resumed" }))
+}
+
 pub async fn sync_runner_status(
   State(state): State<AppState>,
 ) -> Json<Vec<crate::sync::runner::SyncRunnerStatus>> {

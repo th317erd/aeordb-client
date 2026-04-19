@@ -64,6 +64,8 @@ pub fn build_router(state: AppState) -> Router {
     .route("/sync/{id}/start", post(sync::start_sync))
     .route("/sync/{id}/stop", post(sync::stop_sync))
     .route("/sync/runner/status", get(sync::sync_runner_status))
+    .route("/sync/pause-all", post(sync::pause_all_sync))
+    .route("/sync/resume-all", post(sync::resume_all_sync))
     .route("/conflicts", get(conflicts::list_conflicts))
     .route("/conflicts/resolve", post(conflicts::resolve_conflict_handler))
     .route("/conflicts/dismiss", post(conflicts::dismiss_conflict_handler))
