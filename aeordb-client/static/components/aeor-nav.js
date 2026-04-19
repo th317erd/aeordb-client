@@ -7,6 +7,7 @@ class AeorNav extends HTMLElement {
 
   constructor() {
     super();
+    this._cachedVersion = null;
   }
 
   connectedCallback() {
@@ -70,10 +71,15 @@ class AeorNav extends HTMLElement {
   }
 
   async _fetchVersion() {
+    if (this._cachedVersion) return;
+
     try {
-      const response      = await fetch('/api/v1/status');
-      const data          = await response.json();
-      this._version       = data.version;
+      const response = await fetch('/api/v1/status');
+      if (!response.ok) return;
+
+      const data           = await response.json();
+      this._version        = data.version;
+      this._cachedVersion  = data.version;
       const versionElement = this.querySelector('.nav-version');
       if (versionElement)
         versionElement.textContent = `v${data.version}`;

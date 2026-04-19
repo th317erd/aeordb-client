@@ -6,51 +6,34 @@ use crate::connections::{
   ConnectionManager, ConnectionTestResult, CreateConnectionRequest,
   RemoteConnection, UpdateConnectionRequest,
 };
+use crate::error::ClientError;
 use crate::server::AppState;
 
 pub async fn list_connections(
   State(state): State<AppState>,
-) -> Result<Json<Vec<RemoteConnection>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<RemoteConnection>>, ClientError> {
   let manager = ConnectionManager::new(&state.config_store);
-
-  manager.list()
-    .map(Json)
-    .map_err(|error| (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    ))
+  manager.list().map(Json)
 }
 
 pub async fn create_connection(
   State(state): State<AppState>,
   Json(request): Json<CreateConnectionRequest>,
-) -> Result<(StatusCode, Json<RemoteConnection>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<RemoteConnection>), ClientError> {
   let manager = ConnectionManager::new(&state.config_store);
-
   manager.create(request)
     .map(|connection| (StatusCode::CREATED, Json(connection)))
-    .map_err(|error| (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    ))
 }
 
 pub async fn get_connection(
   State(state): State<AppState>,
   Path(id): Path<String>,
-) -> Result<Json<RemoteConnection>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<RemoteConnection>, ClientError> {
   let manager = ConnectionManager::new(&state.config_store);
 
-  match manager.get(&id) {
-    Ok(Some(connection)) => Ok(Json(connection)),
-    Ok(None) => Err((
-      StatusCode::NOT_FOUND,
-      Json(serde_json::json!({ "error": format!("connection not found: {}", id) })),
-    )),
-    Err(error) => Err((
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    )),
+  match manager.get(&id)? {
+    Some(connection) => Ok(Json(connection)),
+    None => Err(ClientError::NotFound(format!("connection not found: {}", id))),
   }
 }
 
@@ -58,53 +41,23 @@ pub async fn update_connection(
   State(state): State<AppState>,
   Path(id): Path<String>,
   Json(request): Json<UpdateConnectionRequest>,
-) -> Result<Json<RemoteConnection>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<RemoteConnection>, ClientError> {
   let manager = ConnectionManager::new(&state.config_store);
-
-  manager.update(&id, request)
-    .map(Json)
-    .map_err(|error| {
-      let status = if error.to_string().contains("not found") {
-        StatusCode::NOT_FOUND
-      } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-      };
-      (status, Json(serde_json::json!({ "error": error.to_string() })))
-    })
+  manager.update(&id, request).map(Json)
 }
 
 pub async fn delete_connection(
   State(state): State<AppState>,
   Path(id): Path<String>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<StatusCode, ClientError> {
   let manager = ConnectionManager::new(&state.config_store);
-
-  manager.delete(&id)
-    .map(|_| StatusCode::NO_CONTENT)
-    .map_err(|error| {
-      let status = if error.to_string().contains("not found") {
-        StatusCode::NOT_FOUND
-      } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-      };
-      (status, Json(serde_json::json!({ "error": error.to_string() })))
-    })
+  manager.delete(&id).map(|_| StatusCode::NO_CONTENT)
 }
 
 pub async fn test_connection(
   State(state): State<AppState>,
   Path(id): Path<String>,
-) -> Result<Json<ConnectionTestResult>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<ConnectionTestResult>, ClientError> {
   let manager = ConnectionManager::new(&state.config_store);
-
-  manager.test_connection(&id).await
-    .map(Json)
-    .map_err(|error| {
-      let status = if error.to_string().contains("not found") {
-        StatusCode::NOT_FOUND
-      } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-      };
-      (status, Json(serde_json::json!({ "error": error.to_string() })))
-    })
+  manager.test_connection(&id).await.map(Json)
 }

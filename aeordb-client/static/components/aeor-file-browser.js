@@ -3,6 +3,7 @@
 import {
   formatSize, formatDate, fileIcon,
   escapeHtml, escapeAttr, isImageFile, isVideoFile, isAudioFile, isTextFile,
+  ENTRY_TYPE_DIR, directionArrow,
 } from './aeor-file-view-shared.js';
 
 async function loadPreviewComponent(contentType) {
@@ -17,18 +18,24 @@ async function loadPreviewComponent(contentType) {
   try {
     await import(`./previews/${exact}.js`);
     if (customElements.get(exact)) return exact;
-  } catch {}
+  } catch (error) {
+    console.warn(`Preview component load failed for ${exact}:`, error);
+  }
 
   // Tier 2: group component
   try {
     await import(`./previews/${grouped}.js`);
     if (customElements.get(grouped)) return grouped;
-  } catch {}
+  } catch (error) {
+    console.warn(`Preview component load failed for ${grouped}:`, error);
+  }
 
   // Tier 3: default fallback
   try {
     await import('./previews/aeor-preview-default.js');
-  } catch {}
+  } catch (error) {
+    console.warn('Default preview component load failed:', error);
+  }
 
   return 'aeor-preview-default';
 }
@@ -159,7 +166,7 @@ class AeorFileBrowser extends HTMLElement {
     const cards = this._relationships.map((rel) => {
       const remoteName = rel.remote_path.replace(/\/$/, '').split('/').pop() || rel.remote_path;
       const localName  = rel.local_path.split('/').pop() || rel.local_path;
-      const arrow      = (rel.direction === 'pull_only') ? '\u2190' : (rel.direction === 'push_only') ? '\u2192' : '\u2194';
+      const arrow      = directionArrow(rel.direction);
       const displayName = rel.name || `${remoteName} ${arrow} ${localName}`;
 
       return `
@@ -244,7 +251,7 @@ class AeorFileBrowser extends HTMLElement {
 
   _renderListViewFor(tab) {
     const rows = tab.entries.map((entry) => {
-      const isDir     = (entry.entry_type === 3);
+      const isDir     = (entry.entry_type === ENTRY_TYPE_DIR);
       const icon      = fileIcon(entry.entry_type);
       const size      = (isDir) ? '\u2014' : formatSize(entry.size);
       const created   = formatDate(entry.created_at);
@@ -273,7 +280,7 @@ class AeorFileBrowser extends HTMLElement {
 
   _renderGridViewFor(tab) {
     const cards = tab.entries.map((entry) => {
-      const isDir     = (entry.entry_type === 3);
+      const isDir     = (entry.entry_type === ENTRY_TYPE_DIR);
       const icon      = fileIcon(entry.entry_type);
       const [syncClass, syncTitle] = this._syncBadge(entry);
       const size      = (isDir) ? 'Folder' : formatSize(entry.size);
@@ -464,7 +471,7 @@ class AeorFileBrowser extends HTMLElement {
     container.querySelectorAll('.file-entry').forEach((el) => {
       el.addEventListener('click', () => {
         const entryType = parseInt(el.dataset.type, 10);
-        if (entryType === 3) {
+        if (entryType === ENTRY_TYPE_DIR) {
           const newPath = tab.path.replace(/\/$/, '') + '/' + el.dataset.name + '/';
           this._navigateTo(newPath);
         } else {
@@ -478,7 +485,7 @@ class AeorFileBrowser extends HTMLElement {
       el.addEventListener('contextmenu', (event) => {
         event.preventDefault();
         const entryType = parseInt(el.dataset.type, 10);
-        if (entryType === 3) return;
+        if (entryType === ENTRY_TYPE_DIR) return;
 
         const entry = tab.entries.find((e) => e.name === el.dataset.name);
         if (!entry) return;
@@ -624,7 +631,8 @@ class AeorFileBrowser extends HTMLElement {
   // ---------------------------------------------------------------------------
   async _fetchRelationships() {
     try {
-      const response      = await fetch('/api/v1/sync');
+      const response = await fetch('/api/v1/sync');
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       this._relationships = await response.json();
       // Only full-render if we're on the selector screen
       if (!this._active_tab_id) this.render();
@@ -650,6 +658,7 @@ class AeorFileBrowser extends HTMLElement {
         : `/api/v1/browse/${tab.relationship_id}`;
       const url = `${baseUrl}?limit=${tab.page_size || 100}&offset=0`;
       const response = await fetch(url);
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       const data = await response.json();
       tab.entries = data.entries || [];
       tab.total = (data.total != null) ? data.total : tab.entries.length;
@@ -678,6 +687,7 @@ class AeorFileBrowser extends HTMLElement {
         : `/api/v1/browse/${tab.relationship_id}`;
       const url = `${baseUrl}?limit=${tab.page_size || 100}&offset=${tab.entries.length}`;
       const response = await fetch(url);
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       const data = await response.json();
       const newEntries = data.entries || [];
       for (const entry of newEntries) {
@@ -748,11 +758,12 @@ class AeorFileBrowser extends HTMLElement {
     const toPath = tab.path.replace(/\/$/, '') + '/' + newName;
 
     try {
-      await fetch(`/api/v1/files/${tab.relationship_id}/rename`, {
+      const response = await fetch(`/api/v1/files/${tab.relationship_id}/rename`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ from: fromPath, to: toPath }),
       });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       tab.preview_entry.name = newName;
       // Update the input's original value to the new name
       const container = this.querySelector(`#tab-content-${tab.id}`);
@@ -776,22 +787,25 @@ class AeorFileBrowser extends HTMLElement {
     const filePath = tab.path.replace(/\/$/, '') + '/' + entry.name;
 
     switch (action) {
-      case 'open-local':
-        await fetch(`/api/v1/files/${tab.relationship_id}/open`, {
+      case 'open-local': {
+        const openResponse = await fetch(`/api/v1/files/${tab.relationship_id}/open`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: filePath.replace(/^\//, '') }),
         });
+        if (!openResponse.ok)
+          window.aeorToast(`Failed to open file: ${openResponse.status}`, 'error');
         break;
-
+      }
 
       case 'delete':
         if (!confirm(`Delete "${entry.name}"? This cannot be undone.`)) break;
         try {
           const encodedPath = encodeURIComponent(filePath);
-          await fetch(`/api/v1/files/${tab.relationship_id}/${encodedPath}`, {
+          const deleteResponse = await fetch(`/api/v1/files/${tab.relationship_id}/${encodedPath}`, {
             method: 'DELETE',
           });
+          if (!deleteResponse.ok) throw new Error(`Request failed: ${deleteResponse.status}`);
           tab.preview_entry = null;
           this._fetchListing();
         } catch (error) {
@@ -818,11 +832,12 @@ class AeorFileBrowser extends HTMLElement {
 
       try {
         const arrayBuffer = await file.arrayBuffer();
-        await fetch(`/api/v1/files/${tab.relationship_id}/${encodedPath}`, {
+        const uploadResponse = await fetch(`/api/v1/files/${tab.relationship_id}/${encodedPath}`, {
           method: 'PUT',
           headers: { 'Content-Type': file.type || 'application/octet-stream' },
           body: arrayBuffer,
         });
+        if (!uploadResponse.ok) throw new Error(`Request failed: ${uploadResponse.status}`);
       } catch (error) {
         window.aeorToast(`Upload failed for ${file.name}: ${error.message}`, 'error');
       }

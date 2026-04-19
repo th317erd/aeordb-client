@@ -77,10 +77,12 @@ class AeorToasts extends HTMLElement {
   async _pollActivity() {
     try {
       const response = await fetch('/api/v1/sync');
+      if (!response.ok) return;
       const relationships = await response.json();
 
       for (const rel of relationships) {
         const activityResponse = await fetch(`/api/v1/sync/${rel.id}/activity`);
+        if (!activityResponse.ok) continue;
         const events = await activityResponse.json();
 
         if (events.length === 0) continue;

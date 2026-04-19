@@ -1,8 +1,8 @@
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::response::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::error::ClientError;
 use crate::server::AppState;
 
 #[derive(Serialize)]
@@ -26,11 +26,8 @@ pub struct UpdateSettingsRequest {
 
 pub async fn get_settings(
   State(state): State<AppState>,
-) -> Result<Json<SettingsResponse>, (StatusCode, Json<serde_json::Value>)> {
-  let config = state.config_store.get().map_err(|error| (
-    StatusCode::INTERNAL_SERVER_ERROR,
-    Json(serde_json::json!({ "error": error.to_string() })),
-  ))?;
+) -> Result<Json<SettingsResponse>, ClientError> {
+  let config = state.config_store.get()?;
 
   Ok(Json(SettingsResponse {
     sync_interval_seconds: config.settings.sync_interval_seconds,
@@ -44,13 +41,12 @@ pub async fn get_settings(
 pub async fn update_settings(
   State(state): State<AppState>,
   Json(request): Json<UpdateSettingsRequest>,
-) -> Result<Json<SettingsResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<SettingsResponse>, ClientError> {
   // Validate sync_interval_seconds if provided.
   if let Some(interval) = request.sync_interval_seconds {
     if interval < 10 || interval > 3600 {
-      return Err((
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({ "error": "sync_interval_seconds must be between 10 and 3600" })),
+      return Err(ClientError::BadRequest(
+        "sync_interval_seconds must be between 10 and 3600".to_string(),
       ));
     }
   }
@@ -69,16 +65,10 @@ pub async fn update_settings(
         config.settings.client_name = Some(client_name.clone());
       }
     }
-  }).map_err(|error| (
-    StatusCode::INTERNAL_SERVER_ERROR,
-    Json(serde_json::json!({ "error": error.to_string() })),
-  ))?;
+  })?;
 
   // Re-read to return the updated state.
-  let config = state.config_store.get().map_err(|error| (
-    StatusCode::INTERNAL_SERVER_ERROR,
-    Json(serde_json::json!({ "error": error.to_string() })),
-  ))?;
+  let config = state.config_store.get()?;
 
   Ok(Json(SettingsResponse {
     sync_interval_seconds: config.settings.sync_interval_seconds,

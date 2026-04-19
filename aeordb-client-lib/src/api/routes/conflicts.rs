@@ -1,5 +1,4 @@
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::response::Json;
 use serde::Deserialize;
 
@@ -9,6 +8,7 @@ use aeordb::engine::{
 };
 use aeordb::engine::conflict_store::{resolve_conflict, dismiss_conflict};
 
+use crate::error::ClientError;
 use crate::server::AppState;
 
 #[derive(Deserialize)]
@@ -28,12 +28,9 @@ pub struct DismissRequest {
 /// GET /api/v1/conflicts — list all conflicts from aeordb's /.conflicts/
 pub async fn list_conflicts(
   State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ClientError> {
   let conflicts = list_conflicts_typed(&state.state_store.engine())
-    .map_err(|error| (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    ))?;
+    .map_err(|error| ClientError::Server(error.to_string()))?;
 
   // Convert to JSON-serializable format
   let json_conflicts: Vec<serde_json::Value> = conflicts.iter()
@@ -68,7 +65,7 @@ pub async fn list_conflicts(
 pub async fn resolve_conflict_handler(
   State(state): State<AppState>,
   Json(request): Json<ResolveRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ClientError> {
   let ctx          = RequestContext::system();
   let conflict_path = &request.path;
 
@@ -78,12 +75,12 @@ pub async fn resolve_conflict_handler(
     conflict_path,
     &request.pick,
   ).map_err(|error| {
-    let status = if error.to_string().contains("not found") || error.to_string().contains("No conflict") {
-      StatusCode::NOT_FOUND
+    let msg = error.to_string();
+    if msg.contains("not found") || msg.contains("No conflict") {
+      ClientError::NotFound(msg)
     } else {
-      StatusCode::INTERNAL_SERVER_ERROR
-    };
-    (status, Json(serde_json::json!({ "error": error.to_string() })))
+      ClientError::Server(msg)
+    }
   })?;
 
   Ok(Json(serde_json::json!({
@@ -97,7 +94,7 @@ pub async fn resolve_conflict_handler(
 pub async fn dismiss_conflict_handler(
   State(state): State<AppState>,
   Json(request): Json<DismissRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ClientError> {
   let ctx          = RequestContext::system();
   let conflict_path = &request.path;
 
@@ -106,12 +103,12 @@ pub async fn dismiss_conflict_handler(
     &ctx,
     conflict_path,
   ).map_err(|error| {
-    let status = if error.to_string().contains("not found") || error.to_string().contains("No conflict") {
-      StatusCode::NOT_FOUND
+    let msg = error.to_string();
+    if msg.contains("not found") || msg.contains("No conflict") {
+      ClientError::NotFound(msg)
     } else {
-      StatusCode::INTERNAL_SERVER_ERROR
-    };
-    (status, Json(serde_json::json!({ "error": error.to_string() })))
+      ClientError::Server(msg)
+    }
   })?;
 
   Ok(Json(serde_json::json!({
@@ -123,14 +120,11 @@ pub async fn dismiss_conflict_handler(
 /// POST /api/v1/conflicts/dismiss-all — dismiss all conflicts (accept auto-winners)
 pub async fn dismiss_all_conflicts(
   State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ClientError> {
   let ctx = RequestContext::system();
 
   let conflicts = list_conflicts_typed(&state.state_store.engine())
-    .map_err(|error| (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    ))?;
+    .map_err(|error| ClientError::Server(error.to_string()))?;
 
   let mut dismissed = 0;
   for conflict in &conflicts {

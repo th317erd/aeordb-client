@@ -118,8 +118,10 @@ class AeorSettings extends HTMLElement {
       // Try to get hostname for placeholder.
       try {
         const statusResponse = await fetch('/api/v1/status');
-        const statusData     = await statusResponse.json();
-        this._hostname       = statusData.identity?.name || null;
+        if (statusResponse.ok) {
+          const statusData = await statusResponse.json();
+          this._hostname   = statusData.identity?.name || null;
+        }
       } catch (_) {
         // Non-critical.
       }

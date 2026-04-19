@@ -83,6 +83,12 @@ class AeorDashboard extends HTMLElement {
         fetch('/api/v1/sync/runner/status'),
       ]);
 
+      if (!statusResponse.ok) throw new Error(`Status request failed: ${statusResponse.status}`);
+      if (!connectionsResponse.ok) throw new Error(`Connections request failed: ${connectionsResponse.status}`);
+      if (!syncResponse.ok) throw new Error(`Sync request failed: ${syncResponse.status}`);
+      if (!conflictsResponse.ok) throw new Error(`Conflicts request failed: ${conflictsResponse.status}`);
+      if (!runnerResponse.ok) throw new Error(`Runner status request failed: ${runnerResponse.status}`);
+
       const status      = await statusResponse.json();
       const connections  = await connectionsResponse.json();
       const sync         = await syncResponse.json();
@@ -168,6 +174,7 @@ class AeorDashboard extends HTMLElement {
 
     try {
       const response = await fetch(`/api/v1/sync/${id}/trigger`, { method: 'POST' });
+      if (!response.ok) throw new Error(`Sync trigger failed: ${response.status}`);
       const result   = await response.json();
       const pull     = result.pull || {};
       const push     = result.push || {};

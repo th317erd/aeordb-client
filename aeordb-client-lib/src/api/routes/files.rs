@@ -7,6 +7,7 @@ use axum::response::{Json, Response};
 use serde::{Deserialize, Serialize};
 
 use crate::connections::{ConnectionManager, RemoteConnection};
+use crate::error::ClientError;
 use crate::remote::RemoteClient;
 use crate::server::AppState;
 use crate::sync::metadata::{SyncMetadataStore, SyncStatus};
@@ -60,76 +61,61 @@ pub struct OpenLocallyRequest {
 // Helpers
 // ---------------------------------------------------------------------------
 
-type ApiError = (StatusCode, Json<serde_json::Value>);
-
-fn api_error(status: StatusCode, message: &str) -> ApiError {
-  (status, Json(serde_json::json!({ "error": message })))
-}
-
 /// Load a relationship and its associated connection from the config store.
 async fn load_relationship_and_connection(
   state: &AppState,
   relationship_id: &str,
-) -> Result<(SyncRelationship, RemoteConnection), ApiError> {
+) -> Result<(SyncRelationship, RemoteConnection), ClientError> {
   let relationship_manager = RelationshipManager::new(&state.config_store);
   let relationship = relationship_manager
-    .get(relationship_id)
-    .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?
-    .ok_or_else(|| api_error(StatusCode::NOT_FOUND, &format!("relationship not found: {}", relationship_id)))?;
+    .get(relationship_id)?
+    .ok_or_else(|| ClientError::NotFound(format!("relationship not found: {}", relationship_id)))?;
 
   let connection_manager = ConnectionManager::new(&state.config_store);
   let connection = connection_manager
-    .get(&relationship.remote_connection_id)
-    .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?
-    .ok_or_else(|| api_error(
-      StatusCode::NOT_FOUND,
-      &format!("connection not found: {}", relationship.remote_connection_id),
+    .get(&relationship.remote_connection_id)?
+    .ok_or_else(|| ClientError::NotFound(
+      format!("connection not found: {}", relationship.remote_connection_id),
     ))?;
 
   Ok((relationship, connection))
 }
 
 /// Compute a safe local path from a relationship base and a relative path.
-/// Returns 403 if the result escapes the relationship's local directory.
+/// Returns 403-equivalent error if the result escapes the relationship's local directory.
 fn safe_local_path(
   relationship: &SyncRelationship,
   relative_path: &str,
-) -> Result<PathBuf, ApiError> {
+) -> Result<PathBuf, ClientError> {
   let local_base = Path::new(&relationship.local_path);
-  let requested = local_base.join(relative_path);
 
-  // If the local base dir does not exist yet we cannot canonicalize.
-  // That is fine for "has_local" checks — the file simply does not exist.
-  let canonical_base = match local_base.canonicalize() {
-    Ok(path) => path,
-    Err(_) => {
-      // Base path does not exist on disk — any traversal attempt is still blocked
-      // because we fall back to a lexical check.
-      let cleaned = requested.to_string_lossy();
-      if cleaned.contains("..") {
-        return Err(api_error(StatusCode::FORBIDDEN, "path traversal denied"));
-      }
-      return Ok(requested);
+  // Per-segment validation: reject any segment that is ".." or empty
+  let cleaned: Vec<&str> = relative_path
+    .split('/')
+    .filter(|segment| !segment.is_empty())
+    .collect::<Vec<_>>();
+
+  for segment in &cleaned {
+    if *segment == ".." {
+      return Err(ClientError::Forbidden("path traversal denied".to_string()));
     }
-  };
-
-  let canonical = match requested.canonicalize() {
-    Ok(path) => path,
-    Err(_) => {
-      // File does not exist — do a lexical traversal check on the raw path.
-      let cleaned = requested.to_string_lossy();
-      if cleaned.contains("..") {
-        return Err(api_error(StatusCode::FORBIDDEN, "path traversal denied"));
-      }
-      return Ok(requested);
-    }
-  };
-
-  if !canonical.starts_with(&canonical_base) {
-    return Err(api_error(StatusCode::FORBIDDEN, "path traversal denied"));
   }
 
-  Ok(canonical)
+  let cleaned_relative: PathBuf = cleaned.iter().collect();
+  let requested = local_base.join(&cleaned_relative);
+
+  // If the local base dir exists, canonicalize for a definitive check.
+  if let Ok(canonical_base) = local_base.canonicalize() {
+    if let Ok(canonical) = requested.canonicalize() {
+      if !canonical.starts_with(&canonical_base) {
+        return Err(ClientError::Forbidden("path traversal denied".to_string()));
+      }
+      return Ok(canonical);
+    }
+  }
+
+  // Fallback: segments already validated above, so join is safe.
+  Ok(requested)
 }
 
 /// Guess a Content-Type from a file extension.
@@ -192,7 +178,7 @@ pub async fn browse(
   State(state): State<AppState>,
   AxumPath(params): AxumPath<BrowseParams>,
   Query(query): Query<BrowseQuery>,
-) -> Result<Json<BrowseResponse>, ApiError> {
+) -> Result<Json<BrowseResponse>, ClientError> {
   let relationship_id = &params.relationship_id;
   let relative_path = params.path.as_deref().unwrap_or("");
 
@@ -207,7 +193,7 @@ pub async fn browse(
   let listing = remote_client
     .list_directory_paginated(&remote_path, query.limit, query.offset)
     .await
-    .map_err(|error| api_error(StatusCode::BAD_GATEWAY, &error.to_string()))?;
+    .map_err(|error| ClientError::BadGateway(error.to_string()))?;
 
   let metadata_store = SyncMetadataStore::new(&state.state_store);
 
@@ -272,7 +258,7 @@ pub async fn serve_file(
   State(state): State<AppState>,
   AxumPath((relationship_id, relative_path)): AxumPath<(String, String)>,
   Query(query): Query<ServeQuery>,
-) -> Result<Response, ApiError> {
+) -> Result<Response, ClientError> {
   let (relationship, connection) = load_relationship_and_connection(&state, &relationship_id).await?;
 
   let force_remote = query.source.as_deref() == Some("remote");
@@ -284,7 +270,7 @@ pub async fn serve_file(
 
   // Force local — 404 if not on disk
   if force_local && !local_exists {
-    return Err(api_error(StatusCode::NOT_FOUND, "file not found locally"));
+    return Err(ClientError::NotFound("file not found locally".to_string()));
   }
 
   // Serve from local if we can (and not forced to remote)
@@ -292,7 +278,7 @@ pub async fn serve_file(
     tracing::info!("serving local file: {}", local_path.display());
     let bytes = tokio::fs::read(&local_path)
       .await
-      .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
+      .map_err(|error| ClientError::Server(error.to_string()))?;
 
     let content_type = guess_content_type(&relative_path);
 
@@ -300,7 +286,7 @@ pub async fn serve_file(
       .status(StatusCode::OK)
       .header(header::CONTENT_TYPE, content_type)
       .body(Body::from(bytes))
-      .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
+      .map_err(|error| ClientError::Server(error.to_string()))?;
 
     return Ok(response);
   }
@@ -313,7 +299,7 @@ pub async fn serve_file(
   let (bytes, metadata) = remote_client
     .download_file(&remote_path)
     .await
-    .map_err(|error| api_error(StatusCode::BAD_GATEWAY, &error.to_string()))?;
+    .map_err(|error| ClientError::BadGateway(error.to_string()))?;
 
   let content_type = metadata
     .content_type
@@ -324,7 +310,7 @@ pub async fn serve_file(
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, content_type)
     .body(Body::from(bytes))
-    .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
+    .map_err(|error| ClientError::Server(error.to_string()))?;
 
   Ok(response)
 }
@@ -339,7 +325,7 @@ pub async fn upload_file(
   AxumPath((relationship_id, relative_path)): AxumPath<(String, String)>,
   headers: HeaderMap,
   body: axum::body::Bytes,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<serde_json::Value>, ClientError> {
   let (relationship, connection) = load_relationship_and_connection(&state, &relationship_id).await?;
 
   let remote_path = compute_remote_path(&relationship, &relative_path);
@@ -354,7 +340,7 @@ pub async fn upload_file(
   remote_client
     .upload_file(&remote_path, body.to_vec(), content_type.as_deref())
     .await
-    .map_err(|error| api_error(StatusCode::BAD_GATEWAY, &error.to_string()))?;
+    .map_err(|error| ClientError::BadGateway(error.to_string()))?;
 
   Ok(Json(serde_json::json!({
     "message": format!("uploaded {}", remote_path),
@@ -369,7 +355,7 @@ pub async fn upload_file(
 pub async fn delete_file(
   State(state): State<AppState>,
   AxumPath((relationship_id, relative_path)): AxumPath<(String, String)>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<serde_json::Value>, ClientError> {
   let (relationship, connection) = load_relationship_and_connection(&state, &relationship_id).await?;
 
   let remote_path = compute_remote_path(&relationship, &relative_path);
@@ -380,7 +366,7 @@ pub async fn delete_file(
   remote_client
     .delete_file(&remote_path)
     .await
-    .map_err(|error| api_error(StatusCode::BAD_GATEWAY, &error.to_string()))?;
+    .map_err(|error| ClientError::BadGateway(error.to_string()))?;
 
   Ok(Json(serde_json::json!({
     "message": format!("deleted {}", remote_path),
@@ -396,21 +382,20 @@ pub async fn open_locally(
   State(state): State<AppState>,
   AxumPath(relationship_id): AxumPath<String>,
   Json(request): Json<OpenLocallyRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<serde_json::Value>, ClientError> {
   let relationship_manager = RelationshipManager::new(&state.config_store);
   let relationship = relationship_manager
-    .get(&relationship_id)
-    .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?
-    .ok_or_else(|| api_error(StatusCode::NOT_FOUND, &format!("relationship not found: {}", relationship_id)))?;
+    .get(&relationship_id)?
+    .ok_or_else(|| ClientError::NotFound(format!("relationship not found: {}", relationship_id)))?;
 
   let local_path = safe_local_path(&relationship, &request.path)?;
 
   if !local_path.exists() {
-    return Err(api_error(StatusCode::NOT_FOUND, &format!("file not found locally: {}", request.path)));
+    return Err(ClientError::NotFound(format!("file not found locally: {}", request.path)));
   }
 
   open::that(&local_path)
-    .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("failed to open: {}", error)))?;
+    .map_err(|error| ClientError::Server(format!("failed to open: {}", error)))?;
 
   tracing::info!("opened locally: {}", local_path.display());
 
@@ -430,13 +415,13 @@ pub async fn rename_file(
   State(state): State<AppState>,
   AxumPath(relationship_id): AxumPath<String>,
   Json(request): Json<RenameRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<serde_json::Value>, ClientError> {
   let (_, connection) = load_relationship_and_connection(&state, &relationship_id).await?;
 
   let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
 
   remote_client.rename_file(&request.from, &request.to).await
-    .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
+    .map_err(|error| ClientError::BadGateway(error.to_string()))?;
 
   tracing::info!("renamed {} to {}", request.from, request.to);
 

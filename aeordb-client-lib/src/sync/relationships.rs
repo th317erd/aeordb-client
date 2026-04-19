@@ -80,7 +80,7 @@ impl<'a> RelationshipManager<'a> {
     // Validate that the referenced connection exists
     let connection_manager = ConnectionManager::new(self.config);
     if connection_manager.get(&request.remote_connection_id)?.is_none() {
-      return Err(ClientError::Configuration(
+      return Err(ClientError::BadRequest(
         format!("connection not found: {}", request.remote_connection_id),
       ));
     }
@@ -188,7 +188,7 @@ impl<'a> RelationshipManager<'a> {
         tracing::info!("updated sync relationship '{}' ({})", relationship.name, relationship.id);
         Ok(relationship)
       }
-      None => Err(ClientError::Configuration(
+      None => Err(ClientError::NotFound(
         format!("sync relationship not found: {}", id),
       )),
     }
@@ -204,7 +204,7 @@ impl<'a> RelationshipManager<'a> {
     })?;
 
     if !found {
-      return Err(ClientError::Configuration(
+      return Err(ClientError::NotFound(
         format!("sync relationship not found: {}", id),
       ));
     }

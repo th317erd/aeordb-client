@@ -234,7 +234,8 @@ class AeorConnections extends HTMLElement {
 
   async _fetchConnections() {
     try {
-      const response    = await fetch('/api/v1/connections');
+      const response = await fetch('/api/v1/connections');
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       this._connections = await response.json();
       this.render();
     } catch (error) {
@@ -251,7 +252,7 @@ class AeorConnections extends HTMLElement {
       return;
 
     try {
-      await fetch('/api/v1/connections', {
+      const response = await fetch('/api/v1/connections', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
@@ -261,16 +262,18 @@ class AeorConnections extends HTMLElement {
           api_key:   (apiKey) ? apiKey : null,
         }),
       });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       this._showAddForm = false;
       await this._fetchConnections();
     } catch (error) {
-      console.error('Failed to create connection:', error);
+      window.aeorToast(`Failed to create connection: ${error.message}`, 'error');
     }
   }
 
   async _testConnection(id) {
     try {
       const response = await fetch(`/api/v1/connections/${id}/test`, { method: 'POST' });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       const result   = await response.json();
       window.aeorToast(
         (result.success) ? `Connected! (${result.latency_ms}ms)` : `Failed: ${result.message}`,
@@ -286,14 +289,15 @@ class AeorConnections extends HTMLElement {
       return;
 
     try {
-      await fetch(`/api/v1/connections/${id}`, { method: 'DELETE' });
+      const response = await fetch(`/api/v1/connections/${id}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       if (this._selectedId === id) {
         this._selectedId = null;
         this._hideConnectionPreview();
       }
       await this._fetchConnections();
     } catch (error) {
-      console.error('Failed to delete connection:', error);
+      window.aeorToast(`Failed to delete connection: ${error.message}`, 'error');
     }
   }
 }

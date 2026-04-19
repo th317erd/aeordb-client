@@ -240,6 +240,7 @@ class AeorSync extends HTMLElement {
       browseButton.addEventListener('click', async () => {
         try {
           const response = await fetch('/api/v1/pick-directory', { method: 'POST' });
+          if (!response.ok) throw new Error(`Request failed: ${response.status}`);
           const result   = await response.json();
           if (result.path) {
             const input = this.querySelector('#form-local-path');
@@ -351,6 +352,7 @@ class AeorSync extends HTMLElement {
 
     try {
       const response = await fetch(`/api/v1/sync/${id}/activity`);
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       this._activity = await response.json();
       this._renderActivityFeed(feed);
     } catch (error) {
@@ -441,6 +443,10 @@ class AeorSync extends HTMLElement {
         fetch('/api/v1/sync'),
         fetch('/api/v1/connections'),
       ]);
+
+      if (!syncResponse.ok) throw new Error(`Sync request failed: ${syncResponse.status}`);
+      if (!connectionsResponse.ok) throw new Error(`Connections request failed: ${connectionsResponse.status}`);
+
       this._relationships = await syncResponse.json();
       this._connections   = await connectionsResponse.json();
       this.render();
@@ -461,7 +467,7 @@ class AeorSync extends HTMLElement {
       return;
 
     try {
-      await fetch('/api/v1/sync', {
+      const response = await fetch('/api/v1/sync', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
@@ -473,10 +479,11 @@ class AeorSync extends HTMLElement {
           filter:               (filter) ? filter : null,
         }),
       });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       this._showAddForm = false;
       await this._fetchData();
     } catch (error) {
-      console.error('Failed to create sync:', error);
+      window.aeorToast(`Failed to create sync: ${error.message}`, 'error');
     }
   }
 
@@ -491,7 +498,7 @@ class AeorSync extends HTMLElement {
     const remoteToLocal = this.querySelector('#form-delete-remote-to-local')?.checked || false;
 
     try {
-      await fetch(`/api/v1/sync/${this._editingId}`, {
+      const response = await fetch(`/api/v1/sync/${this._editingId}`, {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
@@ -506,16 +513,18 @@ class AeorSync extends HTMLElement {
           },
         }),
       });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       this._editingId = null;
       await this._fetchData();
     } catch (error) {
-      console.error('Failed to update sync:', error);
+      window.aeorToast(`Failed to update sync: ${error.message}`, 'error');
     }
   }
 
   async _triggerSync(id) {
     try {
       const response = await fetch(`/api/v1/sync/${id}/trigger`, { method: 'POST' });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       const result   = await response.json();
       const pull     = result.pull || {};
       const push     = result.push || {};
@@ -532,10 +541,11 @@ class AeorSync extends HTMLElement {
   async _toggleSync(id, isEnabled) {
     const action = (isEnabled) ? 'disable' : 'enable';
     try {
-      await fetch(`/api/v1/sync/${id}/${action}`, { method: 'POST' });
+      const response = await fetch(`/api/v1/sync/${id}/${action}`, { method: 'POST' });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       await this._fetchData();
     } catch (error) {
-      console.error('Failed to toggle sync:', error);
+      window.aeorToast(`Failed to ${action} sync: ${error.message}`, 'error');
     }
   }
 
@@ -544,14 +554,15 @@ class AeorSync extends HTMLElement {
       return;
 
     try {
-      await fetch(`/api/v1/sync/${id}`, { method: 'DELETE' });
+      const response = await fetch(`/api/v1/sync/${id}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       if (this._selectedId === id) {
         this._selectedId = null;
         this._hideActivity();
       }
       await this._fetchData();
     } catch (error) {
-      console.error('Failed to delete sync:', error);
+      window.aeorToast(`Failed to delete sync: ${error.message}`, 'error');
     }
   }
 }

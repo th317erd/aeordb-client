@@ -267,7 +267,8 @@ class AeorConflicts extends HTMLElement {
 
   async _fetchConflicts() {
     try {
-      const response  = await fetch('/api/v1/conflicts');
+      const response = await fetch('/api/v1/conflicts');
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       this._conflicts = await response.json();
       this.render();
     } catch (error) {
@@ -277,33 +278,35 @@ class AeorConflicts extends HTMLElement {
 
   async _dismissConflict(path) {
     try {
-      await fetch('/api/v1/conflicts/dismiss', {
+      const response = await fetch('/api/v1/conflicts/dismiss', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ path }),
       });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       if (this._selectedPath === path) {
         this._selectedPath = null;
       }
       await this._fetchConflicts();
     } catch (error) {
-      console.error('Failed to dismiss conflict:', error);
+      window.aeorToast(`Failed to dismiss conflict: ${error.message}`, 'error');
     }
   }
 
   async _resolveConflict(path, pick) {
     try {
-      await fetch('/api/v1/conflicts/resolve', {
+      const response = await fetch('/api/v1/conflicts/resolve', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ path, pick }),
       });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       if (this._selectedPath === path) {
         this._selectedPath = null;
       }
       await this._fetchConflicts();
     } catch (error) {
-      console.error('Failed to resolve conflict:', error);
+      window.aeorToast(`Failed to resolve conflict: ${error.message}`, 'error');
     }
   }
 
@@ -312,11 +315,12 @@ class AeorConflicts extends HTMLElement {
       return;
 
     try {
-      await fetch('/api/v1/conflicts/dismiss-all', { method: 'POST' });
+      const response = await fetch('/api/v1/conflicts/dismiss-all', { method: 'POST' });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       this._selectedPath = null;
       await this._fetchConflicts();
     } catch (error) {
-      console.error('Failed to dismiss all:', error);
+      window.aeorToast(`Failed to dismiss all conflicts: ${error.message}`, 'error');
     }
   }
 

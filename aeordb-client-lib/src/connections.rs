@@ -123,7 +123,7 @@ impl<'a> ConnectionManager<'a> {
         tracing::info!("updated connection '{}' ({})", connection.name, connection.id);
         Ok(connection)
       }
-      None => Err(ClientError::Configuration(
+      None => Err(ClientError::NotFound(
         format!("connection not found: {}", id),
       )),
     }
@@ -139,7 +139,7 @@ impl<'a> ConnectionManager<'a> {
     })?;
 
     if !found {
-      return Err(ClientError::Configuration(
+      return Err(ClientError::NotFound(
         format!("connection not found: {}", id),
       ));
     }
@@ -151,7 +151,7 @@ impl<'a> ConnectionManager<'a> {
   /// Test connectivity to a remote aeordb instance.
   pub async fn test_connection(&self, id: &str) -> Result<ConnectionTestResult> {
     let connection = self.get(id)?
-      .ok_or_else(|| ClientError::Configuration(
+      .ok_or_else(|| ClientError::NotFound(
         format!("connection not found: {}", id),
       ))?;
 

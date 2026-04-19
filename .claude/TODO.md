@@ -4,19 +4,12 @@
 
 ### Security — XSS
 - [x] Apply `escapeHtml()`/`escapeAttr()` to all server-sourced data in innerHTML across all components
-  - [x] `aeor-toasts.js` — toast message (use textContent instead of innerHTML)
-  - [x] `aeor-preview-text.js` — error message in fallback, removed duplicate `_escapeHtml`
-  - [x] `aeor-sync.js` — activity feed errors/summaries, form values, table rows, connection options
-  - [x] `aeor-settings.js` — client_name, config_dir, data_dir in form values
-  - [x] `aeor-conflicts.js` — winner/loser hash, content_type, node_id, conflict_type, path
-  - [x] `aeor-dashboard.js` — relationship name and remote_path in sync cards
-  - [x] `aeor-connections.js` — connection name/url/auth_type in table rows
 
 ### Security — Path Traversal
-- [ ] `files.rs:safe_local_path` — replace `contains("..")` with per-segment validation
+- [x] `files.rs:safe_local_path` — per-segment validation (reject `..` segments)
 
 ### Security — Plaintext API Keys
-- [ ] Set config file permissions to 0600 on creation
+- [x] Set config file permissions to 0600 on creation
 - [ ] (Future) Investigate OS keychain integration
 
 ### Performance — Blocking I/O
@@ -34,44 +27,34 @@
 - [ ] `runner.rs` — re-read relationship/connection config each sync cycle (stale data)
 
 ### DRY — Frontend
-- [ ] Extract `formatSize` — remove duplicates in conflicts, sync, preview-default; import from shared
-- [ ] Extract `bindResizeHandle()` utility — used in connections, sync, conflicts, file-browser
-- [ ] Extract row-selection/preview-toggle pattern — used in connections, sync, conflicts
-- [ ] Extract `_openFolder()` — duplicated in dashboard and settings
-- [x] Extract `_escapeHtml` from preview-text — use shared import instead
-- [x] Extract `directionLabel()` to shared module
-- [x] Extract `directionArrow()` to shared module
-- [x] Extract `formatRelativeTime()` to shared module
-- [x] Extract `bindResizeHandle()` to shared module
-- [x] Extract `openFolder()` to shared module
-- [x] Remove dead export `syncBadgeClass()` from shared module
+- [ ] Use shared `formatSize` — remove duplicates in conflicts, sync, preview-default
+- [ ] Use shared `bindResizeHandle()` — replace local copies in connections, sync, conflicts, file-browser
+- [ ] Use shared `openFolder()` — replace local copies in dashboard, settings
+- [x] Extract shared utilities to aeor-file-view-shared.js (done)
 
 ### DRY — Backend
-- [ ] Add `NotFound`/`BadRequest` variants to `ClientError` + implement `IntoResponse`
-- [ ] Remove 12+ duplicated error-to-status-code string-matching blocks in route handlers
-- [x] Extract shared `file_mtime()` from push.rs and pull.rs into sync utility
+- [x] `ClientError` variants (`NotFound`, `BadRequest`, `Forbidden`, `BadGateway`) + `IntoResponse`
+- [x] Remove duplicated error-to-status-code string-matching blocks in all route handlers
+- [x] Extract shared `file_mtime()` from push.rs and pull.rs
 
 ### Performance — Backend
-- [x] Share a single `reqwest::Client` in AppState instead of creating per-request
-- [x] Add timeout to `reqwest::Client` (30s)
+- [x] Share a single `reqwest::Client` in AppState with 30s timeout
 - [ ] Use `tokio::sync::RwLock` in ConfigStore instead of `std::sync::RwLock`
 
 ### Correctness — Frontend
-- [ ] Add `response.ok` checks before `.json()` on all fetch calls
+- [x] Add `response.ok` checks before `.json()` on all fetch calls
 - [ ] Toast polling: use `Promise.all()` for parallel fetches, per-relationship timestamps
 - [ ] Add `disconnectedCallback` cleanup on components (clear timeouts, remove listeners)
-- [ ] Cache version in `aeor-nav.js` — don't refetch on every render
+- [x] Cache version in `aeor-nav.js`
 
 ## Minor
 - [x] Remove unused `Path` import in `conflicts.rs`
-- [ ] Replace magic number `3` (directory) with named constant in shared module
+- [x] Replace magic number `3` (directory) with `ENTRY_TYPE_DIR` constant
 - [ ] Standardize naming: file-browser snake_case → camelCase
-- [x] Remove dead export `syncBadgeClass()` from shared module
-- [ ] Remove empty constructor in `aeor-nav.js`
-- [ ] Fix nested ternary in file-browser relationship selector
+- [x] Fix nested ternary in file-browser (use `directionArrow()`)
 - [ ] Validate `pick` field ("winner"/"loser") in conflicts resolve handler
 - [x] Guard `event.id[..8]` slice with bounds check in activity.rs
-- [ ] Add `console.warn` to empty catch blocks in preview component loader
+- [x] Add `console.warn` to empty catch blocks in preview component loader
 - [ ] Context menu: check viewport bounds before positioning
 - [x] Fix redundant `format!` in `compute_remote_path` (files.rs:216)
 - [ ] Allow clearing sync filter via empty string in `UpdateSyncRelationshipRequest`

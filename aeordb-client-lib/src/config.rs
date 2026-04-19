@@ -120,6 +120,17 @@ impl ConfigStore {
       )
     })?;
 
+    #[cfg(unix)]
+    {
+      use std::os::unix::fs::PermissionsExt;
+      let permissions = std::fs::Permissions::from_mode(0o600);
+      std::fs::set_permissions(&self.config_path, permissions).map_err(|error| {
+        ClientError::Configuration(
+          format!("failed to set config permissions on {:?}: {}", self.config_path, error),
+        )
+      })?;
+    }
+
     Ok(())
   }
 

@@ -2,6 +2,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 
+use crate::error::ClientError;
 use crate::server::AppState;
 use crate::sync::relationships::{
   CreateSyncRelationshipRequest, RelationshipManager,
@@ -10,51 +11,29 @@ use crate::sync::relationships::{
 
 pub async fn list_relationships(
   State(state): State<AppState>,
-) -> Result<Json<Vec<SyncRelationship>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<SyncRelationship>>, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-
-  manager.list()
-    .map(Json)
-    .map_err(|error| (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    ))
+  manager.list().map(Json)
 }
 
 pub async fn create_relationship(
   State(state): State<AppState>,
   Json(request): Json<CreateSyncRelationshipRequest>,
-) -> Result<(StatusCode, Json<SyncRelationship>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<SyncRelationship>), ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-
   manager.create(request)
     .map(|relationship| (StatusCode::CREATED, Json(relationship)))
-    .map_err(|error| {
-      let status = if error.to_string().contains("not found") {
-        StatusCode::BAD_REQUEST
-      } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-      };
-      (status, Json(serde_json::json!({ "error": error.to_string() })))
-    })
 }
 
 pub async fn get_relationship(
   State(state): State<AppState>,
   Path(id): Path<String>,
-) -> Result<Json<SyncRelationship>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<SyncRelationship>, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
 
-  match manager.get(&id) {
-    Ok(Some(relationship)) => Ok(Json(relationship)),
-    Ok(None) => Err((
-      StatusCode::NOT_FOUND,
-      Json(serde_json::json!({ "error": format!("sync relationship not found: {}", id) })),
-    )),
-    Err(error) => Err((
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    )),
+  match manager.get(&id)? {
+    Some(relationship) => Ok(Json(relationship)),
+    None => Err(ClientError::NotFound(format!("sync relationship not found: {}", id))),
   }
 }
 
@@ -62,112 +41,55 @@ pub async fn update_relationship(
   State(state): State<AppState>,
   Path(id): Path<String>,
   Json(request): Json<UpdateSyncRelationshipRequest>,
-) -> Result<Json<SyncRelationship>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<SyncRelationship>, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-
-  manager.update(&id, request)
-    .map(Json)
-    .map_err(|error| {
-      let status = if error.to_string().contains("not found") {
-        StatusCode::NOT_FOUND
-      } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-      };
-      (status, Json(serde_json::json!({ "error": error.to_string() })))
-    })
+  manager.update(&id, request).map(Json)
 }
 
 pub async fn delete_relationship(
   State(state): State<AppState>,
   Path(id): Path<String>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<StatusCode, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-
-  manager.delete(&id)
-    .map(|_| StatusCode::NO_CONTENT)
-    .map_err(|error| {
-      let status = if error.to_string().contains("not found") {
-        StatusCode::NOT_FOUND
-      } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-      };
-      (status, Json(serde_json::json!({ "error": error.to_string() })))
-    })
+  manager.delete(&id).map(|_| StatusCode::NO_CONTENT)
 }
 
 pub async fn enable_relationship(
   State(state): State<AppState>,
   Path(id): Path<String>,
-) -> Result<Json<SyncRelationship>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<SyncRelationship>, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-
-  manager.enable(&id)
-    .map(Json)
-    .map_err(|error| {
-      let status = if error.to_string().contains("not found") {
-        StatusCode::NOT_FOUND
-      } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-      };
-      (status, Json(serde_json::json!({ "error": error.to_string() })))
-    })
+  manager.enable(&id).map(Json)
 }
 
 pub async fn disable_relationship(
   State(state): State<AppState>,
   Path(id): Path<String>,
-) -> Result<Json<SyncRelationship>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<SyncRelationship>, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-
-  manager.disable(&id)
-    .map(Json)
-    .map_err(|error| {
-      let status = if error.to_string().contains("not found") {
-        StatusCode::NOT_FOUND
-      } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-      };
-      (status, Json(serde_json::json!({ "error": error.to_string() })))
-    })
+  manager.disable(&id).map(Json)
 }
 
 pub async fn trigger_sync(
   State(state): State<AppState>,
   Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ClientError> {
   use crate::connections::ConnectionManager;
   use crate::sync::replication::sync_relationship;
 
   // Load relationship and connection.
   let relationship_manager = RelationshipManager::new(&state.config_store);
-  let relationship = relationship_manager.get(&id)
-    .map_err(|error| (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    ))?
-    .ok_or_else(|| (
-      StatusCode::NOT_FOUND,
-      Json(serde_json::json!({ "error": format!("sync relationship not found: {}", id) })),
-    ))?;
+  let relationship = relationship_manager.get(&id)?
+    .ok_or_else(|| ClientError::NotFound(format!("sync relationship not found: {}", id)))?;
 
   let connection_manager = ConnectionManager::new(&state.config_store);
-  let connection = connection_manager.get(&relationship.remote_connection_id)
-    .map_err(|error| (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    ))?
-    .ok_or_else(|| (
-      StatusCode::NOT_FOUND,
-      Json(serde_json::json!({ "error": "connection not found" })),
-    ))?;
+  let connection = connection_manager.get(&relationship.remote_connection_id)?
+    .ok_or_else(|| ClientError::NotFound("connection not found".to_string()))?;
 
   // Run the sync (push and/or pull based on direction).
   let result = sync_relationship(&state.state_store, &connection, &relationship, &state.http_client)
     .await
-    .map_err(|error| (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    ))?;
+    .map_err(|error| ClientError::Server(error.to_string()))?;
 
   // Log to activity feed (non-fatal).
   let activity = state.sync_runner.activity_log();
@@ -206,34 +128,34 @@ pub async fn trigger_sync(
 pub async fn start_sync(
   State(state): State<AppState>,
   Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ClientError> {
   state.sync_runner.start(&id).await
     .map(|_| Json(serde_json::json!({ "message": format!("sync started for {}", id) })))
     .map_err(|error| {
-      let status = if error.to_string().contains("already running") {
-        StatusCode::CONFLICT
-      } else if error.to_string().contains("not found") || error.to_string().contains("disabled") {
-        StatusCode::BAD_REQUEST
+      let msg = error.to_string();
+      if msg.contains("already running") {
+        ClientError::BadRequest(msg)
+      } else if msg.contains("not found") || msg.contains("disabled") {
+        ClientError::BadRequest(msg)
       } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-      };
-      (status, Json(serde_json::json!({ "error": error.to_string() })))
+        ClientError::Server(msg)
+      }
     })
 }
 
 pub async fn stop_sync(
   State(state): State<AppState>,
   Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ClientError> {
   state.sync_runner.stop(&id).await
     .map(|_| Json(serde_json::json!({ "message": format!("sync stopped for {}", id) })))
     .map_err(|error| {
-      let status = if error.to_string().contains("not running") {
-        StatusCode::BAD_REQUEST
+      let msg = error.to_string();
+      if msg.contains("not running") {
+        ClientError::BadRequest(msg)
       } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-      };
-      (status, Json(serde_json::json!({ "error": error.to_string() })))
+        ClientError::Server(msg)
+      }
     })
 }
 
@@ -260,12 +182,9 @@ pub async fn sync_runner_status(
 pub async fn get_sync_activity(
   State(state): State<AppState>,
   Path(id): Path<String>,
-) -> Result<Json<Vec<crate::sync::activity::SyncEvent>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<crate::sync::activity::SyncEvent>>, ClientError> {
   state.sync_runner.activity_log()
     .get_events(&id, 50)
     .map(Json)
-    .map_err(|error| (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      Json(serde_json::json!({ "error": error.to_string() })),
-    ))
+    .map_err(|error| ClientError::Server(error.to_string()))
 }
