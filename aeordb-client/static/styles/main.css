@@ -317,7 +317,7 @@ select {
 .checkbox-row {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 0.5rem;
   margin-top: 0.625rem;
   font-size: 0.8125rem;
   line-height: 1.125rem;
@@ -331,7 +331,7 @@ select {
   width: 1.125rem;
   height: 1.125rem;
   min-width: 1.125rem;
-  margin: 0 0.25rem 0 0;
+  margin: 0;
   padding: 0;
   border: 2px solid var(--border);
   border-radius: 3px;
