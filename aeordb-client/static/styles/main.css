@@ -1088,3 +1088,100 @@ aeor-connections {
   border: none;
   background-color: #fff;
 }
+
+/* ==========================================================================
+   Sync — Selected Row + Activity Feed
+   ========================================================================== */
+
+aeor-sync {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sync-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.sync-row {
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+
+.sync-row:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.sync-row.selected {
+  background-color: var(--bg-tertiary);
+  border-left: 3px solid var(--accent);
+}
+
+.sync-activity-panel {
+  flex-shrink: 0;
+  height: 40vh;
+  min-height: 150px;
+  max-height: 80vh;
+  background-color: var(--bg-secondary);
+  border-top: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.activity-feed {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0 16px;
+}
+
+.activity-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--bg-tertiary);
+}
+
+.activity-item-error {
+  border-left: 3px solid var(--error);
+  padding-left: 12px;
+}
+
+.activity-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+  width: 1.5rem;
+  text-align: center;
+  padding-top: 2px;
+}
+
+.activity-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.activity-summary {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.activity-errors {
+  margin-top: 4px;
+}
+
+.activity-error {
+  color: var(--error);
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+}
+
+.activity-time {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  flex-shrink: 0;
+  white-space: nowrap;
+}

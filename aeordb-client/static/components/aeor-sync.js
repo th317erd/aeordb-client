@@ -6,7 +6,9 @@ class AeorSync extends HTMLElement {
     this._relationships = [];
     this._connections   = [];
     this._showAddForm   = false;
-    this._editingId     = null; // ID of the relationship being edited, or null
+    this._editingId     = null;
+    this._selectedId    = null;
+    this._activity      = [];
   }
 
   connectedCallback() {
@@ -27,12 +29,25 @@ class AeorSync extends HTMLElement {
       ${(this._showAddForm) ? this._renderAddForm() : ''}
       ${(this._editingId) ? this._renderEditForm() : ''}
 
-      ${(this._relationships.length === 0)
-        ? (hasConnections)
-          ? '<div class="empty-state">No sync relationships configured.</div>'
-          : '<div class="empty-state">You must first add a <a href="#" id="go-connections">Connection</a> before you can set up a sync.</div>'
-        : this._renderTable()
-      }
+      <div class="sync-list">
+        ${(this._relationships.length === 0)
+          ? (hasConnections)
+            ? '<div class="empty-state">No sync relationships configured.</div>'
+            : '<div class="empty-state">You must first add a <a href="#" id="go-connections">Connection</a> before you can set up a sync.</div>'
+          : this._renderTable()
+        }
+      </div>
+
+      <div class="sync-activity-panel" style="display:none">
+        <div class="preview-resize-handle"></div>
+        <div class="preview-header">
+          <h3 class="preview-title"></h3>
+          <div class="preview-actions">
+            <button class="secondary small activity-close">\u2715</button>
+          </div>
+        </div>
+        <div class="activity-feed"></div>
+      </div>
     `;
 
     const addButton = this.querySelector('#add-btn');
@@ -59,6 +74,12 @@ class AeorSync extends HTMLElement {
       this._bindFormEvents();
 
     this._bindTableEvents();
+    this._bindActivityEvents();
+
+    // Restore selection
+    if (this._selectedId) {
+      this._fetchActivity(this._selectedId);
+    }
   }
 
   _renderAddForm() {
@@ -162,21 +183,24 @@ class AeorSync extends HTMLElement {
   }
 
   _renderTable() {
-    const rows = this._relationships.map((relationship) => `
-      <tr>
-        <td class="mono muted">${relationship.id.substring(0, 8)}...</td>
-        <td>${relationship.name}</td>
-        <td>${relationship.remote_path}</td>
-        <td>${relationship.direction}</td>
-        <td><span class="badge ${(relationship.enabled) ? 'success' : 'warning'}" style="min-width: 72px; text-align: center; display: inline-block;">${(relationship.enabled) ? 'enabled' : 'disabled'}</span></td>
-        <td class="actions">
-          <button class="success small trigger-btn" data-id="${relationship.id}">Sync</button>
-          <button class="secondary small edit-btn" data-id="${relationship.id}">Edit</button>
-          <button class="secondary small toggle-btn" data-id="${relationship.id}" data-enabled="${relationship.enabled}" style="min-width: 70px;">${(relationship.enabled) ? 'Pause' : 'Resume'}</button>
-          <button class="danger small delete-btn" data-id="${relationship.id}">Delete</button>
-        </td>
-      </tr>
-    `).join('');
+    const rows = this._relationships.map((relationship) => {
+      const isSelected = (relationship.id === this._selectedId);
+      return `
+        <tr class="sync-row ${isSelected ? 'selected' : ''}" data-id="${relationship.id}">
+          <td class="mono muted">${relationship.id.substring(0, 8)}...</td>
+          <td>${relationship.name}</td>
+          <td>${relationship.remote_path}</td>
+          <td>${relationship.direction}</td>
+          <td><span class="badge ${(relationship.enabled) ? 'success' : 'warning'}" style="min-width: 72px; text-align: center; display: inline-block;">${(relationship.enabled) ? 'enabled' : 'disabled'}</span></td>
+          <td class="actions">
+            <button class="success small trigger-btn" data-id="${relationship.id}">Sync</button>
+            <button class="secondary small edit-btn" data-id="${relationship.id}">Edit</button>
+            <button class="secondary small toggle-btn" data-id="${relationship.id}" data-enabled="${relationship.enabled}" style="min-width: 70px;">${(relationship.enabled) ? 'Pause' : 'Resume'}</button>
+            <button class="danger small delete-btn" data-id="${relationship.id}">Delete</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
 
     return `
       <table>
@@ -227,22 +251,186 @@ class AeorSync extends HTMLElement {
   }
 
   _bindTableEvents() {
+    // Row click — select to show activity
+    this.querySelectorAll('.sync-row').forEach((row) => {
+      row.addEventListener('click', (event) => {
+        if (event.target.closest('button')) return;
+        const id = row.dataset.id;
+        if (this._selectedId === id) {
+          this._selectedId = null;
+          this._hideActivity();
+          row.classList.remove('selected');
+        } else {
+          const prev = this.querySelector('.sync-row.selected');
+          if (prev) prev.classList.remove('selected');
+          this._selectedId = id;
+          row.classList.add('selected');
+          this._fetchActivity(id);
+        }
+      });
+    });
+
     this.querySelectorAll('.trigger-btn').forEach((button) => {
-      button.addEventListener('click', () => this._triggerSync(button.dataset.id));
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._triggerSync(button.dataset.id);
+      });
     });
     this.querySelectorAll('.edit-btn').forEach((button) => {
-      button.addEventListener('click', () => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
         this._editingId   = button.dataset.id;
         this._showAddForm = false;
         this.render();
       });
     });
     this.querySelectorAll('.toggle-btn').forEach((button) => {
-      button.addEventListener('click', () => this._toggleSync(button.dataset.id, button.dataset.enabled === 'true'));
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._toggleSync(button.dataset.id, button.dataset.enabled === 'true');
+      });
     });
     this.querySelectorAll('.delete-btn').forEach((button) => {
-      button.addEventListener('click', () => this._deleteSync(button.dataset.id));
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._deleteSync(button.dataset.id);
+      });
     });
+  }
+
+  _bindActivityEvents() {
+    const closeBtn = this.querySelector('.activity-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', () => {
+        this._selectedId = null;
+        this._hideActivity();
+        const prev = this.querySelector('.sync-row.selected');
+        if (prev) prev.classList.remove('selected');
+      });
+    }
+
+    const resizeHandle = this.querySelector('.sync-activity-panel .preview-resize-handle');
+    const panel = this.querySelector('.sync-activity-panel');
+    if (resizeHandle && panel) {
+      resizeHandle.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        const startY = event.clientY;
+        const startHeight = panel.offsetHeight;
+
+        const onMouseMove = (moveEvent) => {
+          const delta = startY - moveEvent.clientY;
+          const newHeight = Math.max(150, Math.min(window.innerHeight * 0.8, startHeight + delta));
+          panel.style.height = newHeight + 'px';
+        };
+
+        const onMouseUp = () => {
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      });
+    }
+  }
+
+  async _fetchActivity(id) {
+    const relationship = this._relationships.find((r) => r.id === id);
+    if (!relationship) return;
+
+    const panel = this.querySelector('.sync-activity-panel');
+    if (!panel) return;
+
+    panel.querySelector('.preview-title').textContent = `${relationship.name} — Activity`;
+    panel.style.display = '';
+
+    const feed = panel.querySelector('.activity-feed');
+    feed.innerHTML = '<div class="loading">Loading activity...</div>';
+
+    try {
+      const response = await fetch(`/api/v1/sync/${id}/activity`);
+      this._activity = await response.json();
+      this._renderActivityFeed(feed);
+    } catch (error) {
+      feed.innerHTML = '<div class="empty-state">Failed to load activity.</div>';
+    }
+  }
+
+  _renderActivityFeed(container) {
+    if (this._activity.length === 0) {
+      container.innerHTML = '<div class="empty-state">No sync activity recorded yet.</div>';
+      return;
+    }
+
+    const items = this._activity.map((event) => {
+      const time = this._formatTimestamp(event.timestamp);
+      const icon = this._eventIcon(event.event_type);
+      const hasErrors = event.errors && event.errors.length > 0;
+      const errorClass = hasErrors ? ' activity-item-error' : '';
+
+      let detail = event.summary;
+      if (event.files_affected > 0) {
+        detail += ` \u00B7 ${event.files_affected} files`;
+      }
+      if (event.bytes_transferred > 0) {
+        detail += ` \u00B7 ${this._formatBytes(event.bytes_transferred)}`;
+      }
+      if (event.duration_ms > 0) {
+        detail += ` \u00B7 ${event.duration_ms}ms`;
+      }
+
+      let errorHtml = '';
+      if (hasErrors) {
+        errorHtml = `<div class="activity-errors">${event.errors.map((e) => `<div class="activity-error">${e}</div>`).join('')}</div>`;
+      }
+
+      return `
+        <div class="activity-item${errorClass}">
+          <div class="activity-icon">${icon}</div>
+          <div class="activity-body">
+            <div class="activity-summary">${detail}</div>
+            ${errorHtml}
+          </div>
+          <div class="activity-time">${time}</div>
+        </div>
+      `;
+    }).join('');
+
+    container.innerHTML = items;
+  }
+
+  _hideActivity() {
+    const panel = this.querySelector('.sync-activity-panel');
+    if (panel) panel.style.display = 'none';
+  }
+
+  _eventIcon(type) {
+    switch (type) {
+      case 'pull':      return '\u2B07';  // down arrow
+      case 'push':      return '\u2B06';  // up arrow
+      case 'full_sync': return '\u21C4';  // bidirectional arrow
+      case 'error':     return '\u26A0';  // warning
+      default:          return '\u2022';  // bullet
+    }
+  }
+
+  _formatTimestamp(ms) {
+    const date = new Date(ms);
+    const now  = new Date();
+    const diff = now - date;
+
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+
+    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  _formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
   }
 
   async _fetchData() {
@@ -330,6 +518,10 @@ class AeorSync extends HTMLElement {
       const pull     = result.pull || {};
       const push     = result.push || {};
       alert(`Sync complete!\nPulled: ${pull.files_pulled || 0} files\nPushed: ${push.files_pushed || 0} files`);
+      // Refresh activity if this relationship is selected
+      if (this._selectedId === id) {
+        this._fetchActivity(id);
+      }
     } catch (error) {
       alert(`Sync failed: ${error.message}`);
     }
@@ -351,6 +543,10 @@ class AeorSync extends HTMLElement {
 
     try {
       await fetch(`/api/v1/sync/${id}`, { method: 'DELETE' });
+      if (this._selectedId === id) {
+        this._selectedId = null;
+        this._hideActivity();
+      }
       await this._fetchData();
     } catch (error) {
       console.error('Failed to delete sync:', error);

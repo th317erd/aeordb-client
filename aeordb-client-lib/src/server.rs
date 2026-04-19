@@ -58,6 +58,7 @@ pub fn build_router(state: AppState) -> Router {
     .route("/sync/{id}", get(sync::get_relationship).patch(sync::update_relationship).delete(sync::delete_relationship))
     .route("/sync/{id}/enable", post(sync::enable_relationship))
     .route("/sync/{id}/disable", post(sync::disable_relationship))
+    .route("/sync/{id}/activity", get(sync::get_sync_activity))
     .route("/sync/{id}/trigger", post(sync::trigger_sync))
     .route("/sync/{id}/start", post(sync::start_sync))
     .route("/sync/{id}/stop", post(sync::stop_sync))

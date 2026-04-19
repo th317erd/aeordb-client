@@ -169,6 +169,12 @@ pub async fn trigger_sync(
       Json(serde_json::json!({ "error": error.to_string() })),
     ))?;
 
+  // Log to activity feed (non-fatal).
+  let activity = state.sync_runner.activity_log();
+  if let Err(error) = activity.log_full_sync(&id, &relationship.name, &result) {
+    tracing::warn!("failed to log trigger activity: {}", error);
+  }
+
   // Build a response summarizing what happened.
   let push_summary = result.push.map(|p| serde_json::json!({
     "files_pushed":  p.files_pushed,
@@ -235,4 +241,17 @@ pub async fn sync_runner_status(
   State(state): State<AppState>,
 ) -> Json<Vec<crate::sync::runner::SyncRunnerStatus>> {
   Json(state.sync_runner.status().await)
+}
+
+pub async fn get_sync_activity(
+  State(state): State<AppState>,
+  Path(id): Path<String>,
+) -> Result<Json<Vec<crate::sync::activity::SyncEvent>>, (StatusCode, Json<serde_json::Value>)> {
+  state.sync_runner.activity_log()
+    .get_events(&id, 50)
+    .map(Json)
+    .map_err(|error| (
+      StatusCode::INTERNAL_SERVER_ERROR,
+      Json(serde_json::json!({ "error": error.to_string() })),
+    ))
 }

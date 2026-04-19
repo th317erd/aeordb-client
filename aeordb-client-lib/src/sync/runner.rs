@@ -9,6 +9,7 @@ use crate::config::ConfigStore;
 use crate::connections::ConnectionManager;
 use crate::error::{ClientError, Result};
 use crate::state::StateStore;
+use crate::sync::activity::SyncActivityLog;
 use crate::sync::fs_watcher::{FsChangeType, FsWatcherConfig, start_fs_watcher};
 use crate::sync::pull::pull_sync;
 use crate::sync::push::push_sync;
@@ -19,9 +20,10 @@ use crate::sync::sse_listener::start_sse_listener;
 /// Tracks running sync tasks for each relationship.
 #[derive(Clone)]
 pub struct SyncRunner {
-  running: Arc<Mutex<HashMap<String, RunningSync>>>,
-  state:   Arc<StateStore>,
-  config:  Arc<ConfigStore>,
+  running:  Arc<Mutex<HashMap<String, RunningSync>>>,
+  state:    Arc<StateStore>,
+  config:   Arc<ConfigStore>,
+  activity: SyncActivityLog,
 }
 
 struct RunningSync {
@@ -38,11 +40,19 @@ pub struct SyncRunnerStatus {
 
 impl SyncRunner {
   pub fn new(state: Arc<StateStore>, config: Arc<ConfigStore>) -> Self {
+    let activity = SyncActivityLog::new(state.clone());
+
     Self {
       running: Arc::new(Mutex::new(HashMap::new())),
       state,
       config,
+      activity,
     }
+  }
+
+  /// Get a reference to the activity log.
+  pub fn activity_log(&self) -> &SyncActivityLog {
+    &self.activity
   }
 
   /// Start continuous sync for a relationship.
@@ -76,11 +86,12 @@ impl SyncRunner {
     let relationship_name     = relationship.name.clone();
     let relationship_id_owned = relationship_id.to_string();
     let state_clone           = self.state.clone();
+    let activity_clone        = self.activity.clone();
 
     tracing::info!("starting sync for '{}' ({:?})", relationship.name, relationship.direction);
 
     let handle = tokio::spawn(async move {
-      run_sync_loop(state_clone, relationship, connection).await;
+      run_sync_loop(state_clone, activity_clone, relationship, connection).await;
     });
 
     running.insert(relationship_id_owned, RunningSync {
@@ -152,6 +163,7 @@ impl SyncRunner {
 /// The main sync loop for a single relationship.
 async fn run_sync_loop(
   state: Arc<StateStore>,
+  activity: SyncActivityLog,
   relationship: SyncRelationship,
   connection: crate::connections::RemoteConnection,
 ) {
@@ -164,9 +176,15 @@ async fn run_sync_loop(
   match sync_relationship(&state, &connection, &relationship).await {
     Ok(result) => {
       log_sync_result(&relationship.name, &result);
+      if let Err(error) = activity.log_full_sync(&relationship.id, &relationship.name, &result) {
+        tracing::warn!("failed to log sync activity for '{}': {}", relationship.name, error);
+      }
     }
     Err(error) => {
       tracing::error!("initial sync failed for '{}': {}", relationship.name, error);
+      if let Err(log_error) = activity.log_error(&relationship.id, &relationship.name, &error.to_string()) {
+        tracing::warn!("failed to log error activity for '{}': {}", relationship.name, log_error);
+      }
     }
   }
 
@@ -232,9 +250,15 @@ async fn run_sync_loop(
                 result.files_skipped, result.files_failed,
               );
             }
+            if let Err(error) = activity.log_push(&relationship.id, &relationship.name, &result) {
+              tracing::warn!("failed to log push activity for '{}': {}", relationship.name, error);
+            }
           }
           Err(error) => {
             tracing::error!("push failed for '{}': {}", relationship.name, error);
+            if let Err(log_error) = activity.log_error(&relationship.id, &relationship.name, &error.to_string()) {
+              tracing::warn!("failed to log error activity for '{}': {}", relationship.name, log_error);
+            }
           }
         }
       }
@@ -255,9 +279,15 @@ async fn run_sync_loop(
                 result.files_skipped, result.files_failed,
               );
             }
+            if let Err(error) = activity.log_pull(&relationship.id, &relationship.name, &result) {
+              tracing::warn!("failed to log pull activity for '{}': {}", relationship.name, error);
+            }
           }
           Err(error) => {
             tracing::error!("pull failed for '{}': {}", relationship.name, error);
+            if let Err(log_error) = activity.log_error(&relationship.id, &relationship.name, &error.to_string()) {
+              tracing::warn!("failed to log error activity for '{}': {}", relationship.name, log_error);
+            }
           }
         }
       }
@@ -267,9 +297,15 @@ async fn run_sync_loop(
         match sync_relationship(&state, &connection, &relationship).await {
           Ok(result) => {
             log_sync_result(&relationship.name, &result);
+            if let Err(error) = activity.log_full_sync(&relationship.id, &relationship.name, &result) {
+              tracing::warn!("failed to log sync activity for '{}': {}", relationship.name, error);
+            }
           }
           Err(error) => {
             tracing::error!("periodic sync failed for '{}': {}", relationship.name, error);
+            if let Err(log_error) = activity.log_error(&relationship.id, &relationship.name, &error.to_string()) {
+              tracing::warn!("failed to log error activity for '{}': {}", relationship.name, log_error);
+            }
           }
         }
       }

@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod content_type;
 pub mod filter;
 pub mod fs_watcher;

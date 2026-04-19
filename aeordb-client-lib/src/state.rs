@@ -72,6 +72,7 @@ impl StateStore {
       "/sync/",
       "/sync/state/",
       "/sync/conflicts/",
+      "/sync/activity/",
       "/settings/",
     ];
 
