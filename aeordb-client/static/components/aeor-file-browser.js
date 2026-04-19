@@ -5,6 +5,34 @@ import {
   escapeHtml, escapeAttr, isImageFile, isVideoFile, isAudioFile, isTextFile,
 } from './aeor-file-view-shared.js';
 
+async function loadPreviewComponent(contentType) {
+  if (!contentType) return 'aeor-preview-default';
+
+  const [group, subtype] = contentType.split('/');
+  const sanitizedSubtype = (subtype || '').replace(/[^a-z0-9]/g, '-');
+  const exact = `aeor-preview-${group}-${sanitizedSubtype}`;
+  const grouped = `aeor-preview-${group}`;
+
+  // Tier 1: exact mime type component
+  try {
+    await import(`./previews/${exact}.js`);
+    if (customElements.get(exact)) return exact;
+  } catch {}
+
+  // Tier 2: group component
+  try {
+    await import(`./previews/${grouped}.js`);
+    if (customElements.get(grouped)) return grouped;
+  } catch {}
+
+  // Tier 3: default fallback
+  try {
+    await import('./previews/aeor-preview-default.js');
+  } catch {}
+
+  return 'aeor-preview-default';
+}
+
 class AeorFileBrowser extends HTMLElement {
   constructor() {
     super();
@@ -14,6 +42,7 @@ class AeorFileBrowser extends HTMLElement {
     this._tab_counter = 0;
     this._loading = false;
     this._preview_entry = null;
+    this._preview_component = null;
     this._scroll_listener = null;
   }
 
@@ -324,7 +353,8 @@ class AeorFileBrowser extends HTMLElement {
           const tab = this._tabs.find((t) => t.id === this._active_tab_id);
           const entries = (tab && tab.entries) || [];
           this._preview_entry = entries.find((e) => e.name === el.dataset.name) || null;
-          this.render();
+          this._preview_component = null;
+          this._loadPreview();
         }
       });
 
@@ -511,32 +541,10 @@ class AeorFileBrowser extends HTMLElement {
   }
 
   _renderPreviewPanel() {
-    if (!this._preview_entry) return '';
+    if (!this._preview_entry || !this._preview_component) return '';
 
     const entry = this._preview_entry;
-    const tab = this._tabs.find((t) => t.id === this._active_tab_id);
-    if (!tab) return '';
-
-    const filePath = tab.path.replace(/\/$/, '') + '/' + entry.name;
-    const fileUrl = `/api/v1/files/${tab.relationship_id}/${encodeURIComponent(filePath)}`;
-    const isImage = isImageFile(entry.name);
-    const isVideo = isVideoFile(entry.name);
-    const isAudio = isAudioFile(entry.name);
-    const isText = isTextFile(entry.name);
-
-    let preview = '';
-    if (isImage) {
-      preview = `<img src="${fileUrl}" alt="${escapeAttr(entry.name)}" class="preview-image">`;
-    } else if (isVideo) {
-      preview = `<video controls class="preview-media"><source src="${fileUrl}"></video>`;
-    } else if (isAudio) {
-      preview = `<audio controls class="preview-media"><source src="${fileUrl}"></audio>`;
-    } else if (isText) {
-      preview = `<pre class="preview-text" id="preview-text-content">Loading...</pre>`;
-      this._loadTextPreview(fileUrl);
-    } else {
-      preview = `<div class="preview-binary">Binary file — ${formatSize(entry.size)}</div>`;
-    }
+    const componentName = this._preview_component;
 
     return `
       <div class="preview-panel">
@@ -549,30 +557,39 @@ class AeorFileBrowser extends HTMLElement {
             }
             <button class="secondary small" data-action="rename">Rename</button>
             <button class="danger small" data-action="delete">Delete</button>
-            <button class="secondary small" data-action="close-preview">✕</button>
+            <button class="secondary small" data-action="close-preview">\u2715</button>
           </div>
         </div>
         <div class="preview-content">
-          ${preview}
+          <${componentName}></${componentName}>
         </div>
         <div class="preview-meta">
-          ${formatSize(entry.size)} · ${entry.content_type || 'Unknown type'} · ${formatDate(entry.created_at)}
+          ${formatSize(entry.size)} \u00B7 ${entry.content_type || 'Unknown type'} \u00B7 ${formatDate(entry.created_at)}
         </div>
       </div>
     `;
   }
 
-  async _loadTextPreview(url) {
-    try {
-      const response = await fetch(url);
-      const text = await response.text();
-      const element = this.querySelector('#preview-text-content');
-      if (element)
-        element.textContent = text.substring(0, 10000);
-    } catch (error) {
-      const element = this.querySelector('#preview-text-content');
-      if (element)
-        element.textContent = 'Failed to load preview';
+  async _loadPreview() {
+    if (!this._preview_entry) return;
+
+    const contentType = this._preview_entry.content_type || 'application/octet-stream';
+    this._preview_component = await loadPreviewComponent(contentType);
+    this.render();
+
+    // After render, the custom element is in the DOM — set its attributes
+    const previewEl = this.querySelector(this._preview_component);
+    if (previewEl) {
+      const tab = this._tabs.find((t) => t.id === this._active_tab_id);
+      if (tab) {
+        const filePath = tab.path.replace(/\/$/, '') + '/' + this._preview_entry.name;
+        const fileUrl = `/api/v1/files/${tab.relationship_id}/${encodeURIComponent(filePath)}`;
+        previewEl.setAttribute('src', fileUrl);
+        previewEl.setAttribute('filename', this._preview_entry.name);
+        previewEl.setAttribute('size', this._preview_entry.size || 0);
+        previewEl.setAttribute('content-type', contentType);
+        if (previewEl.load) previewEl.load();
+      }
     }
   }
 
@@ -691,7 +708,8 @@ class AeorFileBrowser extends HTMLElement {
         menu.remove();
         if (item.dataset.context === 'preview') {
           this._preview_entry = entry;
-          this.render();
+          this._preview_component = null;
+          this._loadPreview();
         } else {
           this._preview_entry = entry;
           this._handlePreviewAction(item.dataset.context);
