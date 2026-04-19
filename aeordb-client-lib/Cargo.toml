@@ -2,6 +2,8 @@
 name = "aeordb-client-lib"
 version = "0.1.0"
 edition = "2024"
+license = "BSL-1.1"
+license-file = "../LICENSE-BSL.md"
 
 [dependencies]
 aeordb = { git = "ssh://git@github.com/th317erd/aeordb.git", branch = "main" }

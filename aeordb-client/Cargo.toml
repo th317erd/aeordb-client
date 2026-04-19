@@ -2,6 +2,8 @@
 name = "aeordb-client"
 version = "0.1.0"
 edition = "2024"
+license = "BSL-1.1"
+license-file = "../LICENSE-BSL.md"
 
 [dependencies]
 aeordb-client-lib = { path = "../aeordb-client-lib" }
