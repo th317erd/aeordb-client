@@ -264,7 +264,7 @@ button.small {
    Forms
    ========================================================================== */
 
-input, select {
+input:not([type="checkbox"]), select {
   font-family: var(--font-sans);
   font-size: 14px;
   padding: 8px 12px;
@@ -276,7 +276,7 @@ input, select {
   width: 100%;
 }
 
-input:focus, select:focus {
+input:not([type="checkbox"]):focus, select:focus {
   border-color: var(--accent);
 }
 
@@ -330,8 +330,9 @@ select {
   width: 1.25rem;
   height: 1.25rem;
   min-width: 1.25rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  padding: 0;
+  border: 2px solid var(--border);
+  border-radius: 3px;
   background-color: var(--bg-tertiary);
   cursor: pointer;
   position: relative;
