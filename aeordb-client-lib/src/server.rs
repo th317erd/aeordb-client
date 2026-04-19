@@ -11,6 +11,7 @@ use tokio::sync::Notify;
 use crate::api::routes::conflicts;
 use crate::api::routes::connections;
 use crate::api::routes::files;
+use crate::api::routes::settings;
 use crate::api::routes::status::get_status;
 use crate::api::routes::sync;
 use crate::api::routes::system;
@@ -72,6 +73,7 @@ pub fn build_router(state: AppState) -> Router {
     .route("/files/{relationship_id}/{*path}", get(files::serve_file).put(files::upload_file).delete(files::delete_file))
     .route("/files/{relationship_id}/open", post(files::open_locally))
     .route("/files/{relationship_id}/rename", post(files::rename_file))
+    .route("/settings", get(settings::get_settings).patch(settings::update_settings))
     .route("/open-folder", post(system::open_folder))
     .route("/pick-directory", post(system::pick_directory))
     .route("/shutdown", post(system::shutdown));

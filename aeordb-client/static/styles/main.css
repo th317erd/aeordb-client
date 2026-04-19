@@ -1201,3 +1201,98 @@ aeor-sync {
   flex-shrink: 0;
   white-space: nowrap;
 }
+
+/* ==========================================================================
+   Conflicts — Selected Row + Detail Preview
+   ========================================================================== */
+
+aeor-conflicts {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.conflicts-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.conflict-row {
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+
+.conflict-row:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.conflict-row.selected {
+  background-color: var(--bg-tertiary);
+  border-left: 3px solid var(--warning);
+}
+
+.conflict-preview {
+  flex-shrink: 0;
+  height: 40vh;
+  min-height: 150px;
+  max-height: 80vh;
+  background-color: var(--bg-secondary);
+  border-top: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.conflict-detail {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 16px;
+}
+
+.conflict-comparison {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.conflict-version {
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.conflict-winner {
+  border-color: var(--success);
+}
+
+.conflict-loser {
+  border-color: var(--text-secondary);
+}
+
+.conflict-version-label {
+  font-weight: 600;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+}
+
+.conflict-winner .conflict-version-label {
+  color: var(--success);
+}
+
+.conflict-loser .conflict-version-label {
+  color: var(--text-secondary);
+}
+
+.conflict-version-meta .info-row {
+  padding: 4px 0;
+}
+
+.conflict-info {
+  display: flex;
+  gap: 8px;
+  font-size: 0.85rem;
+}

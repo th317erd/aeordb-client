@@ -4,6 +4,7 @@ class AeorConflicts extends HTMLElement {
   constructor() {
     super();
     this._conflicts = [];
+    this._selectedPath = null;
   }
 
   connectedCallback() {
@@ -15,52 +16,51 @@ class AeorConflicts extends HTMLElement {
     this.innerHTML = `
       <div class="page-header">
         <h1>Conflicts</h1>
+        ${(this._conflicts.length > 1)
+          ? '<button class="success small" id="dismiss-all">Accept All Winners</button>'
+          : ''
+        }
       </div>
 
-      ${(this._conflicts.length === 0)
-        ? '<div class="empty-state"><div class="empty-icon">&#10003;</div>No conflicts. Everything is in sync.</div>'
-        : this._renderConflictsView()
-      }
+      <div class="conflicts-list">
+        ${(this._conflicts.length === 0)
+          ? '<div class="empty-state"><div class="empty-icon">&#10003;</div>No conflicts. Everything is in sync.</div>'
+          : this._renderTable()
+        }
+      </div>
+
+      <div class="conflict-preview" style="display:none">
+        <div class="preview-resize-handle"></div>
+        <div class="preview-header">
+          <h3 class="preview-title"></h3>
+          <div class="preview-actions">
+            <button class="success small" data-action="accept">Accept Winner</button>
+            <button class="primary small" data-action="pick-loser">Pick Loser</button>
+            <button class="secondary small conflict-close">\u2715</button>
+          </div>
+        </div>
+        <div class="conflict-detail"></div>
+      </div>
     `;
 
     this._bindEvents();
-  }
 
-  _renderConflictsView() {
-    return `
-      <div class="info-section" style="margin-bottom: 20px;">
-        <p style="color: var(--text-secondary); line-height: 1.7;">
-          These files were changed on <strong style="color: var(--text-primary);">both sides</strong> since the last sync.
-          AeorDB automatically picked a <strong style="color: var(--success);">winner</strong> (most recent edit wins),
-          but the <strong style="color: var(--text-secondary);">loser</strong> version is preserved in history. You can override the auto-pick if needed.
-        </p>
-        <ul style="color: var(--text-secondary); margin: 12px 0 12px 20px; line-height: 1.9;">
-          <li><strong style="color: var(--success);">Accept</strong> &mdash; Keep the auto-selected winner. The loser remains in version history.</li>
-          <li><strong style="color: var(--accent);">Pick Loser</strong> &mdash; Override the auto-pick and promote the losing version instead.</li>
-        </ul>
-      </div>
-
-      ${this._renderTable()}
-
-      ${(this._conflicts.length > 1)
-        ? `<div style="margin-top: 20px; display: flex; align-items: center; gap: 12px;">
-            <span style="color: var(--text-secondary); font-size: 13px;">
-              Resolve all ${this._conflicts.length} conflict(s):
-            </span>
-            <button class="success small" id="dismiss-all">Accept All Winners</button>
-          </div>`
-        : ''
-      }
-    `;
+    if (this._selectedPath) {
+      this._showConflictPreview(this._selectedPath);
+    }
   }
 
   _renderTable() {
     const rows = this._conflicts.map((conflict) => {
       const winner = conflict.winner || {};
       const loser  = conflict.loser || {};
+      const isSelected = (conflict.path === this._selectedPath);
+      const sizeDiff = (winner.size != null && loser.size != null)
+        ? this._formatSize(Math.abs(winner.size - loser.size))
+        : '';
 
       return `
-        <tr class="conflict-row" data-path="${conflict.path}">
+        <tr class="conflict-row ${isSelected ? 'selected' : ''}" data-path="${conflict.path}">
           <td>
             <div style="font-weight: 500;">${conflict.path}</div>
             <div class="mono muted" style="margin-top: 4px; font-size: 11px;">
@@ -68,16 +68,14 @@ class AeorConflicts extends HTMLElement {
             </div>
           </td>
           <td>
-            <div style="color: var(--success); font-weight: 500;">Winner</div>
-            <div class="mono muted" style="font-size: 11px;">${(winner.hash || '').substring(0, 12)}...</div>
-            <div class="muted" style="font-size: 12px;">${this._formatSize(winner.size)} &middot; node ${winner.node_id || '?'}</div>
+            <span style="color: var(--success); font-weight: 500;">Winner</span>
+            <span class="muted" style="font-size: 12px;">${this._formatSize(winner.size)}</span>
           </td>
           <td>
-            <div style="color: var(--text-secondary);">Loser</div>
-            <div class="mono muted" style="font-size: 11px;">${(loser.hash || '').substring(0, 12)}...</div>
-            <div class="muted" style="font-size: 12px;">${this._formatSize(loser.size)} &middot; node ${loser.node_id || '?'}</div>
+            <span style="color: var(--text-secondary);">Loser</span>
+            <span class="muted" style="font-size: 12px;">${this._formatSize(loser.size)}</span>
           </td>
-          <td>${new Date(conflict.created_at).toLocaleString()}</td>
+          <td class="muted">${new Date(conflict.created_at).toLocaleString()}</td>
           <td class="actions">
             <button class="success small dismiss-btn" data-path="${conflict.path}">Accept</button>
             <button class="primary small resolve-btn" data-path="${conflict.path}" data-pick="loser">Pick Loser</button>
@@ -97,17 +95,172 @@ class AeorConflicts extends HTMLElement {
   }
 
   _bindEvents() {
+    // Row click — show detail preview
+    this.querySelectorAll('.conflict-row').forEach((row) => {
+      row.addEventListener('click', (event) => {
+        if (event.target.closest('button')) return;
+        const path = row.dataset.path;
+        if (this._selectedPath === path) {
+          this._selectedPath = null;
+          this._hidePreview();
+          row.classList.remove('selected');
+        } else {
+          const prev = this.querySelector('.conflict-row.selected');
+          if (prev) prev.classList.remove('selected');
+          this._selectedPath = path;
+          row.classList.add('selected');
+          this._showConflictPreview(path);
+        }
+      });
+    });
+
     this.querySelectorAll('.dismiss-btn').forEach((button) => {
-      button.addEventListener('click', () => this._dismissConflict(button.dataset.path));
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._dismissConflict(button.dataset.path);
+      });
     });
 
     this.querySelectorAll('.resolve-btn').forEach((button) => {
-      button.addEventListener('click', () => this._resolveConflict(button.dataset.path, button.dataset.pick));
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._resolveConflict(button.dataset.path, button.dataset.pick);
+      });
     });
 
     const dismissAllButton = this.querySelector('#dismiss-all');
     if (dismissAllButton)
       dismissAllButton.addEventListener('click', () => this._dismissAll());
+
+    // Preview panel events
+    const closeBtn = this.querySelector('.conflict-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', () => {
+        this._selectedPath = null;
+        this._hidePreview();
+        const prev = this.querySelector('.conflict-row.selected');
+        if (prev) prev.classList.remove('selected');
+      });
+    }
+
+    const acceptBtn = this.querySelector('[data-action="accept"]');
+    if (acceptBtn) {
+      acceptBtn.addEventListener('click', () => {
+        if (this._selectedPath) this._dismissConflict(this._selectedPath);
+      });
+    }
+
+    const pickLoserBtn = this.querySelector('[data-action="pick-loser"]');
+    if (pickLoserBtn) {
+      pickLoserBtn.addEventListener('click', () => {
+        if (this._selectedPath) this._resolveConflict(this._selectedPath, 'loser');
+      });
+    }
+
+    // Resize handle
+    const resizeHandle = this.querySelector('.conflict-preview .preview-resize-handle');
+    const panel = this.querySelector('.conflict-preview');
+    if (resizeHandle && panel) {
+      resizeHandle.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        const startY = event.clientY;
+        const startHeight = panel.offsetHeight;
+
+        const onMouseMove = (moveEvent) => {
+          const delta = startY - moveEvent.clientY;
+          const newHeight = Math.max(150, Math.min(window.innerHeight * 0.8, startHeight + delta));
+          panel.style.height = newHeight + 'px';
+        };
+
+        const onMouseUp = () => {
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      });
+    }
+  }
+
+  _showConflictPreview(path) {
+    const conflict = this._conflicts.find((c) => c.path === path);
+    if (!conflict) return;
+
+    const panel = this.querySelector('.conflict-preview');
+    if (!panel) return;
+
+    const winner = conflict.winner || {};
+    const loser = conflict.loser || {};
+
+    panel.querySelector('.preview-title').textContent = conflict.path;
+
+    const detail = panel.querySelector('.conflict-detail');
+    detail.innerHTML = `
+      <div class="conflict-comparison">
+        <div class="conflict-version conflict-winner">
+          <div class="conflict-version-label">Winner</div>
+          <div class="conflict-version-meta">
+            <div class="info-row">
+              <span class="info-label">Hash</span>
+              <span class="info-value mono">${winner.hash || '?'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Size</span>
+              <span class="info-value">${this._formatSize(winner.size)}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Content Type</span>
+              <span class="info-value">${winner.content_type || 'Unknown'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Node ID</span>
+              <span class="info-value mono">${winner.node_id || '?'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Version Clock</span>
+              <span class="info-value mono">${winner.virtual_time || '?'}</span>
+            </div>
+          </div>
+        </div>
+        <div class="conflict-version conflict-loser">
+          <div class="conflict-version-label">Loser</div>
+          <div class="conflict-version-meta">
+            <div class="info-row">
+              <span class="info-label">Hash</span>
+              <span class="info-value mono">${loser.hash || '?'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Size</span>
+              <span class="info-value">${this._formatSize(loser.size)}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Content Type</span>
+              <span class="info-value">${loser.content_type || 'Unknown'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Node ID</span>
+              <span class="info-value mono">${loser.node_id || '?'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Version Clock</span>
+              <span class="info-value mono">${loser.virtual_time || '?'}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="conflict-info">
+        <span class="muted">Conflict type: <strong>${conflict.conflict_type || 'modify/modify'}</strong></span>
+        <span class="muted">\u00B7 Detected: ${new Date(conflict.created_at).toLocaleString()}</span>
+      </div>
+    `;
+
+    panel.style.display = '';
+  }
+
+  _hidePreview() {
+    const panel = this.querySelector('.conflict-preview');
+    if (panel) panel.style.display = 'none';
   }
 
   async _fetchConflicts() {
@@ -127,6 +280,9 @@ class AeorConflicts extends HTMLElement {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ path }),
       });
+      if (this._selectedPath === path) {
+        this._selectedPath = null;
+      }
       await this._fetchConflicts();
     } catch (error) {
       console.error('Failed to dismiss conflict:', error);
@@ -140,6 +296,9 @@ class AeorConflicts extends HTMLElement {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ path, pick }),
       });
+      if (this._selectedPath === path) {
+        this._selectedPath = null;
+      }
       await this._fetchConflicts();
     } catch (error) {
       console.error('Failed to resolve conflict:', error);
@@ -152,6 +311,7 @@ class AeorConflicts extends HTMLElement {
 
     try {
       await fetch('/api/v1/conflicts/dismiss-all', { method: 'POST' });
+      this._selectedPath = null;
       await this._fetchConflicts();
     } catch (error) {
       console.error('Failed to dismiss all:', error);
@@ -159,15 +319,9 @@ class AeorConflicts extends HTMLElement {
   }
 
   _formatSize(bytes) {
-    if (bytes == null)
-      return '?';
-
-    if (bytes < 1024)
-      return `${bytes} B`;
-
-    if (bytes < 1024 * 1024)
-      return `${(bytes / 1024).toFixed(1)} KB`;
-
+    if (bytes == null) return '?';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 }

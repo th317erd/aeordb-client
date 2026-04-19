@@ -48,6 +48,10 @@ class AeorNav extends HTMLElement {
           <span class="nav-icon" style="color: var(--warning)">&#9888;</span>
           Conflicts
         </div>
+        <div class="nav-item ${(active === 'settings') ? 'active' : ''}" data-page="settings">
+          <span class="nav-icon" style="color: var(--text-secondary)">&#9881;</span>
+          Settings
+        </div>
       </nav>
 
       <div class="nav-version">v${this._version || '0.1.0'}</div>

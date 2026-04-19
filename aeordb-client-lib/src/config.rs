@@ -7,6 +7,30 @@ use crate::connections::RemoteConnection;
 use crate::error::{ClientError, Result};
 use crate::sync::relationships::SyncRelationship;
 
+/// Client-level settings (sync interval, auto-start, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientSettings {
+  #[serde(default = "default_sync_interval")]
+  pub sync_interval_seconds: u64,
+  #[serde(default = "default_auto_start_sync")]
+  pub auto_start_sync: bool,
+  #[serde(default)]
+  pub client_name: Option<String>,
+}
+
+fn default_sync_interval() -> u64 { 60 }
+fn default_auto_start_sync() -> bool { true }
+
+impl Default for ClientSettings {
+  fn default() -> Self {
+    Self {
+      sync_interval_seconds: 60,
+      auto_start_sync: true,
+      client_name: None,
+    }
+  }
+}
+
 /// Human-editable configuration stored as YAML.
 /// Contains connections and sync relationships.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,6 +39,8 @@ pub struct ClientConfig {
   pub connections:   Vec<RemoteConnection>,
   #[serde(default)]
   pub relationships: Vec<SyncRelationship>,
+  #[serde(default)]
+  pub settings:      ClientSettings,
 }
 
 impl Default for ClientConfig {
@@ -22,6 +48,7 @@ impl Default for ClientConfig {
     Self {
       connections:   Vec::new(),
       relationships: Vec::new(),
+      settings:      ClientSettings::default(),
     }
   }
 }
