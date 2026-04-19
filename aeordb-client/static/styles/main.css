@@ -986,3 +986,58 @@ aeor-file-browser {
 .preview-link {
   color: var(--accent);
 }
+
+/* ==========================================================================
+   Connections — Selected Row + Dashboard Preview
+   ========================================================================== */
+
+aeor-connections {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.connections-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.connection-row {
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+
+.connection-row:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.connection-row.selected {
+  background-color: var(--bg-tertiary);
+  border-left: 3px solid var(--accent);
+}
+
+.connection-preview {
+  flex-shrink: 0;
+  height: 50vh;
+  min-height: 200px;
+  max-height: 85vh;
+  background-color: var(--bg-secondary);
+  border-top: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.preview-iframe-container {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.connection-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background-color: #fff;
+}
