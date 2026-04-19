@@ -43,6 +43,7 @@ class AeorFileBrowser extends HTMLElement {
     this._loading = false;
     this._preview_entry = null;
     this._preview_component = null;
+    this._preview_height = null;
     this._scroll_listener = null;
   }
 
@@ -403,6 +404,7 @@ class AeorFileBrowser extends HTMLElement {
           const delta     = startY - moveEvent.clientY;
           const newHeight = Math.max(150, Math.min(window.innerHeight * 0.8, startHeight + delta));
           previewPanel.style.height = newHeight + 'px';
+          self._preview_height = newHeight;
           self._updateContentPadding();
         };
 
@@ -574,7 +576,7 @@ class AeorFileBrowser extends HTMLElement {
     const componentName = this._preview_component;
 
     return `
-      <div class="preview-panel" id="preview-panel">
+      <div class="preview-panel" id="preview-panel" style="${this._preview_height ? 'height:' + this._preview_height + 'px' : ''}">
         <div class="preview-resize-handle" id="preview-resize-handle"></div>
         <div class="preview-header">
           <h3>${escapeHtml(entry.name)}</h3>
