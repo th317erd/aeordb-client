@@ -72,6 +72,7 @@ pub fn build_router(state: AppState) -> Router {
     .route("/files/{relationship_id}/open", post(files::open_locally))
     .route("/files/{relationship_id}/rename", post(files::rename_file))
     .route("/open-folder", post(system::open_folder))
+    .route("/pick-directory", post(system::pick_directory))
     .route("/shutdown", post(system::shutdown));
 
   Router::new()

@@ -6,6 +6,7 @@ class AeorSync extends HTMLElement {
     this._relationships = [];
     this._connections   = [];
     this._showAddForm   = false;
+    this._editingId     = null; // ID of the relationship being edited, or null
   }
 
   connectedCallback() {
@@ -20,10 +21,11 @@ class AeorSync extends HTMLElement {
     this.innerHTML = `
       <div class="page-header">
         <h1>Sync Relationships</h1>
-        <button id="add-btn" class="${(this._showAddForm) ? 'secondary' : 'primary'}" ${(!canAdd && !this._showAddForm) ? 'disabled' : ''}>${(this._showAddForm) ? 'Cancel' : 'Add Sync'}</button>
+        <button id="add-btn" class="${(this._showAddForm || this._editingId) ? 'secondary' : 'primary'}" ${(!canAdd && !this._showAddForm && !this._editingId) ? 'disabled' : ''}>${(this._showAddForm || this._editingId) ? 'Cancel' : 'Add Sync'}</button>
       </div>
 
       ${(this._showAddForm) ? this._renderAddForm() : ''}
+      ${(this._editingId) ? this._renderEditForm() : ''}
 
       ${(this._relationships.length === 0)
         ? (hasConnections)
@@ -34,9 +36,10 @@ class AeorSync extends HTMLElement {
     `;
 
     const addButton = this.querySelector('#add-btn');
-    if (addButton && canAdd) {
+    if (addButton && (canAdd || this._showAddForm || this._editingId)) {
       addButton.addEventListener('click', () => {
-        this._showAddForm = !this._showAddForm;
+        this._showAddForm = !this._showAddForm && !this._editingId;
+        this._editingId   = null;
         this.render();
       });
     }
@@ -52,7 +55,7 @@ class AeorSync extends HTMLElement {
       });
     }
 
-    if (this._showAddForm)
+    if (this._showAddForm || this._editingId)
       this._bindFormEvents();
 
     this._bindTableEvents();
@@ -80,7 +83,10 @@ class AeorSync extends HTMLElement {
         </div>
         <div class="form-row">
           <label>Local Path</label>
-          <input type="text" id="form-local-path" placeholder="/home/user/Documents">
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="form-local-path" placeholder="/home/user/Documents" style="flex: 1;">
+            <button class="secondary small" type="button" id="browse-local-path">Browse</button>
+          </div>
         </div>
         <div class="form-row">
           <label>Direction</label>
@@ -102,6 +108,58 @@ class AeorSync extends HTMLElement {
     `;
   }
 
+  _renderEditForm() {
+    const relationship = this._relationships.find((r) => r.id === this._editingId);
+    if (!relationship) return '';
+
+    return `
+      <div class="form-panel">
+        <h2>Edit Sync Relationship</h2>
+        <div class="form-row">
+          <label>Name</label>
+          <input type="text" id="form-name" value="${relationship.name || ''}">
+        </div>
+        <div class="form-row">
+          <label>Remote Path</label>
+          <input type="text" id="form-remote-path" value="${relationship.remote_path}" disabled>
+        </div>
+        <div class="form-row">
+          <label>Local Path</label>
+          <input type="text" id="form-local-path" value="${relationship.local_path}" disabled>
+        </div>
+        <div class="form-row">
+          <label>Direction</label>
+          <select id="form-direction">
+            <option value="pull_only" ${(relationship.direction === 'pull_only') ? 'selected' : ''}>Pull Only</option>
+            <option value="push_only" ${(relationship.direction === 'push_only') ? 'selected' : ''}>Push Only</option>
+            <option value="bidirectional" ${(relationship.direction === 'bidirectional') ? 'selected' : ''}>Bidirectional</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Filter (optional, comma-separated globs)</label>
+          <input type="text" id="form-filter" value="${relationship.filter || ''}">
+        </div>
+        <div class="form-row">
+          <label>Delete Propagation</label>
+          <div style="display: flex; gap: 16px; margin-top: 4px;">
+            <label style="font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px;">
+              <input type="checkbox" id="form-delete-local-to-remote" ${(relationship.delete_propagation && relationship.delete_propagation.local_to_remote) ? 'checked' : ''}>
+              Local → Remote
+            </label>
+            <label style="font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px;">
+              <input type="checkbox" id="form-delete-remote-to-local" ${(relationship.delete_propagation && relationship.delete_propagation.remote_to_local) ? 'checked' : ''}>
+              Remote → Local
+            </label>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="primary" id="form-submit">Save Changes</button>
+          <button class="secondary" id="form-cancel">Cancel</button>
+        </div>
+      </div>
+    `;
+  }
+
   _renderTable() {
     const rows = this._relationships.map((relationship) => `
       <tr>
@@ -112,6 +170,7 @@ class AeorSync extends HTMLElement {
         <td><span class="badge ${(relationship.enabled) ? 'success' : 'warning'}">${(relationship.enabled) ? 'enabled' : 'disabled'}</span></td>
         <td class="actions">
           <button class="success small trigger-btn" data-id="${relationship.id}">Sync</button>
+          <button class="secondary small edit-btn" data-id="${relationship.id}">Edit</button>
           <button class="secondary small toggle-btn" data-id="${relationship.id}" data-enabled="${relationship.enabled}">${(relationship.enabled) ? 'Pause' : 'Resume'}</button>
           <button class="danger small delete-btn" data-id="${relationship.id}">Delete</button>
         </td>
@@ -131,13 +190,51 @@ class AeorSync extends HTMLElement {
   _bindFormEvents() {
     const submitButton = this.querySelector('#form-submit');
     const cancelButton = this.querySelector('#form-cancel');
-    if (submitButton) submitButton.addEventListener('click', () => this._submitForm());
-    if (cancelButton) cancelButton.addEventListener('click', () => { this._showAddForm = false; this.render(); });
+
+    if (submitButton) {
+      submitButton.addEventListener('click', () => {
+        if (this._editingId)
+          this._submitEdit();
+        else
+          this._submitForm();
+      });
+    }
+
+    if (cancelButton) {
+      cancelButton.addEventListener('click', () => {
+        this._showAddForm = false;
+        this._editingId   = null;
+        this.render();
+      });
+    }
+
+    const browseButton = this.querySelector('#browse-local-path');
+    if (browseButton) {
+      browseButton.addEventListener('click', async () => {
+        try {
+          const response = await fetch('/api/v1/pick-directory', { method: 'POST' });
+          const result   = await response.json();
+          if (result.path) {
+            const input = this.querySelector('#form-local-path');
+            if (input) input.value = result.path;
+          }
+        } catch (error) {
+          console.error('Directory picker failed:', error);
+        }
+      });
+    }
   }
 
   _bindTableEvents() {
     this.querySelectorAll('.trigger-btn').forEach((button) => {
       button.addEventListener('click', () => this._triggerSync(button.dataset.id));
+    });
+    this.querySelectorAll('.edit-btn').forEach((button) => {
+      button.addEventListener('click', () => {
+        this._editingId   = button.dataset.id;
+        this._showAddForm = false;
+        this.render();
+      });
     });
     this.querySelectorAll('.toggle-btn').forEach((button) => {
       button.addEventListener('click', () => this._toggleSync(button.dataset.id, button.dataset.enabled === 'true'));
@@ -192,13 +289,42 @@ class AeorSync extends HTMLElement {
     }
   }
 
+  async _submitEdit() {
+    const name      = this.querySelector('#form-name').value;
+    const direction = this.querySelector('#form-direction').value;
+    const filter    = this.querySelector('#form-filter').value;
+
+    const localToRemote = this.querySelector('#form-delete-local-to-remote')?.checked || false;
+    const remoteToLocal = this.querySelector('#form-delete-remote-to-local')?.checked || false;
+
+    try {
+      await fetch(`/api/v1/sync/${this._editingId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          name:               (name) ? name : null,
+          direction,
+          filter:             (filter) ? filter : null,
+          delete_propagation: {
+            local_to_remote: localToRemote,
+            remote_to_local: remoteToLocal,
+          },
+        }),
+      });
+      this._editingId = null;
+      await this._fetchData();
+    } catch (error) {
+      console.error('Failed to update sync:', error);
+    }
+  }
+
   async _triggerSync(id) {
     try {
       const response = await fetch(`/api/v1/sync/${id}/trigger`, { method: 'POST' });
       const result   = await response.json();
       const pull     = result.pull || {};
       const push     = result.push || {};
-      alert(`Sync complete!\nPulled: ${pull.files_downloaded || 0} files\nPushed: ${push.files_uploaded || 0} files`);
+      alert(`Sync complete!\nPulled: ${pull.files_pulled || 0} files\nPushed: ${push.files_pushed || 0} files`);
     } catch (error) {
       alert(`Sync failed: ${error.message}`);
     }
