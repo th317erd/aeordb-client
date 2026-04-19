@@ -381,7 +381,6 @@ class AeorFileBrowser extends HTMLElement {
   _switchTab(tabId) {
     if (this._active_tab_id === tabId) return;
     this._active_tab_id = tabId;
-    this._preview_entry = null;
     this._saveState();
     const tab = this._tabs.find((t) => t.id === tabId);
     if (tab)
