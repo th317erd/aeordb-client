@@ -66,6 +66,12 @@ pub async fn resolve_conflict_handler(
   State(state): State<AppState>,
   Json(request): Json<ResolveRequest>,
 ) -> Result<Json<serde_json::Value>, ClientError> {
+  if request.pick != "winner" && request.pick != "loser" {
+    return Err(ClientError::BadRequest(
+      format!("invalid pick value '{}': must be 'winner' or 'loser'", request.pick),
+    ));
+  }
+
   let ctx          = RequestContext::system();
   let conflict_path = &request.path;
 
