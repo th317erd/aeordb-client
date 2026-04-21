@@ -17,6 +17,8 @@ class AeorApp extends HTMLElement {
   }
 
   connectedCallback() {
+    this._relationshipCache = {};
+    this._cacheRelationships();
     this.render();
   }
 
@@ -45,6 +47,12 @@ class AeorApp extends HTMLElement {
         this.render();
       });
 
+    // Handle file drag-start from the file browser — resolve local paths
+    this.querySelector('.app-content')
+      .addEventListener('file-drag-start', (event) => {
+        this._handleFileDragStart(event.detail);
+      });
+
     // Pass autoAdd option to connections component if present
     if (this._currentPage === 'connections' && this._pageOptions.autoAdd) {
       const connectionsElement = this.querySelector('aeor-connections');
@@ -52,6 +60,36 @@ class AeorApp extends HTMLElement {
         connectionsElement.openAddForm();
 
       this._pageOptions = {};
+    }
+  }
+
+  _handleFileDragStart(detail) {
+    const { event, relationshipId, path } = detail;
+
+    // Use cached relationship data to resolve the local path synchronously.
+    // dataTransfer is only writable during the synchronous dragstart handler.
+    const relationship = this._relationshipCache && this._relationshipCache[relationshipId];
+    if (!relationship || !relationship.local_path) return;
+
+    const localBase = relationship.local_path.replace(/\/$/, '');
+    const relativePath = path.replace(/^\//, '');
+    const localPath = `${localBase}/${relativePath}`;
+    const fileUri = `file://${encodeURI(localPath)}`;
+
+    event.dataTransfer.setData('text/uri-list', fileUri);
+  }
+
+  async _cacheRelationships() {
+    try {
+      const response = await fetch('/api/v1/sync');
+      if (!response.ok) return;
+      const relationships = await response.json();
+      this._relationshipCache = {};
+      for (const rel of relationships) {
+        this._relationshipCache[rel.id] = rel;
+      }
+    } catch (error) {
+      // Non-critical
     }
   }
 

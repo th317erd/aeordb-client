@@ -546,29 +546,35 @@ class AeorFileBrowser extends HTMLElement {
       });
     }
 
-    // Drag-out: dragging entries out for download/copy
+    // Drag-out: emit a custom event so the host app can handle native drag
     container.querySelectorAll('.file-entry[draggable="true"]').forEach((el) => {
       el.addEventListener('dragstart', (event) => {
         const entryName = el.dataset.name;
         const entryType = parseInt(el.dataset.type, 10);
         const entry = tab.entries.find((e) => e.name === entryName);
         const filePath = tab.path.replace(/\/$/, '') + '/' + entryName;
+        const fileUrl = `${window.location.origin}/api/v1/files/${tab.relationshipId}/${encodeURIComponent(filePath)}`;
+        const mime = (entry && entry.content_type) || 'application/octet-stream';
 
-        if (entryType === ENTRY_TYPE_DIR) {
-          // Directory: provide the browse URL
-          const browseUrl = `${window.location.origin}/api/v1/browse/${tab.relationshipId}/${encodeURIComponent(filePath + '/')}`;
-          event.dataTransfer.setData('text/uri-list', browseUrl);
-          event.dataTransfer.setData('text/plain', filePath);
-        } else {
-          // File: provide the download URL
-          const fileUrl = `${window.location.origin}/api/v1/files/${tab.relationshipId}/${encodeURIComponent(filePath)}`;
-          const mime = (entry && entry.content_type) || 'application/octet-stream';
+        // Set web-standard fallbacks
+        if (entryType !== ENTRY_TYPE_DIR) {
           event.dataTransfer.setData('DownloadURL', `${mime}:${entryName}:${fileUrl}`);
-          event.dataTransfer.setData('text/uri-list', fileUrl);
-          event.dataTransfer.setData('text/plain', fileUrl);
         }
-
+        event.dataTransfer.setData('text/uri-list', fileUrl);
         event.dataTransfer.effectAllowed = 'copy';
+
+        // Dispatch event for host app to enhance (e.g., Tauri native file drag)
+        this.dispatchEvent(new CustomEvent('file-drag-start', {
+          bubbles: true,
+          detail: {
+            event,
+            entry,
+            path:           filePath,
+            relationshipId: tab.relationshipId,
+            url:            fileUrl,
+            isDirectory:    entryType === ENTRY_TYPE_DIR,
+          },
+        }));
       });
     });
 
