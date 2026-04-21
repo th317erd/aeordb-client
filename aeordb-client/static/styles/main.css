@@ -621,6 +621,12 @@ aeor-file-browser {
   cursor: grabbing;
 }
 
+.file-entry.drop-target {
+  background-color: rgba(249, 115, 22, 0.1);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .tab-bar {
   display: flex;
   align-items: center;

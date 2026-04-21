@@ -496,6 +496,34 @@ class AeorFileBrowser extends HTMLElement {
 
         this._showContextMenu(event.clientX, event.clientY, entry);
       });
+
+      // Drop onto directory entries — move the dragged entry into this folder
+      const entryType = parseInt(el.dataset.type, 10);
+      if (entryType === ENTRY_TYPE_DIR) {
+        el.addEventListener('dragover', (event) => {
+          if (event.dataTransfer.types.includes('application/x-aeordb-entry')) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+            el.classList.add('drop-target');
+          }
+        });
+
+        el.addEventListener('dragleave', () => {
+          el.classList.remove('drop-target');
+        });
+
+        el.addEventListener('drop', (event) => {
+          event.preventDefault();
+          event.stopPropagation(); // don't trigger listing-level drop
+          el.classList.remove('drop-target');
+
+          const sourceName = event.dataTransfer.getData('application/x-aeordb-entry');
+          if (sourceName && sourceName !== el.dataset.name) {
+            const targetDir = el.dataset.name;
+            this._moveEntryToFolder(sourceName, targetDir);
+          }
+        });
+      }
     });
 
     // Upload (button)
@@ -512,15 +540,20 @@ class AeorFileBrowser extends HTMLElement {
       let dragCounter = 0; // track nested enter/leave events
 
       listing.addEventListener('dragover', (event) => {
-        // Only accept external file drops, not internal reorders
-        if (event.dataTransfer.types.includes('Files')) {
+        const isInternal = event.dataTransfer.types.includes('application/x-aeordb-entry');
+        const isExternal = event.dataTransfer.types.includes('Files');
+
+        if (isExternal && !isInternal) {
           event.preventDefault();
           event.dataTransfer.dropEffect = 'copy';
         }
       });
 
       listing.addEventListener('dragenter', (event) => {
-        if (event.dataTransfer.types.includes('Files')) {
+        const isInternal = event.dataTransfer.types.includes('application/x-aeordb-entry');
+        const isExternal = event.dataTransfer.types.includes('Files');
+
+        if (isExternal && !isInternal) {
           event.preventDefault();
           dragCounter++;
           listing.classList.add('drop-active');
@@ -540,7 +573,9 @@ class AeorFileBrowser extends HTMLElement {
         dragCounter = 0;
         listing.classList.remove('drop-active');
 
-        if (event.dataTransfer.files.length > 0) {
+        // Only handle external file drops — internal moves handled by folder targets
+        const isInternal = event.dataTransfer.types.includes('application/x-aeordb-entry');
+        if (!isInternal && event.dataTransfer.files.length > 0) {
           this._uploadFiles(event.dataTransfer.files);
         }
       });
@@ -556,12 +591,15 @@ class AeorFileBrowser extends HTMLElement {
         const fileUrl = `${window.location.origin}/api/v1/files/${tab.relationshipId}/${encodeURIComponent(filePath)}`;
         const mime = (entry && entry.content_type) || 'application/octet-stream';
 
-        // Set web-standard fallbacks
+        // Internal move marker — used when dropping onto a folder in the same view
+        event.dataTransfer.setData('application/x-aeordb-entry', entryName);
+
+        // Set web-standard fallbacks for external drops
         if (entryType !== ENTRY_TYPE_DIR) {
           event.dataTransfer.setData('DownloadURL', `${mime}:${entryName}:${fileUrl}`);
         }
         event.dataTransfer.setData('text/uri-list', fileUrl);
-        event.dataTransfer.effectAllowed = 'copy';
+        event.dataTransfer.effectAllowed = 'copyMove';
 
         // Dispatch event for host app to enhance (e.g., Tauri native file drag)
         this.dispatchEvent(new CustomEvent('file-drag-start', {
@@ -825,6 +863,27 @@ class AeorFileBrowser extends HTMLElement {
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
+  async _moveEntryToFolder(entryName, folderName) {
+    const tab = this._activeTab();
+    if (!tab) return;
+
+    const fromPath = tab.path.replace(/\/$/, '') + '/' + entryName;
+    const toPath = tab.path.replace(/\/$/, '') + '/' + folderName + '/' + entryName;
+
+    try {
+      const response = await fetch(`/api/v1/files/${tab.relationshipId}/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: fromPath, to: toPath }),
+      });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+      window.aeorToast(`Moved ${entryName} into ${folderName}/`, 'success');
+      this._fetchListing();
+    } catch (error) {
+      window.aeorToast(`Move failed: ${error.message}`, 'error');
+    }
+  }
+
   async _renamePreviewFile(newName) {
     const tab = this._activeTab();
     if (!tab || !tab.previewEntry) return;
