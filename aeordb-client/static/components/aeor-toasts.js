@@ -7,6 +7,7 @@ class AeorToasts extends HTMLElement {
     this._eventSource = null;
     this._pendingEvents = [];  // debounce buffer
     this._debounceTimer = null;
+    this._lastErrors = {};     // per-relationship error dedup: name → message
   }
 
   connectedCallback() {
@@ -133,9 +134,16 @@ class AeorToasts extends HTMLElement {
         }
       }
 
-      // Show error toast if any errors
+      // Show error toast — suppress if same error repeated
       if (hasErrors) {
-        window.aeorToast(`${name}: ${errors[0]}`, 'error', 10000);
+        const errorMsg = errors[0];
+        if (this._lastErrors[name] !== errorMsg) {
+          this._lastErrors[name] = errorMsg;
+          window.aeorToast(`${name}: ${errorMsg}`, 'error', 10000);
+        }
+      } else {
+        // Clear last error for this relationship on success
+        delete this._lastErrors[name];
       }
 
       // Show summary toast for file operations
