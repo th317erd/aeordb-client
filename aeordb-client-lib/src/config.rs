@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use tokio::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -100,10 +100,8 @@ impl ConfigStore {
   }
 
   /// Save the current config to disk.
-  pub fn save(&self) -> Result<()> {
-    let config = self.config.read().map_err(|error| {
-      ClientError::Configuration(format!("config lock poisoned: {}", error))
-    })?;
+  pub async fn save(&self) -> Result<()> {
+    let config = self.config.read().await;
     self.save_inner(&config)
   }
 
@@ -140,21 +138,17 @@ impl ConfigStore {
   }
 
   /// Get a snapshot of the current config.
-  pub fn get(&self) -> Result<ClientConfig> {
-    let config = self.config.read().map_err(|error| {
-      ClientError::Configuration(format!("config lock poisoned: {}", error))
-    })?;
+  pub async fn get(&self) -> Result<ClientConfig> {
+    let config = self.config.read().await;
     Ok(config.clone())
   }
 
   /// Update the config with a closure and save to disk.
-  pub fn update<F>(&self, updater: F) -> Result<()>
+  pub async fn update<F>(&self, updater: F) -> Result<()>
   where
     F: FnOnce(&mut ClientConfig),
   {
-    let mut config = self.config.write().map_err(|error| {
-      ClientError::Configuration(format!("config lock poisoned: {}", error))
-    })?;
+    let mut config = self.config.write().await;
     updater(&mut config);
     self.save_inner(&config)
   }

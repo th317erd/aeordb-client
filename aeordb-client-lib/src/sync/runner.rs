@@ -68,7 +68,7 @@ impl SyncRunner {
     }
 
     let relationship_manager = RelationshipManager::new(&self.config);
-    let relationship = relationship_manager.get(relationship_id)?
+    let relationship = relationship_manager.get(relationship_id).await?
       .ok_or_else(|| ClientError::Configuration(
         format!("sync relationship not found: {}", relationship_id),
       ))?;
@@ -80,7 +80,7 @@ impl SyncRunner {
     }
 
     let connection_manager = ConnectionManager::new(&self.config);
-    let connection = connection_manager.get(&relationship.remote_connection_id)?
+    let connection = connection_manager.get(&relationship.remote_connection_id).await?
       .ok_or_else(|| ClientError::Configuration(
         format!("connection not found: {}", relationship.remote_connection_id),
       ))?;
@@ -90,15 +90,16 @@ impl SyncRunner {
     let state_clone           = self.state.clone();
     let activity_clone        = self.activity.clone();
     let http_client_clone     = self.http_client.clone();
+    let config_clone          = self.config.clone();
 
-    let sync_interval = self.config.get()
+    let sync_interval = self.config.get().await
       .map(|c| c.settings.sync_interval_seconds)
       .unwrap_or(60);
 
     tracing::info!("starting sync for '{}' ({:?})", relationship.name, relationship.direction);
 
     let handle = tokio::spawn(async move {
-      run_sync_loop(state_clone, activity_clone, relationship, connection, http_client_clone, sync_interval).await;
+      run_sync_loop(state_clone, activity_clone, config_clone, relationship, connection, http_client_clone, sync_interval).await;
     });
 
     running.insert(relationship_id_owned, RunningSync {
@@ -129,7 +130,7 @@ impl SyncRunner {
   pub async fn status(&self) -> Vec<SyncRunnerStatus> {
     let running = self.running.lock().await;
     let relationship_manager = RelationshipManager::new(&self.config);
-    let all_relationships = relationship_manager.list().unwrap_or_default();
+    let all_relationships = relationship_manager.list().await.unwrap_or_default();
 
     all_relationships.iter()
       .map(|relationship| SyncRunnerStatus {
@@ -157,7 +158,7 @@ impl SyncRunner {
   /// Start all enabled relationships.
   pub async fn start_all_enabled(&self) {
     let relationship_manager = RelationshipManager::new(&self.config);
-    for relationship in relationship_manager.list().unwrap_or_default() {
+    for relationship in relationship_manager.list().await.unwrap_or_default() {
       if relationship.enabled {
         if let Err(error) = self.start(&relationship.id).await {
           tracing::warn!("failed to start sync for '{}': {}", relationship.name, error);
@@ -171,6 +172,7 @@ impl SyncRunner {
 async fn run_sync_loop(
   state: Arc<StateStore>,
   activity: SyncActivityLog,
+  config: Arc<ConfigStore>,
   relationship: SyncRelationship,
   connection: crate::connections::RemoteConnection,
   http_client: reqwest::Client,
@@ -303,7 +305,25 @@ async fn run_sync_loop(
 
       // Periodic safety net -- full sync at configured interval.
       _ = tokio::time::sleep(std::time::Duration::from_secs(sync_interval_seconds)) => {
-        match sync_relationship(&state, &connection, &relationship, &http_client).await {
+        // Re-read config in case it changed
+        let relationship_manager = RelationshipManager::new(&config);
+        let current_relationship = match relationship_manager.get(&relationship.id).await {
+          Ok(Some(r)) if r.enabled => r,
+          _ => {
+            tracing::info!("relationship '{}' was deleted or disabled, exiting sync loop", relationship.name);
+            break;
+          }
+        };
+        let connection_manager = ConnectionManager::new(&config);
+        let current_connection = match connection_manager.get(&current_relationship.remote_connection_id).await {
+          Ok(Some(c)) => c,
+          _ => {
+            tracing::warn!("connection for '{}' not found, skipping periodic sync", relationship.name);
+            continue;
+          }
+        };
+
+        match sync_relationship(&state, &current_connection, &current_relationship, &http_client).await {
           Ok(result) => {
             log_sync_result(&relationship.name, &result);
             if let Err(error) = activity.log_full_sync(&relationship.id, &relationship.name, &result) {

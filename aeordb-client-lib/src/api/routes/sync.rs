@@ -13,7 +13,7 @@ pub async fn list_relationships(
   State(state): State<AppState>,
 ) -> Result<Json<Vec<SyncRelationship>>, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-  manager.list().map(Json)
+  manager.list().await.map(Json)
 }
 
 pub async fn create_relationship(
@@ -21,7 +21,7 @@ pub async fn create_relationship(
   Json(request): Json<CreateSyncRelationshipRequest>,
 ) -> Result<(StatusCode, Json<SyncRelationship>), ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-  manager.create(request)
+  manager.create(request).await
     .map(|relationship| (StatusCode::CREATED, Json(relationship)))
 }
 
@@ -31,7 +31,7 @@ pub async fn get_relationship(
 ) -> Result<Json<SyncRelationship>, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
 
-  match manager.get(&id)? {
+  match manager.get(&id).await? {
     Some(relationship) => Ok(Json(relationship)),
     None => Err(ClientError::NotFound(format!("sync relationship not found: {}", id))),
   }
@@ -43,7 +43,7 @@ pub async fn update_relationship(
   Json(request): Json<UpdateSyncRelationshipRequest>,
 ) -> Result<Json<SyncRelationship>, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-  manager.update(&id, request).map(Json)
+  manager.update(&id, request).await.map(Json)
 }
 
 pub async fn delete_relationship(
@@ -51,7 +51,7 @@ pub async fn delete_relationship(
   Path(id): Path<String>,
 ) -> Result<StatusCode, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-  manager.delete(&id).map(|_| StatusCode::NO_CONTENT)
+  manager.delete(&id).await.map(|_| StatusCode::NO_CONTENT)
 }
 
 pub async fn enable_relationship(
@@ -59,7 +59,7 @@ pub async fn enable_relationship(
   Path(id): Path<String>,
 ) -> Result<Json<SyncRelationship>, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-  manager.enable(&id).map(Json)
+  manager.enable(&id).await.map(Json)
 }
 
 pub async fn disable_relationship(
@@ -67,7 +67,7 @@ pub async fn disable_relationship(
   Path(id): Path<String>,
 ) -> Result<Json<SyncRelationship>, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-  manager.disable(&id).map(Json)
+  manager.disable(&id).await.map(Json)
 }
 
 pub async fn trigger_sync(
@@ -79,11 +79,11 @@ pub async fn trigger_sync(
 
   // Load relationship and connection.
   let relationship_manager = RelationshipManager::new(&state.config_store);
-  let relationship = relationship_manager.get(&id)?
+  let relationship = relationship_manager.get(&id).await?
     .ok_or_else(|| ClientError::NotFound(format!("sync relationship not found: {}", id)))?;
 
   let connection_manager = ConnectionManager::new(&state.config_store);
-  let connection = connection_manager.get(&relationship.remote_connection_id)?
+  let connection = connection_manager.get(&relationship.remote_connection_id).await?
     .ok_or_else(|| ClientError::NotFound("connection not found".to_string()))?;
 
   // Run the sync (push and/or pull based on direction).

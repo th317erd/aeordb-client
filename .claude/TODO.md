@@ -24,22 +24,24 @@
 ### Bugs
 - [x] `aeor-settings.js` — read input values BEFORE re-render in `_saveSettings`
 - [x] `runner.rs` — use configured `sync_interval_seconds` instead of hardcoded 60s
-- [ ] `runner.rs` — re-read relationship/connection config each sync cycle (stale data)
+- [x] `runner.rs` — re-read relationship/connection config each sync cycle
 
 ### DRY — Frontend
-- [ ] Use shared `formatSize` — remove duplicates in conflicts, sync, preview-default
-- [ ] Use shared `bindResizeHandle()` — replace local copies in connections, sync, conflicts, file-browser
-- [ ] Use shared `openFolder()` — replace local copies in dashboard, settings
-- [x] Extract shared utilities to aeor-file-view-shared.js (done)
+- [x] Use shared `formatSize` — removed duplicates in conflicts, sync, preview-default
+- [x] Use shared `bindResizeHandle()` — replaced in connections, sync, conflicts
+- [x] Use shared `openFolder()` — replaced in dashboard, settings
+- [x] Use shared `formatRelativeTime()` — replaced in sync
+- [x] Use shared `directionLabel()` / `formatUptime()` — replaced in dashboard
+- [x] Extract shared utilities to aeor-file-view-shared.js
 
 ### DRY — Backend
-- [x] `ClientError` variants (`NotFound`, `BadRequest`, `Forbidden`, `BadGateway`) + `IntoResponse`
-- [x] Remove duplicated error-to-status-code string-matching blocks in all route handlers
+- [x] `ClientError` variants + `IntoResponse`
+- [x] Remove duplicated error-to-status-code string-matching blocks
 - [x] Extract shared `file_mtime()` from push.rs and pull.rs
 
 ### Performance — Backend
 - [x] Share a single `reqwest::Client` in AppState with 30s timeout
-- [ ] Use `tokio::sync::RwLock` in ConfigStore instead of `std::sync::RwLock`
+- [x] Use `tokio::sync::RwLock` in ConfigStore instead of `std::sync::RwLock`
 
 ### Correctness — Frontend
 - [x] Add `response.ok` checks before `.json()` on all fetch calls
@@ -52,7 +54,7 @@
 - [x] Replace magic number `3` (directory) with `ENTRY_TYPE_DIR` constant
 - [ ] Standardize naming: file-browser snake_case → camelCase
 - [x] Fix nested ternary in file-browser (use `directionArrow()`)
-- [ ] Validate `pick` field ("winner"/"loser") in conflicts resolve handler
+- [x] Validate `pick` field ("winner"/"loser") in conflicts resolve handler
 - [x] Guard `event.id[..8]` slice with bounds check in activity.rs
 - [x] Add `console.warn` to empty catch blocks in preview component loader
 - [ ] Context menu: check viewport bounds before positioning

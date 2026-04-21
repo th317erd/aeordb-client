@@ -68,12 +68,12 @@ async fn load_relationship_and_connection(
 ) -> Result<(SyncRelationship, RemoteConnection), ClientError> {
   let relationship_manager = RelationshipManager::new(&state.config_store);
   let relationship = relationship_manager
-    .get(relationship_id)?
+    .get(relationship_id).await?
     .ok_or_else(|| ClientError::NotFound(format!("relationship not found: {}", relationship_id)))?;
 
   let connection_manager = ConnectionManager::new(&state.config_store);
   let connection = connection_manager
-    .get(&relationship.remote_connection_id)?
+    .get(&relationship.remote_connection_id).await?
     .ok_or_else(|| ClientError::NotFound(
       format!("connection not found: {}", relationship.remote_connection_id),
     ))?;
@@ -385,7 +385,7 @@ pub async fn open_locally(
 ) -> Result<Json<serde_json::Value>, ClientError> {
   let relationship_manager = RelationshipManager::new(&state.config_store);
   let relationship = relationship_manager
-    .get(&relationship_id)?
+    .get(&relationship_id).await?
     .ok_or_else(|| ClientError::NotFound(format!("relationship not found: {}", relationship_id)))?;
 
   let local_path = safe_local_path(&relationship, &request.path)?;

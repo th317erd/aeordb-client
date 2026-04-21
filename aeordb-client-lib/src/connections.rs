@@ -56,7 +56,7 @@ impl<'a> ConnectionManager<'a> {
     Self { config }
   }
 
-  pub fn create(&self, request: CreateConnectionRequest) -> Result<RemoteConnection> {
+  pub async fn create(&self, request: CreateConnectionRequest) -> Result<RemoteConnection> {
     let now = Utc::now();
 
     // Normalize URL: strip trailing slash
@@ -75,25 +75,25 @@ impl<'a> ConnectionManager<'a> {
     let new_connection = connection.clone();
     self.config.update(|config| {
       config.connections.push(new_connection);
-    })?;
+    }).await?;
 
     tracing::info!("created connection '{}' ({})", connection.name, connection.id);
     Ok(connection)
   }
 
-  pub fn list(&self) -> Result<Vec<RemoteConnection>> {
-    let config = self.config.get()?;
+  pub async fn list(&self) -> Result<Vec<RemoteConnection>> {
+    let config = self.config.get().await?;
     let mut connections = config.connections;
     connections.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(connections)
   }
 
-  pub fn get(&self, id: &str) -> Result<Option<RemoteConnection>> {
-    let config = self.config.get()?;
+  pub async fn get(&self, id: &str) -> Result<Option<RemoteConnection>> {
+    let config = self.config.get().await?;
     Ok(config.connections.into_iter().find(|connection| connection.id == id))
   }
 
-  pub fn update(&self, id: &str, request: UpdateConnectionRequest) -> Result<RemoteConnection> {
+  pub async fn update(&self, id: &str, request: UpdateConnectionRequest) -> Result<RemoteConnection> {
     let mut updated_connection = None;
 
     self.config.update(|config| {
@@ -116,7 +116,7 @@ impl<'a> ConnectionManager<'a> {
 
       connection.updated_at = Utc::now();
       updated_connection = Some(connection.clone());
-    })?;
+    }).await?;
 
     match updated_connection {
       Some(connection) => {
@@ -129,14 +129,14 @@ impl<'a> ConnectionManager<'a> {
     }
   }
 
-  pub fn delete(&self, id: &str) -> Result<()> {
+  pub async fn delete(&self, id: &str) -> Result<()> {
     let mut found = false;
 
     self.config.update(|config| {
       let before = config.connections.len();
       config.connections.retain(|connection| connection.id != id);
       found = config.connections.len() < before;
-    })?;
+    }).await?;
 
     if !found {
       return Err(ClientError::NotFound(
@@ -150,7 +150,7 @@ impl<'a> ConnectionManager<'a> {
 
   /// Test connectivity to a remote aeordb instance.
   pub async fn test_connection(&self, id: &str) -> Result<ConnectionTestResult> {
-    let connection = self.get(id)?
+    let connection = self.get(id).await?
       .ok_or_else(|| ClientError::NotFound(
         format!("connection not found: {}", id),
       ))?;

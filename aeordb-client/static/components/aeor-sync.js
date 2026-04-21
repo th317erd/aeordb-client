@@ -1,6 +1,6 @@
 'use strict';
 
-import { escapeHtml, escapeAttr } from './aeor-file-view-shared.js';
+import { escapeHtml, escapeAttr, formatSize, bindResizeHandle, formatRelativeTime } from './aeor-file-view-shared.js';
 
 class AeorSync extends HTMLElement {
   constructor() {
@@ -315,25 +315,7 @@ class AeorSync extends HTMLElement {
     const resizeHandle = this.querySelector('.sync-activity-panel .preview-resize-handle');
     const panel = this.querySelector('.sync-activity-panel');
     if (resizeHandle && panel) {
-      resizeHandle.addEventListener('mousedown', (event) => {
-        event.preventDefault();
-        const startY = event.clientY;
-        const startHeight = panel.offsetHeight;
-
-        const onMouseMove = (moveEvent) => {
-          const delta = startY - moveEvent.clientY;
-          const newHeight = Math.max(150, Math.min(window.innerHeight * 0.8, startHeight + delta));
-          panel.style.height = newHeight + 'px';
-        };
-
-        const onMouseUp = () => {
-          document.removeEventListener('mousemove', onMouseMove);
-          document.removeEventListener('mouseup', onMouseUp);
-        };
-
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
-      });
+      bindResizeHandle(resizeHandle, panel);
     }
   }
 
@@ -367,7 +349,7 @@ class AeorSync extends HTMLElement {
     }
 
     const items = this._activity.map((event) => {
-      const time = this._formatTimestamp(event.timestamp);
+      const time = formatRelativeTime(event.timestamp);
       const icon = this._eventIcon(event.event_type);
       const hasErrors = event.errors && event.errors.length > 0;
       const errorClass = hasErrors ? ' activity-item-error' : '';
@@ -377,7 +359,7 @@ class AeorSync extends HTMLElement {
         detail += ` \u00B7 ${event.files_affected} files`;
       }
       if (event.bytes_transferred > 0) {
-        detail += ` \u00B7 ${this._formatBytes(event.bytes_transferred)}`;
+        detail += ` \u00B7 ${formatSize(event.bytes_transferred)}`;
       }
       if (event.duration_ms > 0) {
         detail += ` \u00B7 ${event.duration_ms}ms`;
@@ -416,25 +398,6 @@ class AeorSync extends HTMLElement {
       case 'error':     return '\u26A0';  // warning
       default:          return '\u2022';  // bullet
     }
-  }
-
-  _formatTimestamp(ms) {
-    const date = new Date(ms);
-    const now  = new Date();
-    const diff = now - date;
-
-    if (diff < 60000) return 'just now';
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-
-    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-
-  _formatBytes(bytes) {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
   }
 
   async _fetchData() {

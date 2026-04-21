@@ -27,7 +27,7 @@ pub struct UpdateSettingsRequest {
 pub async fn get_settings(
   State(state): State<AppState>,
 ) -> Result<Json<SettingsResponse>, ClientError> {
-  let config = state.config_store.get()?;
+  let config = state.config_store.get().await?;
 
   Ok(Json(SettingsResponse {
     sync_interval_seconds: config.settings.sync_interval_seconds,
@@ -65,10 +65,10 @@ pub async fn update_settings(
         config.settings.client_name = Some(client_name.clone());
       }
     }
-  })?;
+  }).await?;
 
   // Re-read to return the updated state.
-  let config = state.config_store.get()?;
+  let config = state.config_store.get().await?;
 
   Ok(Json(SettingsResponse {
     sync_interval_seconds: config.settings.sync_interval_seconds,

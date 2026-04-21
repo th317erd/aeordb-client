@@ -1,6 +1,6 @@
 'use strict';
 
-import { escapeHtml } from './aeor-file-view-shared.js';
+import { escapeHtml, openFolder, directionLabel, formatUptime } from './aeor-file-view-shared.js';
 
 class AeorDashboard extends HTMLElement {
   connectedCallback() {
@@ -65,11 +65,11 @@ class AeorDashboard extends HTMLElement {
     `;
 
     this.querySelector('#open-config-dir').addEventListener('click', () => {
-      this._openFolder(this.querySelector('#config-dir').textContent);
+      openFolder(this.querySelector('#config-dir').textContent);
     });
 
     this.querySelector('#open-data-dir').addEventListener('click', () => {
-      this._openFolder(this.querySelector('#data-dir').textContent);
+      openFolder(this.querySelector('#data-dir').textContent);
     });
   }
 
@@ -100,7 +100,7 @@ class AeorDashboard extends HTMLElement {
       this._update('#conflicts-count', conflicts.length, (conflicts.length > 0) ? 'card-value warning' : 'card-value');
       this._update('#status-value', status.status, 'card-value success');
       this._update('#version', status.version);
-      this._update('#uptime', this._formatUptime(status.uptime));
+      this._update('#uptime', formatUptime(status.uptime));
       this._update('#client-id', status.client_id || '-');
       this._update('#client-name', status.client_name || '-');
       this._update('#config-dir', status.config_dir || '-');
@@ -120,15 +120,6 @@ class AeorDashboard extends HTMLElement {
       container.innerHTML = '';
       return;
     }
-
-    const directionLabel = (d) => {
-      switch (d) {
-        case 'pull_only':      return '\u2190 Pull';
-        case 'push_only':      return 'Push \u2192';
-        case 'bidirectional':  return '\u2194 Bidirectional';
-        default:               return d;
-      }
-    };
 
     const cards = relationships.map((rel) => {
       const runner  = runnerStatus.find((r) => r.relationship_id === rel.id);
@@ -212,32 +203,6 @@ class AeorDashboard extends HTMLElement {
       element.className = className;
   }
 
-  _formatUptime(seconds) {
-    if (seconds < 60)
-      return `${seconds}s`;
-
-    if (seconds < 3600)
-      return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-
-    const hours   = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    return `${hours}h ${minutes}m`;
-  }
-
-  async _openFolder(path) {
-    if (!path || path === '-')
-      return;
-
-    try {
-      await fetch('/api/v1/open-folder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path }),
-      });
-    } catch (error) {
-      console.error('failed to open folder:', error);
-    }
-  }
 }
 
 customElements.define('aeor-dashboard', AeorDashboard);

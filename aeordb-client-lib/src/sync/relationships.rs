@@ -76,10 +76,10 @@ impl<'a> RelationshipManager<'a> {
     Self { config }
   }
 
-  pub fn create(&self, request: CreateSyncRelationshipRequest) -> Result<SyncRelationship> {
+  pub async fn create(&self, request: CreateSyncRelationshipRequest) -> Result<SyncRelationship> {
     // Validate that the referenced connection exists
     let connection_manager = ConnectionManager::new(self.config);
-    if connection_manager.get(&request.remote_connection_id)?.is_none() {
+    if connection_manager.get(&request.remote_connection_id).await?.is_none() {
       return Err(ClientError::BadRequest(
         format!("connection not found: {}", request.remote_connection_id),
       ));
@@ -123,7 +123,7 @@ impl<'a> RelationshipManager<'a> {
     let new_relationship = relationship.clone();
     self.config.update(|config| {
       config.relationships.push(new_relationship);
-    })?;
+    }).await?;
 
     tracing::info!(
       "created sync relationship '{}' ({}) -- {} {} <-> {}",
@@ -137,19 +137,19 @@ impl<'a> RelationshipManager<'a> {
     Ok(relationship)
   }
 
-  pub fn list(&self) -> Result<Vec<SyncRelationship>> {
-    let config = self.config.get()?;
+  pub async fn list(&self) -> Result<Vec<SyncRelationship>> {
+    let config = self.config.get().await?;
     let mut relationships = config.relationships;
     relationships.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(relationships)
   }
 
-  pub fn get(&self, id: &str) -> Result<Option<SyncRelationship>> {
-    let config = self.config.get()?;
+  pub async fn get(&self, id: &str) -> Result<Option<SyncRelationship>> {
+    let config = self.config.get().await?;
     Ok(config.relationships.into_iter().find(|relationship| relationship.id == id))
   }
 
-  pub fn update(&self, id: &str, request: UpdateSyncRelationshipRequest) -> Result<SyncRelationship> {
+  pub async fn update(&self, id: &str, request: UpdateSyncRelationshipRequest) -> Result<SyncRelationship> {
     let mut updated_relationship = None;
 
     self.config.update(|config| {
@@ -181,7 +181,7 @@ impl<'a> RelationshipManager<'a> {
 
       relationship.updated_at = Utc::now();
       updated_relationship = Some(relationship.clone());
-    })?;
+    }).await?;
 
     match updated_relationship {
       Some(relationship) => {
@@ -194,14 +194,14 @@ impl<'a> RelationshipManager<'a> {
     }
   }
 
-  pub fn delete(&self, id: &str) -> Result<()> {
+  pub async fn delete(&self, id: &str) -> Result<()> {
     let mut found = false;
 
     self.config.update(|config| {
       let before = config.relationships.len();
       config.relationships.retain(|relationship| relationship.id != id);
       found = config.relationships.len() < before;
-    })?;
+    }).await?;
 
     if !found {
       return Err(ClientError::NotFound(
@@ -213,20 +213,20 @@ impl<'a> RelationshipManager<'a> {
     Ok(())
   }
 
-  pub fn enable(&self, id: &str) -> Result<SyncRelationship> {
+  pub async fn enable(&self, id: &str) -> Result<SyncRelationship> {
     self.update(id, UpdateSyncRelationshipRequest {
       name: None, remote_path: None, local_path: None,
       direction: None, filter: None,
       delete_propagation: None, enabled: Some(true),
-    })
+    }).await
   }
 
-  pub fn disable(&self, id: &str) -> Result<SyncRelationship> {
+  pub async fn disable(&self, id: &str) -> Result<SyncRelationship> {
     self.update(id, UpdateSyncRelationshipRequest {
       name: None, remote_path: None, local_path: None,
       direction: None, filter: None,
       delete_propagation: None, enabled: Some(false),
-    })
+    }).await
   }
 }
 

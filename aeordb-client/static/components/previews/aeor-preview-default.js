@@ -1,5 +1,7 @@
 'use strict';
 
+import { formatSize } from '../aeor-file-view-shared.js';
+
 class AeorPreviewDefault extends HTMLElement {
   connectedCallback() {
     this.innerHTML = `
@@ -25,15 +27,9 @@ class AeorPreviewDefault extends HTMLElement {
 
     if (nameEl) nameEl.textContent = filename;
     if (typeEl) typeEl.textContent = contentType;
-    if (sizeEl) sizeEl.textContent = this._formatSize(size);
+    if (sizeEl) sizeEl.textContent = formatSize(size);
   }
 
-  _formatSize(bytes) {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  }
 }
 
 customElements.define('aeor-preview-default', AeorPreviewDefault);

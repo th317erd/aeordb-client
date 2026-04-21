@@ -1,6 +1,6 @@
 'use strict';
 
-import { escapeHtml, escapeAttr } from './aeor-file-view-shared.js';
+import { escapeHtml, escapeAttr, bindResizeHandle } from './aeor-file-view-shared.js';
 
 class AeorConnections extends HTMLElement {
   constructor() {
@@ -179,25 +179,7 @@ class AeorConnections extends HTMLElement {
     const resizeHandle = this.querySelector('.connection-preview .preview-resize-handle');
     const panel = this.querySelector('.connection-preview');
     if (resizeHandle && panel) {
-      resizeHandle.addEventListener('mousedown', (event) => {
-        event.preventDefault();
-        const startY = event.clientY;
-        const startHeight = panel.offsetHeight;
-
-        const onMouseMove = (moveEvent) => {
-          const delta = startY - moveEvent.clientY;
-          const newHeight = Math.max(200, Math.min(window.innerHeight * 0.85, startHeight + delta));
-          panel.style.height = newHeight + 'px';
-        };
-
-        const onMouseUp = () => {
-          document.removeEventListener('mousemove', onMouseMove);
-          document.removeEventListener('mouseup', onMouseUp);
-        };
-
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
-      });
+      bindResizeHandle(resizeHandle, panel, { minHeight: 200, maxRatio: 0.85 });
     }
   }
 

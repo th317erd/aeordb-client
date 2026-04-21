@@ -1,6 +1,6 @@
 'use strict';
 
-import { escapeHtml, escapeAttr } from './aeor-file-view-shared.js';
+import { escapeHtml, escapeAttr, openFolder } from './aeor-file-view-shared.js';
 
 class AeorSettings extends HTMLElement {
   constructor() {
@@ -91,14 +91,14 @@ class AeorSettings extends HTMLElement {
     const openConfigDir = this.querySelector('#open-config-dir');
     if (openConfigDir) {
       openConfigDir.addEventListener('click', () => {
-        this._openFolder(this._settings.config_dir);
+        openFolder(this._settings.config_dir);
       });
     }
 
     const openDataDir = this.querySelector('#open-data-dir');
     if (openDataDir) {
       openDataDir.addEventListener('click', () => {
-        this._openFolder(this._settings.data_dir);
+        openFolder(this._settings.data_dir);
       });
     }
   }
@@ -194,17 +194,6 @@ class AeorSettings extends HTMLElement {
     }
   }
 
-  async _openFolder(path) {
-    try {
-      await fetch('/api/v1/open-folder', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ path }),
-      });
-    } catch (error) {
-      console.error('Failed to open folder:', error);
-    }
-  }
 }
 
 customElements.define('aeor-settings', AeorSettings);

@@ -1,6 +1,6 @@
 'use strict';
 
-import { escapeHtml, escapeAttr } from './aeor-file-view-shared.js';
+import { escapeHtml, escapeAttr, formatSize, bindResizeHandle } from './aeor-file-view-shared.js';
 
 class AeorConflicts extends HTMLElement {
   constructor() {
@@ -58,7 +58,7 @@ class AeorConflicts extends HTMLElement {
       const loser  = conflict.loser || {};
       const isSelected = (conflict.path === this._selectedPath);
       const sizeDiff = (winner.size != null && loser.size != null)
-        ? this._formatSize(Math.abs(winner.size - loser.size))
+        ? formatSize(Math.abs(winner.size - loser.size))
         : '';
 
       return `
@@ -71,11 +71,11 @@ class AeorConflicts extends HTMLElement {
           </td>
           <td>
             <span style="color: var(--success); font-weight: 500;">Winner</span>
-            <span class="muted" style="font-size: 12px;">${this._formatSize(winner.size)}</span>
+            <span class="muted" style="font-size: 12px;">${formatSize(winner.size)}</span>
           </td>
           <td>
             <span style="color: var(--text-secondary);">Loser</span>
-            <span class="muted" style="font-size: 12px;">${this._formatSize(loser.size)}</span>
+            <span class="muted" style="font-size: 12px;">${formatSize(loser.size)}</span>
           </td>
           <td class="muted">${new Date(conflict.created_at).toLocaleString()}</td>
           <td class="actions">
@@ -163,25 +163,7 @@ class AeorConflicts extends HTMLElement {
     const resizeHandle = this.querySelector('.conflict-preview .preview-resize-handle');
     const panel = this.querySelector('.conflict-preview');
     if (resizeHandle && panel) {
-      resizeHandle.addEventListener('mousedown', (event) => {
-        event.preventDefault();
-        const startY = event.clientY;
-        const startHeight = panel.offsetHeight;
-
-        const onMouseMove = (moveEvent) => {
-          const delta = startY - moveEvent.clientY;
-          const newHeight = Math.max(150, Math.min(window.innerHeight * 0.8, startHeight + delta));
-          panel.style.height = newHeight + 'px';
-        };
-
-        const onMouseUp = () => {
-          document.removeEventListener('mousemove', onMouseMove);
-          document.removeEventListener('mouseup', onMouseUp);
-        };
-
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
-      });
+      bindResizeHandle(resizeHandle, panel);
     }
   }
 
@@ -209,7 +191,7 @@ class AeorConflicts extends HTMLElement {
             </div>
             <div class="info-row">
               <span class="info-label">Size</span>
-              <span class="info-value">${this._formatSize(winner.size)}</span>
+              <span class="info-value">${formatSize(winner.size)}</span>
             </div>
             <div class="info-row">
               <span class="info-label">Content Type</span>
@@ -234,7 +216,7 @@ class AeorConflicts extends HTMLElement {
             </div>
             <div class="info-row">
               <span class="info-label">Size</span>
-              <span class="info-value">${this._formatSize(loser.size)}</span>
+              <span class="info-value">${formatSize(loser.size)}</span>
             </div>
             <div class="info-row">
               <span class="info-label">Content Type</span>
@@ -324,12 +306,6 @@ class AeorConflicts extends HTMLElement {
     }
   }
 
-  _formatSize(bytes) {
-    if (bytes == null) return '?';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
 }
 
 customElements.define('aeor-conflicts', AeorConflicts);
