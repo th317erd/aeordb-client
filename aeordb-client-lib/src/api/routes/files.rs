@@ -296,7 +296,7 @@ pub async fn serve_file(
   tracing::info!("serving remote file: {}", remote_path);
 
   let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
-  let (bytes, metadata) = remote_client
+  let (resp, metadata) = remote_client
     .download_file(&remote_path)
     .await
     .map_err(|error| ClientError::BadGateway(error.to_string()))?;
@@ -306,10 +306,14 @@ pub async fn serve_file(
     .as_deref()
     .unwrap_or_else(|| guess_content_type(&relative_path));
 
+  // Stream the remote response body through to the client.
+  let stream = resp.bytes_stream();
+  let body = Body::from_stream(stream);
+
   let response = Response::builder()
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, content_type)
-    .body(Body::from(bytes))
+    .body(body)
     .map_err(|error| ClientError::Server(error.to_string()))?;
 
   Ok(response)
@@ -338,7 +342,7 @@ pub async fn upload_file(
 
   let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
   remote_client
-    .upload_file(&remote_path, body.to_vec(), content_type.as_deref())
+    .upload_file(&remote_path, reqwest::Body::from(body.to_vec()), content_type.as_deref())
     .await
     .map_err(|error| ClientError::BadGateway(error.to_string()))?;
 

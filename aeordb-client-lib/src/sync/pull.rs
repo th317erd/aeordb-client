@@ -1,7 +1,10 @@
 use std::path::Path;
 use std::time::Instant;
 
-use super::file_mtime;
+use futures_util::StreamExt;
+use tokio::io::AsyncWriteExt;
+
+use super::file_mtime_async;
 use crate::connections::{AuthType, RemoteConnection};
 use crate::error::{ClientError, Result};
 use crate::remote::RemoteClient;
@@ -46,7 +49,7 @@ pub async fn pull_sync(
 
   let local_base = Path::new(&relationship.local_path);
   if !local_base.exists() {
-    std::fs::create_dir_all(local_base)?;
+    tokio::fs::create_dir_all(local_base).await?;
   }
 
   let mut files_pulled: u64 = 0;
@@ -91,7 +94,7 @@ pub async fn pull_sync(
 
     // Create parent directories if needed.
     if let Some(parent) = local_file_path.parent() {
-      if let Err(error) = std::fs::create_dir_all(parent) {
+      if let Err(error) = tokio::fs::create_dir_all(parent).await {
         let message = format!(
           "failed to create parent directory for {:?}: {}",
           local_file_path, error,
@@ -103,26 +106,74 @@ pub async fn pull_sync(
       }
     }
 
-    // Download the file content from the remote.
+    // Download the file content from the remote as a stream.
     match remote_client.download_file(&file_entry.path).await {
-      Ok((content, _metadata)) => {
-        let file_size = content.len() as u64;
+      Ok((response, _metadata)) => {
+        // Stream the response body to disk in chunks.
+        let file_result = tokio::fs::File::create(&local_file_path).await;
+        let mut file = match file_result {
+          Ok(f) => f,
+          Err(error) => {
+            let message = format!("failed to create {:?}: {}", local_file_path, error);
+            tracing::warn!("{}", message);
+            errors.push(message);
+            files_failed += 1;
+            continue;
+          }
+        };
 
-        // Write to the local filesystem.
-        if let Err(error) = std::fs::write(&local_file_path, &content) {
-          let message = format!("failed to write {:?}: {}", local_file_path, error);
-          tracing::warn!("{}", message);
-          errors.push(message);
+        let mut stream = response.bytes_stream();
+        let mut hasher = blake3::Hasher::new();
+        let mut file_size: u64 = 0;
+        let mut stream_error = false;
+
+        while let Some(chunk_result) = stream.next().await {
+          match chunk_result {
+            Ok(chunk) => {
+              hasher.update(&chunk);
+              file_size += chunk.len() as u64;
+              if let Err(error) = file.write_all(&chunk).await {
+                let message = format!("failed to write {:?}: {}", local_file_path, error);
+                tracing::warn!("{}", message);
+                errors.push(message);
+                stream_error = true;
+                break;
+              }
+            }
+            Err(error) => {
+              let message = format!("stream error downloading {}: {}", file_entry.path, error);
+              tracing::warn!("{}", message);
+              errors.push(message);
+              stream_error = true;
+              break;
+            }
+          }
+        }
+
+        if stream_error {
+          // Clean up partial file on error.
+          let _ = tokio::fs::remove_file(&local_file_path).await;
           files_failed += 1;
           continue;
         }
 
-        // Compute BLAKE3 hash of the downloaded content.
-        let content_hash = blake3::hash(&content).to_hex().to_string();
+        // Flush the file to ensure all data is written.
+        if let Err(error) = file.flush().await {
+          let message = format!("failed to flush {:?}: {}", local_file_path, error);
+          tracing::warn!("{}", message);
+          errors.push(message);
+          let _ = tokio::fs::remove_file(&local_file_path).await;
+          files_failed += 1;
+          continue;
+        }
+        drop(file);
+
+        // Compute BLAKE3 hash from the streamed content.
+        let content_hash = hasher.finalize().to_hex().to_string();
         let now_ms = chrono::Utc::now().timestamp_millis();
 
         // Get mtime from the written file.
-        let mtime = file_mtime(&local_file_path).unwrap_or(now_ms);
+        let mtime = file_mtime_async(&local_file_path).await.unwrap_or(now_ms);
 
         // Store metadata (no file content in local aeordb).
         let file_meta = FileSyncMeta {
@@ -164,7 +215,7 @@ pub async fn pull_sync(
       );
 
       if local_file_path.exists() {
-        if let Err(error) = std::fs::remove_file(&local_file_path) {
+        if let Err(error) = tokio::fs::remove_file(&local_file_path).await {
           let message = format!("failed to delete {:?}: {}", local_file_path, error);
           tracing::warn!("{}", message);
           errors.push(message);
@@ -199,7 +250,7 @@ pub async fn pull_sync(
 
     // Create parent directories if needed.
     if let Some(parent) = local_symlink_path.parent() {
-      if let Err(error) = std::fs::create_dir_all(parent) {
+      if let Err(error) = tokio::fs::create_dir_all(parent).await {
         let message = format!(
           "failed to create parent directory for symlink {:?}: {}",
           local_symlink_path, error,
@@ -212,13 +263,15 @@ pub async fn pull_sync(
     }
 
     // Remove existing file/symlink before creating new one.
-    if local_symlink_path.exists() || local_symlink_path.is_symlink() {
-      let _ = std::fs::remove_file(&local_symlink_path);
+    // Use symlink_metadata to detect symlinks (metadata follows symlinks).
+    let exists = tokio::fs::symlink_metadata(&local_symlink_path).await.is_ok();
+    if exists {
+      let _ = tokio::fs::remove_file(&local_symlink_path).await;
     }
 
     #[cfg(unix)]
     {
-      if let Err(error) = std::os::unix::fs::symlink(&symlink_entry.target, &local_symlink_path) {
+      if let Err(error) = tokio::fs::symlink(&symlink_entry.target, &local_symlink_path).await {
         let message = format!("failed to create symlink {:?}: {}", local_symlink_path, error);
         tracing::warn!("{}", message);
         errors.push(message);
@@ -266,8 +319,9 @@ pub async fn pull_sync(
         local_base,
       );
 
-      if local_symlink_path.exists() || local_symlink_path.is_symlink() {
-        if let Err(error) = std::fs::remove_file(&local_symlink_path) {
+      let exists = tokio::fs::symlink_metadata(&local_symlink_path).await.is_ok();
+      if exists {
+        if let Err(error) = tokio::fs::remove_file(&local_symlink_path).await {
           let message = format!("failed to delete symlink {:?}: {}", local_symlink_path, error);
           tracing::warn!("{}", message);
           errors.push(message);

@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::Instant;
 
+use tokio_util::io::ReaderStream;
+
 use super::file_mtime;
 use crate::connections::RemoteConnection;
 use crate::error::{ClientError, Result};
@@ -58,8 +60,14 @@ pub async fn push_sync(
   // detect deletions (files in metadata but gone from disk).
   let mut seen_remote_paths: HashSet<String> = HashSet::new();
 
-  // Walk the local filesystem recursively.
-  let walker = walkdir(local_base)?;
+  // Walk the local filesystem recursively in a blocking task since
+  // std::fs::read_dir is inherently synchronous and recursive.
+  let local_base_owned = local_base.to_path_buf();
+  let walker = tokio::task::spawn_blocking(move || walkdir(&local_base_owned))
+    .await
+    .map_err(|error| ClientError::Io(
+      std::io::Error::new(std::io::ErrorKind::Other, format!("walkdir task panicked: {}", error)),
+    ))??;
 
   for entry_path in walker {
     let file_type = match entry_path.symlink_metadata() {
@@ -157,8 +165,9 @@ pub async fn push_sync(
       }
     }
 
-    // Read file content for hashing and upload.
-    let content = match std::fs::read(&entry_path) {
+    // Read file content for hashing -- we still need the full content to
+    // compute the BLAKE3 hash for change detection. Use async read.
+    let content = match tokio::fs::read(&entry_path).await {
       Ok(bytes) => bytes,
       Err(error) => {
         let message = format!("failed to read {:?}: {}", entry_path, error);
@@ -191,11 +200,30 @@ pub async fn push_sync(
       }
     }
 
-    // Upload to remote.
+    // Upload to remote using a streaming body from the file on disk.
     let content_type = mime_from_extension(&entry_path);
 
+    // Open the file and create a streaming body to avoid holding the full
+    // content in memory during the upload (the `content` Vec is dropped
+    // after hashing; we re-open for streaming).
+    drop(content);
+
+    let upload_body = match tokio::fs::File::open(&entry_path).await {
+      Ok(file) => {
+        let stream = ReaderStream::new(file);
+        reqwest::Body::wrap_stream(stream)
+      }
+      Err(error) => {
+        let message = format!("failed to open {:?} for upload: {}", entry_path, error);
+        tracing::warn!("{}", message);
+        errors.push(message);
+        files_failed += 1;
+        continue;
+      }
+    };
+
     match remote_client
-      .upload_file(&remote_path, content, content_type.as_deref())
+      .upload_file(&remote_path, upload_body, content_type.as_deref())
       .await
     {
       Ok(()) => {

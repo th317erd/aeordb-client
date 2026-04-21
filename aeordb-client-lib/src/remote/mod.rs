@@ -113,8 +113,12 @@ impl RemoteClient {
     Ok(wrapper.items)
   }
 
-  /// Download a file from the remote. Returns (bytes, metadata).
-  pub async fn download_file(&self, remote_path: &str) -> Result<(Vec<u8>, RemoteFileMetadata)> {
+  /// Download a file from the remote as a streaming response.
+  ///
+  /// Returns the response and parsed metadata from headers. The caller is
+  /// responsible for streaming the response body to disk (or wherever) in
+  /// chunks, avoiding buffering the entire file in memory.
+  pub async fn download_file(&self, remote_path: &str) -> Result<(reqwest::Response, RemoteFileMetadata)> {
     let url = format!("{}/files{}", self.base_url, remote_path);
 
     let mut request = self.http_client.get(&url);
@@ -165,12 +169,7 @@ impl RemoteClient {
       updated_at,
     };
 
-    let bytes = response.bytes().await
-      .map_err(|error| ClientError::Server(
-        format!("failed to read response body for {}: {}", remote_path, error),
-      ))?;
-
-    Ok((bytes.to_vec(), metadata))
+    Ok((response, metadata))
   }
 
   /// Check if a remote path exists (HEAD request).
@@ -191,16 +190,18 @@ impl RemoteClient {
   }
 
   /// Upload a file to the remote aeordb instance.
-  /// Uses the simple PUT /files/{path} endpoint.
+  ///
+  /// Accepts a `reqwest::Body` so the caller can provide either an in-memory
+  /// buffer or a streaming body from a file on disk (via `Body::wrap_stream`).
   pub async fn upload_file(
     &self,
     remote_path: &str,
-    data: Vec<u8>,
+    body: reqwest::Body,
     content_type: Option<&str>,
   ) -> Result<()> {
     let url = format!("{}/files{}", self.base_url, remote_path);
 
-    let mut request = self.http_client.put(&url).body(data);
+    let mut request = self.http_client.put(&url).body(body);
 
     if let Some(content_type) = content_type {
       request = request.header("Content-Type", content_type);

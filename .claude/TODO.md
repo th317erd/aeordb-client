@@ -13,11 +13,12 @@
 - [ ] (Future) Investigate OS keychain integration
 
 ### Performance — Blocking I/O
-- [ ] `push.rs` / `pull.rs` — use `tokio::fs` or `spawn_blocking` for filesystem ops
+- [x] `pull.rs` — all filesystem ops use `tokio::fs` (create_dir_all, write, remove_file, metadata)
+- [x] `push.rs` — directory walk wrapped in `spawn_blocking`, file reads use `tokio::fs`
 
 ### Performance — Unbounded Memory
-- [ ] `remote/mod.rs:download_file` — stream file content instead of buffering
-- [ ] `push.rs` — stream upload instead of `std::fs::read` entire file
+- [x] `remote/mod.rs:download_file` — returns response stream, caller writes chunks to disk
+- [x] `push.rs` — streaming upload via `ReaderStream` + `Body::wrap_stream`
 
 ## Moderate
 
