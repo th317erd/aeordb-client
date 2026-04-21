@@ -1,6 +1,12 @@
 'use strict';
 
 import { escapeHtml, escapeAttr, bindResizeHandle } from './aeor-file-view-shared.js';
+import { AeorDashboard } from '../shared/components/aeor-dashboard.js';
+
+// Register the shared dashboard under a distinct tag name so it does not
+// conflict with the client's own <aeor-dashboard> component.
+if (!customElements.get('aeor-remote-dashboard'))
+  customElements.define('aeor-remote-dashboard', class extends AeorDashboard {});
 
 class AeorConnections extends HTMLElement {
   constructor() {
@@ -44,8 +50,8 @@ class AeorConnections extends HTMLElement {
             <button class="secondary small preview-close">\u2715</button>
           </div>
         </div>
-        <div class="preview-iframe-container">
-          <iframe class="connection-iframe" sandbox="allow-same-origin allow-scripts allow-forms allow-popups" referrerpolicy="no-referrer"></iframe>
+        <div class="preview-dashboard-container">
+          <aeor-remote-dashboard class="connection-dashboard"></aeor-remote-dashboard>
         </div>
       </div>
     `;
@@ -193,12 +199,10 @@ class AeorConnections extends HTMLElement {
     // Update header
     panel.querySelector('.preview-title').textContent = `${connection.name} — Dashboard`;
 
-    // Set iframe src — use the portal URL with frame=true for future support
-    const iframe = panel.querySelector('.connection-iframe');
-    const portalUrl = `${connection.url}/system/portal?page=dashboard&frame=true`;
-    if (iframe.src !== portalUrl) {
-      iframe.src = portalUrl;
-    }
+    // Point the embedded dashboard at the remote server
+    const dashboard = panel.querySelector('.connection-dashboard');
+    if (dashboard)
+      dashboard.setAttribute('base-url', connection.url);
 
     panel.style.display = '';
   }
@@ -209,9 +213,11 @@ class AeorConnections extends HTMLElement {
 
     panel.style.display = 'none';
 
-    // Clear the iframe to stop any ongoing loading
-    const iframe = panel.querySelector('.connection-iframe');
-    if (iframe) iframe.src = 'about:blank';
+    // Disconnect the dashboard by removing its base-url (triggers disconnectedCallback
+    // when the panel is hidden and the element is no longer rendered).
+    const dashboard = panel.querySelector('.connection-dashboard');
+    if (dashboard)
+      dashboard.removeAttribute('base-url');
   }
 
   async _fetchConnections() {

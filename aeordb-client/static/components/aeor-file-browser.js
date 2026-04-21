@@ -6,6 +6,8 @@ import {
   ENTRY_TYPE_DIR, directionArrow,
 } from './aeor-file-view-shared.js';
 
+import { ClientFileBrowserAdapter } from './aeor-file-browser-client-adapter.js';
+
 async function loadPreviewComponent(contentType) {
   if (!contentType) return 'aeor-preview-default';
 
@@ -94,23 +96,27 @@ class AeorFileBrowser extends HTMLElement {
       this._activeTabId = state.active_tab_id || null;
       this._tabCounter   = state.tab_counter || 0;
 
-      this._tabs = (state.tabs || []).map((tab) => ({
-        id:                 tab.id,
-        relationshipId:     tab.relationshipId || tab.relationship_id,
-        relationshipName:   tab.relationshipName || tab.relationship_name,
-        path:               tab.path,
-        viewMode:           tab.viewMode || tab.view_mode || 'list',
-        entries:            [],
-        total:              null,
-        loading:            false,
-        loadingMore:        false,
-        pageSize:           tab.pageSize || tab.page_size || 100,
-        previewEntry:       null,
-        previewComponent:   null,
-        previewHeight:      tab.previewHeight || null,
-        selectedEntries:    new Set(),
-        lastSelectedIndex:  -1,
-      }));
+      this._tabs = (state.tabs || []).map((tab) => {
+        const relationshipId = tab.relationshipId || tab.relationship_id;
+        return {
+          id:                 tab.id,
+          relationshipId:     relationshipId,
+          relationshipName:   tab.relationshipName || tab.relationship_name,
+          path:               tab.path,
+          viewMode:           tab.viewMode || tab.view_mode || 'list',
+          entries:            [],
+          total:              null,
+          loading:            false,
+          loadingMore:        false,
+          pageSize:           tab.pageSize || tab.page_size || 100,
+          previewEntry:       null,
+          previewComponent:   null,
+          previewHeight:      tab.previewHeight || null,
+          selectedEntries:    new Set(),
+          lastSelectedIndex:  -1,
+          adapter:            new ClientFileBrowserAdapter(relationshipId),
+        };
+      });
     } catch (error) {
       // start fresh
     }
@@ -218,8 +224,10 @@ class AeorFileBrowser extends HTMLElement {
             <button class="small ${(viewMode === 'list') ? 'primary' : 'secondary'}" data-view="list" title="List view">&#9776;</button>
             <button class="small ${(viewMode === 'grid') ? 'primary' : 'secondary'}" data-view="grid" title="Grid view">&#9638;</button>
           </div>
-          <button class="primary small upload-button">Upload</button>
-          <input type="file" class="upload-input" style="display:none" multiple>
+          ${(tab.adapter.supportsUpload)
+            ? '<button class="primary small upload-button">Upload</button><input type="file" class="upload-input" style="display:none" multiple>'
+            : ''
+          }
         </div>
       </div>
     `;
@@ -256,17 +264,23 @@ class AeorFileBrowser extends HTMLElement {
   }
 
   _renderListViewFor(tab) {
+    const showSync = tab.adapter.supportsSync;
     const rows = tab.entries.map((entry) => {
       const isDir     = (entry.entry_type === ENTRY_TYPE_DIR);
       const icon      = fileIcon(entry.entry_type);
       const size      = (isDir) ? '\u2014' : formatSize(entry.size);
       const created   = formatDate(entry.created_at);
       const modified  = formatDate(entry.updated_at);
-      const [syncClass, syncTitle] = this._syncBadge(entry);
+
+      let syncBadgeHtml = '';
+      if (showSync) {
+        const [syncClass, syncTitle] = this._syncBadge(entry);
+        syncBadgeHtml = `<span class="sync-badge ${syncClass}" title="${syncTitle}"></span>`;
+      }
 
       return `
         <tr class="file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}" draggable="true">
-          <td><span class="sync-badge ${syncClass}" title="${syncTitle}"></span><span class="file-icon">${icon}</span>${escapeHtml(entry.name)}</td>
+          <td>${syncBadgeHtml}<span class="file-icon">${icon}</span>${escapeHtml(entry.name)}</td>
           <td>${size}</td>
           <td>${created}</td>
           <td>${modified}</td>
@@ -285,22 +299,28 @@ class AeorFileBrowser extends HTMLElement {
   }
 
   _renderGridViewFor(tab) {
+    const showSync = tab.adapter.supportsSync;
     const cards = tab.entries.map((entry) => {
       const isDir     = (entry.entry_type === ENTRY_TYPE_DIR);
       const icon      = fileIcon(entry.entry_type);
-      const [syncClass, syncTitle] = this._syncBadge(entry);
       const size      = (isDir) ? 'Folder' : formatSize(entry.size);
+
+      let syncBadgeHtml = '';
+      if (showSync) {
+        const [syncClass, syncTitle] = this._syncBadge(entry);
+        syncBadgeHtml = `<span class="sync-badge ${syncClass}" title="${syncTitle}"></span>`;
+      }
 
       let thumbnail = `<div class="grid-card-icon">${icon}</div>`;
 
       if (!isDir && isImageFile(entry.name) && entry.has_local) {
-        const encodedPath = encodeURIComponent(tab.path.replace(/\/$/, '') + '/' + entry.name);
-        thumbnail = `<div class="grid-card-thumbnail"><img src="/api/v1/files/${tab.relationshipId}/${encodedPath}" alt="${escapeAttr(entry.name)}" loading="lazy"></div>`;
+        const filePath = tab.path.replace(/\/$/, '') + '/' + entry.name;
+        thumbnail = `<div class="grid-card-thumbnail"><img src="${tab.adapter.fileUrl(filePath)}" alt="${escapeAttr(entry.name)}" loading="lazy"></div>`;
       }
 
       return `
         <div class="grid-card file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}" draggable="true"
-          <span class="sync-badge ${syncClass}" title="${syncTitle}"></span>
+          ${syncBadgeHtml}
           ${thumbnail}
           <div class="grid-card-name" title="${escapeAttr(entry.name)}">${escapeHtml(this._truncate(entry.name, 20))}</div>
           <div class="grid-card-meta">${size}</div>
@@ -348,13 +368,17 @@ class AeorFileBrowser extends HTMLElement {
     titleInput.value = entry.name;
     titleInput.dataset.original = entry.name;
 
-    // Update action buttons
+    // Update action buttons — conditionally show "Open Locally" based on adapter
+    const showOpenLocally = tab.adapter.supportsOpenLocally && entry.has_local;
     panel.querySelector('.preview-actions').innerHTML = `
-      ${(entry.has_local)
+      ${(showOpenLocally)
         ? '<button class="primary small" data-action="open-local">Open Locally</button>'
         : ''
       }
-      <button class="danger small" data-action="delete">Delete</button>
+      ${(tab.adapter.supportsDelete)
+        ? '<button class="danger small" data-action="delete">Delete</button>'
+        : ''
+      }
       <button class="secondary small" data-action="close-preview">\u2715</button>
     `;
 
@@ -370,7 +394,7 @@ class AeorFileBrowser extends HTMLElement {
     if (previewEl) {
       const contentType = entry.content_type || 'application/octet-stream';
       const filePath = tab.path.replace(/\/$/, '') + '/' + entry.name;
-      const fileUrl = `/api/v1/files/${tab.relationshipId}/${encodeURIComponent(filePath)}`;
+      const fileUrl = tab.adapter.fileUrl(filePath);
       previewEl.setAttribute('src', fileUrl);
       previewEl.setAttribute('filename', entry.name);
       previewEl.setAttribute('size', entry.size || 0);
@@ -682,7 +706,7 @@ class AeorFileBrowser extends HTMLElement {
         const entryType = parseInt(el.dataset.type, 10);
         const entry = tab.entries.find((e) => e.name === entryName);
         const filePath = tab.path.replace(/\/$/, '') + '/' + entryName;
-        const fileUrl = `${window.location.origin}/api/v1/files/${tab.relationshipId}/${encodeURIComponent(filePath)}`;
+        const fileUrl = tab.adapter.fullFileUrl(filePath);
         const mime = (entry && entry.content_type) || 'application/octet-stream';
 
         // Determine if we're dragging multiple selected entries
@@ -781,6 +805,7 @@ class AeorFileBrowser extends HTMLElement {
       previewHeight:     null,
       selectedEntries:   new Set(),
       lastSelectedIndex: -1,
+      adapter:           new ClientFileBrowserAdapter(relationshipId),
     });
     this._activeTabId = tabId;
     this._saveState();
@@ -884,14 +909,7 @@ class AeorFileBrowser extends HTMLElement {
     this._updateTabContent(tab.id);
 
     try {
-      const encodedPath = (tab.path === '/') ? '' : encodeURIComponent(tab.path);
-      const baseUrl = (encodedPath)
-        ? `/api/v1/browse/${tab.relationshipId}/${encodedPath}`
-        : `/api/v1/browse/${tab.relationshipId}`;
-      const url = `${baseUrl}?limit=${tab.pageSize || 100}&offset=0`;
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
-      const data = await response.json();
+      const data = await tab.adapter.browse(tab.path, tab.pageSize || 100, 0);
       tab.entries = data.entries || [];
       tab.total = (data.total != null) ? data.total : tab.entries.length;
     } catch (error) {
@@ -913,14 +931,7 @@ class AeorFileBrowser extends HTMLElement {
     this._updateTabContent(tab.id);
 
     try {
-      const encodedPath = (tab.path === '/') ? '' : encodeURIComponent(tab.path);
-      const baseUrl = (encodedPath)
-        ? `/api/v1/browse/${tab.relationshipId}/${encodedPath}`
-        : `/api/v1/browse/${tab.relationshipId}`;
-      const url = `${baseUrl}?limit=${tab.pageSize || 100}&offset=${tab.entries.length}`;
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
-      const data = await response.json();
+      const data = await tab.adapter.browse(tab.path, tab.pageSize || 100, tab.entries.length);
       const newEntries = data.entries || [];
       for (const entry of newEntries) {
         tab.entries.push(entry);
@@ -992,12 +1003,7 @@ class AeorFileBrowser extends HTMLElement {
     const toPath = tab.path.replace(/\/$/, '') + '/' + newName;
 
     try {
-      const response = await fetch(`/api/v1/files/${tab.relationshipId}/rename`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: fromPath, to: toPath }),
-      });
-      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+      await tab.adapter.rename(fromPath, toPath);
       tab.previewEntry.name = newName;
       // Update the input's original value to the new name
       const container = this.querySelector(`#tab-content-${tab.id}`);
@@ -1022,24 +1028,18 @@ class AeorFileBrowser extends HTMLElement {
 
     switch (action) {
       case 'open-local': {
-        const openResponse = await fetch(`/api/v1/files/${tab.relationshipId}/open`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: filePath.replace(/^\//, '') }),
-        });
-        if (!openResponse.ok)
-          window.aeorToast(`Failed to open file: ${openResponse.status}`, 'error');
+        try {
+          await tab.adapter.openLocally(filePath);
+        } catch (error) {
+          window.aeorToast(`Failed to open file: ${error.message}`, 'error');
+        }
         break;
       }
 
       case 'delete':
         if (!confirm(`Delete "${entry.name}"? This cannot be undone.`)) break;
         try {
-          const encodedPath = encodeURIComponent(filePath);
-          const deleteResponse = await fetch(`/api/v1/files/${tab.relationshipId}/${encodedPath}`, {
-            method: 'DELETE',
-          });
-          if (!deleteResponse.ok) throw new Error(`Request failed: ${deleteResponse.status}`);
+          await tab.adapter.delete(filePath);
           tab.previewEntry = null;
           this._fetchListing();
         } catch (error) {
@@ -1067,16 +1067,10 @@ class AeorFileBrowser extends HTMLElement {
     let uploaded = 0;
     for (const file of files) {
       const filePath = tab.path.replace(/\/$/, '') + '/' + file.name;
-      const encodedPath = encodeURIComponent(filePath);
 
       try {
         const arrayBuffer = await file.arrayBuffer();
-        const response = await fetch(`/api/v1/files/${tab.relationshipId}/${encodedPath}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': file.type || 'application/octet-stream' },
-          body: arrayBuffer,
-        });
-        if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+        await tab.adapter.upload(filePath, arrayBuffer, file.type || 'application/octet-stream');
         uploaded++;
       } catch (error) {
         window.aeorToast(`Upload failed for ${file.name}: ${error.message}`, 'error');
@@ -1094,17 +1088,23 @@ class AeorFileBrowser extends HTMLElement {
     const existing = this.querySelector('.context-menu');
     if (existing) existing.remove();
 
+    const tab = this._activeTab();
+    const showOpenLocally = tab && tab.adapter.supportsOpenLocally && entry.has_local;
+
     const menu = document.createElement('div');
     menu.className = 'context-menu';
     menu.style.left = x + 'px';
     menu.style.top = y + 'px';
     menu.innerHTML = `
-      ${(entry.has_local)
+      ${(showOpenLocally)
         ? '<div class="context-menu-item" data-context="open-local">Open Locally</div>'
         : ''
       }
       <div class="context-menu-item" data-context="preview">Preview</div>
-      <div class="context-menu-item context-menu-danger" data-context="delete">Delete</div>
+      ${(tab && tab.adapter.supportsDelete)
+        ? '<div class="context-menu-item context-menu-danger" data-context="delete">Delete</div>'
+        : ''
+      }
     `;
 
     this.appendChild(menu);
@@ -1245,13 +1245,9 @@ class AeorFileBrowser extends HTMLElement {
 
     for (const name of names) {
       const filePath = tab.path.replace(/\/$/, '') + '/' + name;
-      const encodedPath = encodeURIComponent(filePath);
 
       try {
-        const response = await fetch(`/api/v1/files/${tab.relationshipId}/${encodedPath}`, {
-          method: 'DELETE',
-        });
-        if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+        await tab.adapter.delete(filePath);
         deleted++;
       } catch (error) {
         window.aeorToast(`Delete failed for ${name}: ${error.message}`, 'error');
@@ -1277,12 +1273,7 @@ class AeorFileBrowser extends HTMLElement {
       const toPath = tab.path.replace(/\/$/, '') + '/' + folderName + '/' + entryName;
 
       try {
-        const response = await fetch(`/api/v1/files/${tab.relationshipId}/rename`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: fromPath, to: toPath }),
-        });
-        if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+        await tab.adapter.rename(fromPath, toPath);
         moved++;
       } catch (error) {
         window.aeorToast(`Move failed for ${entryName}: ${error.message}`, 'error');

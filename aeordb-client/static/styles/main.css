@@ -1142,17 +1142,15 @@ aeor-connections {
   overflow: hidden;
 }
 
-.preview-iframe-container {
+.preview-dashboard-container {
   flex: 1;
-  overflow: hidden;
+  overflow: auto;
   min-height: 0;
+  padding: 12px;
 }
 
-.connection-iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
-  background-color: #fff;
+.connection-dashboard {
+  display: block;
 }
 
 /* ==========================================================================
