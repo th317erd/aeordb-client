@@ -44,14 +44,14 @@ class AeorFileBrowser extends HTMLElement {
   constructor() {
     super();
     this._tabs = [];
-    this._active_tab_id = null;
+    this._activeTabId = null;
     this._relationships = [];
-    this._tab_counter = 0;
-    this._scroll_listener = null;
+    this._tabCounter = 0;
+    this._scrollListener = null;
   }
 
   _activeTab() {
-    return this._tabs.find((t) => t.id === this._active_tab_id) || null;
+    return this._tabs.find((t) => t.id === this._activeTabId) || null;
   }
 
   connectedCallback() {
@@ -59,26 +59,26 @@ class AeorFileBrowser extends HTMLElement {
     this.render();
     this._fetchRelationships();
 
-    if (this._active_tab_id && this._activeTab()) {
+    if (this._activeTabId && this._activeTab()) {
       this._fetchListing();
     }
   }
 
   _saveState() {
     try {
-      const serializable_tabs = this._tabs.map((tab) => ({
+      const serializableTabs = this._tabs.map((tab) => ({
         id:                tab.id,
-        relationship_id:   tab.relationship_id,
-        relationship_name: tab.relationship_name,
+        relationshipId:   tab.relationshipId,
+        relationshipName: tab.relationshipName,
         path:              tab.path,
-        view_mode:         tab.view_mode,
-        page_size:         tab.page_size,
-        preview_height:    tab.preview_height,
+        viewMode:         tab.viewMode,
+        pageSize:         tab.pageSize,
+        previewHeight:    tab.previewHeight,
       }));
       localStorage.setItem('aeordb-file-browser', JSON.stringify({
-        tabs:          serializable_tabs,
-        active_tab_id: this._active_tab_id,
-        tab_counter:   this._tab_counter,
+        tabs:          serializableTabs,
+        active_tab_id: this._activeTabId,
+        tab_counter:   this._tabCounter,
       }));
     } catch (error) {
       // localStorage unavailable
@@ -91,19 +91,23 @@ class AeorFileBrowser extends HTMLElement {
       if (!raw) return;
 
       const state         = JSON.parse(raw);
-      this._active_tab_id = state.active_tab_id || null;
-      this._tab_counter   = state.tab_counter || 0;
+      this._activeTabId = state.active_tab_id || null;
+      this._tabCounter   = state.tab_counter || 0;
 
       this._tabs = (state.tabs || []).map((tab) => ({
-        ...tab,
+        id:                tab.id,
+        relationshipId:   tab.relationshipId || tab.relationship_id,
+        relationshipName: tab.relationshipName || tab.relationship_name,
+        path:              tab.path,
+        viewMode:         tab.viewMode || tab.view_mode || 'list',
         entries:           [],
         total:             null,
         loading:           false,
-        loading_more:      false,
-        page_size:         tab.page_size || 100,
-        preview_entry:     null,
-        preview_component: null,
-        preview_height:    tab.preview_height || null,
+        loadingMore:      false,
+        pageSize:         tab.pageSize || tab.page_size || 100,
+        previewEntry:     null,
+        previewComponent: null,
+        previewHeight:    tab.previewHeight || null,
       }));
     } catch (error) {
       // start fresh
@@ -121,7 +125,7 @@ class AeorFileBrowser extends HTMLElement {
       html += this._renderTabBar();
     }
 
-    if (!this._active_tab_id) {
+    if (!this._activeTabId) {
       html += this._renderRelationshipSelector();
       this.innerHTML = html;
       this._bindShellEvents();
@@ -130,7 +134,7 @@ class AeorFileBrowser extends HTMLElement {
 
     // Render all tab content containers — only the active one is visible
     for (const tab of this._tabs) {
-      const isActive = (tab.id === this._active_tab_id);
+      const isActive = (tab.id === this._activeTabId);
       html += `<div class="tab-content" id="tab-content-${tab.id}" style="${isActive ? '' : 'display:none'}">`;
       html += this._renderDirectoryViewFor(tab);
       html += '</div>';
@@ -138,7 +142,7 @@ class AeorFileBrowser extends HTMLElement {
 
     this.innerHTML = html;
     this._bindShellEvents();
-    this._bindTabContentEvents(this._active_tab_id);
+    this._bindTabContentEvents(this._activeTabId);
     this._hydratePreview();
   }
 
@@ -153,7 +157,7 @@ class AeorFileBrowser extends HTMLElement {
     container.innerHTML = this._renderDirectoryViewFor(tab);
     this._bindTabContentEvents(tabId);
 
-    if (tabId === this._active_tab_id) {
+    if (tabId === this._activeTabId) {
       this._hydratePreview();
     }
   }
@@ -182,8 +186,8 @@ class AeorFileBrowser extends HTMLElement {
 
   _renderTabBar() {
     const tabs = this._tabs.map((tab) => {
-      const isActive = (tab.id === this._active_tab_id);
-      const label    = this._truncate(`${tab.relationship_name} ${tab.path}`, 30);
+      const isActive = (tab.id === this._activeTabId);
+      const label    = this._truncate(`${tab.relationshipName} ${tab.path}`, 30);
 
       return `
         <div class="tab ${(isActive) ? 'active' : ''}" data-tab-id="${tab.id}">
@@ -202,7 +206,7 @@ class AeorFileBrowser extends HTMLElement {
   }
 
   _renderDirectoryViewFor(tab) {
-    const viewMode    = tab.view_mode || 'list';
+    const viewMode    = tab.viewMode || 'list';
     const breadcrumbs = this._renderBreadcrumbs(tab);
     const header = `
       <div class="page-header">
@@ -229,7 +233,7 @@ class AeorFileBrowser extends HTMLElement {
     const countText = (tab.total != null)
       ? `Showing ${tab.entries.length} of ${tab.total}`
       : `${tab.entries.length} items`;
-    const loadingMore = (tab.loading_more)
+    const loadingMore = (tab.loadingMore)
       ? '<div class="scroll-loading">Loading more...</div>'
       : '';
 
@@ -238,7 +242,7 @@ class AeorFileBrowser extends HTMLElement {
       : this._renderListViewFor(tab);
 
     return `${header}<div class="tab-listing">${listing}<div class="entry-count">${countText}</div>${loadingMore}</div>
-      <div class="preview-panel" style="display:none; ${tab.preview_height ? 'height:' + tab.preview_height + 'px' : ''}">
+      <div class="preview-panel" style="display:none; ${tab.previewHeight ? 'height:' + tab.previewHeight + 'px' : ''}">
         <div class="preview-resize-handle"></div>
         <div class="preview-header">
           <input type="text" class="preview-title" spellcheck="false">
@@ -289,7 +293,7 @@ class AeorFileBrowser extends HTMLElement {
 
       if (!isDir && isImageFile(entry.name) && entry.has_local) {
         const encodedPath = encodeURIComponent(tab.path.replace(/\/$/, '') + '/' + entry.name);
-        thumbnail = `<div class="grid-card-thumbnail"><img src="/api/v1/files/${tab.relationship_id}/${encodedPath}" alt="${escapeAttr(entry.name)}" loading="lazy"></div>`;
+        thumbnail = `<div class="grid-card-thumbnail"><img src="/api/v1/files/${tab.relationshipId}/${encodedPath}" alt="${escapeAttr(entry.name)}" loading="lazy"></div>`;
       }
 
       return `
@@ -307,7 +311,7 @@ class AeorFileBrowser extends HTMLElement {
 
   _renderBreadcrumbs(tab) {
     const path = tab.path;
-    const rootLabel = tab.relationship_name || 'Root';
+    const rootLabel = tab.relationshipName || 'Root';
     const segments = path.split('/').filter((s) => s.length > 0);
     let html = `<div class="breadcrumbs"><span class="breadcrumb-segment" data-path="/">${escapeHtml(rootLabel)}</span>`;
 
@@ -329,8 +333,8 @@ class AeorFileBrowser extends HTMLElement {
     const panel = container.querySelector('.preview-panel');
     if (!panel) return;
 
-    const entry = tab.preview_entry;
-    const componentName = tab.preview_component;
+    const entry = tab.previewEntry;
+    const componentName = tab.previewComponent;
 
     if (!entry || !componentName) {
       panel.style.display = 'none';
@@ -364,7 +368,7 @@ class AeorFileBrowser extends HTMLElement {
     if (previewEl) {
       const contentType = entry.content_type || 'application/octet-stream';
       const filePath = tab.path.replace(/\/$/, '') + '/' + entry.name;
-      const fileUrl = `/api/v1/files/${tab.relationship_id}/${encodeURIComponent(filePath)}`;
+      const fileUrl = `/api/v1/files/${tab.relationshipId}/${encodeURIComponent(filePath)}`;
       previewEl.setAttribute('src', fileUrl);
       previewEl.setAttribute('filename', entry.name);
       previewEl.setAttribute('size', entry.size || 0);
@@ -438,7 +442,7 @@ class AeorFileBrowser extends HTMLElement {
     const newTabBtn = this.querySelector('.tab-new');
     if (newTabBtn) {
       newTabBtn.addEventListener('click', () => {
-        this._active_tab_id = null;
+        this._activeTabId = null;
         this.render();
       });
     }
@@ -454,7 +458,7 @@ class AeorFileBrowser extends HTMLElement {
     // View toggle
     container.querySelectorAll('[data-view]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        tab.view_mode = btn.dataset.view;
+        tab.viewMode = btn.dataset.view;
         this._saveState();
         this._updateTabContent(tabId);
       });
@@ -475,8 +479,8 @@ class AeorFileBrowser extends HTMLElement {
           const newPath = tab.path.replace(/\/$/, '') + '/' + el.dataset.name + '/';
           this._navigateTo(newPath);
         } else {
-          tab.preview_entry = tab.entries.find((e) => e.name === el.dataset.name) || null;
-          tab.preview_component = null;
+          tab.previewEntry = tab.entries.find((e) => e.name === el.dataset.name) || null;
+          tab.previewComponent = null;
           this._loadPreview();
         }
       });
@@ -516,7 +520,7 @@ class AeorFileBrowser extends HTMLElement {
           const delta     = startY - moveEvent.clientY;
           const newHeight = Math.max(150, Math.min(window.innerHeight * 0.8, startHeight + delta));
           previewPanel.style.height = newHeight + 'px';
-          tab.preview_height = newHeight;
+          tab.previewHeight = newHeight;
         };
 
         const onMouseUp = () => {
@@ -535,41 +539,41 @@ class AeorFileBrowser extends HTMLElement {
   // Tab lifecycle
   // ---------------------------------------------------------------------------
   _openTab(relationshipId, relationshipName) {
-    this._tab_counter++;
-    const tabId = 'tab-' + this._tab_counter;
+    this._tabCounter++;
+    const tabId = 'tab-' + this._tabCounter;
     this._tabs.push({
-      relationship_id:   relationshipId,
-      relationship_name: relationshipName,
+      relationshipId:   relationshipId,
+      relationshipName: relationshipName,
       path:              '/',
       id:                tabId,
-      view_mode:         'list',
+      viewMode:         'list',
       entries:           [],
       total:             null,
       loading:           false,
-      loading_more:      false,
-      page_size:         100,
-      preview_entry:     null,
-      preview_component: null,
-      preview_height:    null,
+      loadingMore:      false,
+      pageSize:         100,
+      previewEntry:     null,
+      previewComponent: null,
+      previewHeight:    null,
     });
-    this._active_tab_id = tabId;
+    this._activeTabId = tabId;
     this._saveState();
     this.render();
     this._fetchListing();
   }
 
   _switchTab(tabId) {
-    if (this._active_tab_id === tabId) return;
+    if (this._activeTabId === tabId) return;
 
     // Hide current tab content
-    const currentContainer = this.querySelector(`#tab-content-${this._active_tab_id}`);
+    const currentContainer = this.querySelector(`#tab-content-${this._activeTabId}`);
     if (currentContainer) currentContainer.style.display = 'none';
 
-    const currentTabEl = this.querySelector(`.tab[data-tab-id="${this._active_tab_id}"]`);
+    const currentTabEl = this.querySelector(`.tab[data-tab-id="${this._activeTabId}"]`);
     if (currentTabEl) currentTabEl.classList.remove('active');
 
     // Show new tab content
-    this._active_tab_id = tabId;
+    this._activeTabId = tabId;
 
     const newContainer = this.querySelector(`#tab-content-${tabId}`);
     if (newContainer) newContainer.style.display = '';
@@ -596,11 +600,11 @@ class AeorFileBrowser extends HTMLElement {
 
     this._tabs = this._tabs.filter((t) => t.id !== tabId);
 
-    if (this._active_tab_id === tabId) {
+    if (this._activeTabId === tabId) {
       if (this._tabs.length > 0) {
-        this._active_tab_id = this._tabs[this._tabs.length - 1].id;
+        this._activeTabId = this._tabs[this._tabs.length - 1].id;
       } else {
-        this._active_tab_id = null;
+        this._activeTabId = null;
       }
     }
 
@@ -612,7 +616,7 @@ class AeorFileBrowser extends HTMLElement {
     const tab = this._activeTab();
     if (!tab) return;
     tab.path = path;
-    tab.preview_entry = null;
+    tab.previewEntry = null;
     this._saveState();
     // Update tab bar label (breadcrumb changed)
     this._updateTabBarLabel(tab);
@@ -622,7 +626,7 @@ class AeorFileBrowser extends HTMLElement {
   _updateTabBarLabel(tab) {
     const tabEl = this.querySelector(`.tab[data-tab-id="${tab.id}"] .tab-label`);
     if (tabEl) {
-      tabEl.textContent = this._truncate(`${tab.relationship_name} ${tab.path}`, 30);
+      tabEl.textContent = this._truncate(`${tab.relationshipName} ${tab.path}`, 30);
     }
   }
 
@@ -635,7 +639,7 @@ class AeorFileBrowser extends HTMLElement {
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       this._relationships = await response.json();
       // Only full-render if we're on the selector screen
-      if (!this._active_tab_id) this.render();
+      if (!this._activeTabId) this.render();
     } catch (error) {
       console.error('Failed to fetch relationships:', error);
     }
@@ -647,16 +651,16 @@ class AeorFileBrowser extends HTMLElement {
 
     tab.entries = [];
     tab.total = null;
-    tab.loading_more = false;
+    tab.loadingMore = false;
     tab.loading = true;
     this._updateTabContent(tab.id);
 
     try {
       const encodedPath = (tab.path === '/') ? '' : encodeURIComponent(tab.path);
       const baseUrl = (encodedPath)
-        ? `/api/v1/browse/${tab.relationship_id}/${encodedPath}`
-        : `/api/v1/browse/${tab.relationship_id}`;
-      const url = `${baseUrl}?limit=${tab.page_size || 100}&offset=0`;
+        ? `/api/v1/browse/${tab.relationshipId}/${encodedPath}`
+        : `/api/v1/browse/${tab.relationshipId}`;
+      const url = `${baseUrl}?limit=${tab.pageSize || 100}&offset=0`;
       const response = await fetch(url);
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       const data = await response.json();
@@ -674,18 +678,18 @@ class AeorFileBrowser extends HTMLElement {
 
   async _fetchNextPage() {
     const tab = this._activeTab();
-    if (!tab || tab.loading_more) return;
+    if (!tab || tab.loadingMore) return;
     if (tab.entries.length >= (tab.total || 0)) return;
 
-    tab.loading_more = true;
+    tab.loadingMore = true;
     this._updateTabContent(tab.id);
 
     try {
       const encodedPath = (tab.path === '/') ? '' : encodeURIComponent(tab.path);
       const baseUrl = (encodedPath)
-        ? `/api/v1/browse/${tab.relationship_id}/${encodedPath}`
-        : `/api/v1/browse/${tab.relationship_id}`;
-      const url = `${baseUrl}?limit=${tab.page_size || 100}&offset=${tab.entries.length}`;
+        ? `/api/v1/browse/${tab.relationshipId}/${encodedPath}`
+        : `/api/v1/browse/${tab.relationshipId}`;
+      const url = `${baseUrl}?limit=${tab.pageSize || 100}&offset=${tab.entries.length}`;
       const response = await fetch(url);
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       const data = await response.json();
@@ -698,24 +702,24 @@ class AeorFileBrowser extends HTMLElement {
       console.error('Failed to fetch next page:', error);
     }
 
-    tab.loading_more = false;
+    tab.loadingMore = false;
     this._updateTabContent(tab.id);
     this._attachScrollListener();
   }
 
   _attachScrollListener() {
-    const activeContainer = this.querySelector(`#tab-content-${this._active_tab_id}`);
+    const activeContainer = this.querySelector(`#tab-content-${this._activeTabId}`);
     const listing = activeContainer && activeContainer.querySelector('.tab-listing');
     if (!listing) return;
 
-    if (this._scroll_listener && this._scroll_listener_target) {
-      this._scroll_listener_target.removeEventListener('scroll', this._scroll_listener);
+    if (this._scrollListener && this._scrollListenerTarget) {
+      this._scrollListenerTarget.removeEventListener('scroll', this._scrollListener);
     }
 
-    this._scroll_listener_target = listing;
-    this._scroll_listener = () => {
+    this._scrollListenerTarget = listing;
+    this._scrollListener = () => {
       const tab = this._activeTab();
-      if (!tab || tab.loading_more) return;
+      if (!tab || tab.loadingMore) return;
       if (tab.total == null) return;
       if (tab.entries.length >= tab.total) return;
 
@@ -725,7 +729,7 @@ class AeorFileBrowser extends HTMLElement {
       }
     };
 
-    listing.addEventListener('scroll', this._scroll_listener);
+    listing.addEventListener('scroll', this._scrollListener);
   }
 
   // ---------------------------------------------------------------------------
@@ -733,10 +737,10 @@ class AeorFileBrowser extends HTMLElement {
   // ---------------------------------------------------------------------------
   async _loadPreview() {
     const tab = this._activeTab();
-    if (!tab || !tab.preview_entry) return;
+    if (!tab || !tab.previewEntry) return;
 
-    const contentType = tab.preview_entry.content_type || 'application/octet-stream';
-    tab.preview_component = await loadPreviewComponent(contentType);
+    const contentType = tab.previewEntry.content_type || 'application/octet-stream';
+    tab.previewComponent = await loadPreviewComponent(contentType);
     this._showPreview(tab);
   }
 
@@ -751,20 +755,20 @@ class AeorFileBrowser extends HTMLElement {
   // ---------------------------------------------------------------------------
   async _renamePreviewFile(newName) {
     const tab = this._activeTab();
-    if (!tab || !tab.preview_entry) return;
+    if (!tab || !tab.previewEntry) return;
 
-    const oldName = tab.preview_entry.name;
+    const oldName = tab.previewEntry.name;
     const fromPath = tab.path.replace(/\/$/, '') + '/' + oldName;
     const toPath = tab.path.replace(/\/$/, '') + '/' + newName;
 
     try {
-      const response = await fetch(`/api/v1/files/${tab.relationship_id}/rename`, {
+      const response = await fetch(`/api/v1/files/${tab.relationshipId}/rename`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ from: fromPath, to: toPath }),
       });
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);
-      tab.preview_entry.name = newName;
+      tab.previewEntry.name = newName;
       // Update the input's original value to the new name
       const container = this.querySelector(`#tab-content-${tab.id}`);
       const titleInput = container && container.querySelector('.preview-title');
@@ -781,14 +785,14 @@ class AeorFileBrowser extends HTMLElement {
 
   async _handlePreviewAction(action) {
     const tab = this._activeTab();
-    if (!tab || !tab.preview_entry) return;
+    if (!tab || !tab.previewEntry) return;
 
-    const entry = tab.preview_entry;
+    const entry = tab.previewEntry;
     const filePath = tab.path.replace(/\/$/, '') + '/' + entry.name;
 
     switch (action) {
       case 'open-local': {
-        const openResponse = await fetch(`/api/v1/files/${tab.relationship_id}/open`, {
+        const openResponse = await fetch(`/api/v1/files/${tab.relationshipId}/open`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: filePath.replace(/^\//, '') }),
@@ -802,11 +806,11 @@ class AeorFileBrowser extends HTMLElement {
         if (!confirm(`Delete "${entry.name}"? This cannot be undone.`)) break;
         try {
           const encodedPath = encodeURIComponent(filePath);
-          const deleteResponse = await fetch(`/api/v1/files/${tab.relationship_id}/${encodedPath}`, {
+          const deleteResponse = await fetch(`/api/v1/files/${tab.relationshipId}/${encodedPath}`, {
             method: 'DELETE',
           });
           if (!deleteResponse.ok) throw new Error(`Request failed: ${deleteResponse.status}`);
-          tab.preview_entry = null;
+          tab.previewEntry = null;
           this._fetchListing();
         } catch (error) {
           window.aeorToast('Delete failed: ' + error.message, 'error');
@@ -814,8 +818,8 @@ class AeorFileBrowser extends HTMLElement {
         break;
 
       case 'close-preview':
-        tab.preview_entry = null;
-        tab.preview_component = null;
+        tab.previewEntry = null;
+        tab.previewComponent = null;
         this._showPreview(tab);
         break;
     }
@@ -832,7 +836,7 @@ class AeorFileBrowser extends HTMLElement {
 
       try {
         const arrayBuffer = await file.arrayBuffer();
-        const uploadResponse = await fetch(`/api/v1/files/${tab.relationship_id}/${encodedPath}`, {
+        const uploadResponse = await fetch(`/api/v1/files/${tab.relationshipId}/${encodedPath}`, {
           method: 'PUT',
           headers: { 'Content-Type': file.type || 'application/octet-stream' },
           body: arrayBuffer,
@@ -881,12 +885,12 @@ class AeorFileBrowser extends HTMLElement {
         const activeTab = this._activeTab();
         if (item.dataset.context === 'preview') {
           if (activeTab) {
-            activeTab.preview_entry = entry;
-            activeTab.preview_component = null;
+            activeTab.previewEntry = entry;
+            activeTab.previewComponent = null;
           }
           this._loadPreview();
         } else {
-          if (activeTab) activeTab.preview_entry = entry;
+          if (activeTab) activeTab.previewEntry = entry;
           this._handlePreviewAction(item.dataset.context);
         }
       });
