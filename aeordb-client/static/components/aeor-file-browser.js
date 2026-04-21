@@ -263,7 +263,7 @@ class AeorFileBrowser extends HTMLElement {
       const [syncClass, syncTitle] = this._syncBadge(entry);
 
       return `
-        <tr class="file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}" ${isDir ? '' : 'draggable="true"'}>
+        <tr class="file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}" draggable="true">
           <td><span class="sync-badge ${syncClass}" title="${syncTitle}"></span><span class="file-icon">${icon}</span>${escapeHtml(entry.name)}</td>
           <td>${size}</td>
           <td>${created}</td>
@@ -297,7 +297,7 @@ class AeorFileBrowser extends HTMLElement {
       }
 
       return `
-        <div class="grid-card file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}" ${isDir ? '' : 'draggable="true"'}
+        <div class="grid-card file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}" draggable="true"
           <span class="sync-badge ${syncClass}" title="${syncTitle}"></span>
           ${thumbnail}
           <div class="grid-card-name" title="${escapeAttr(entry.name)}">${escapeHtml(this._truncate(entry.name, 20))}</div>
@@ -546,19 +546,28 @@ class AeorFileBrowser extends HTMLElement {
       });
     }
 
-    // Drag-out: dragging file entries out for download
+    // Drag-out: dragging entries out for download/copy
     container.querySelectorAll('.file-entry[draggable="true"]').forEach((el) => {
       el.addEventListener('dragstart', (event) => {
         const entryName = el.dataset.name;
-        const filePath = tab.path.replace(/\/$/, '') + '/' + entryName;
-        const fileUrl = `${window.location.origin}/api/v1/files/${tab.relationshipId}/${encodeURIComponent(filePath)}`;
+        const entryType = parseInt(el.dataset.type, 10);
         const entry = tab.entries.find((e) => e.name === entryName);
-        const mime = (entry && entry.content_type) || 'application/octet-stream';
+        const filePath = tab.path.replace(/\/$/, '') + '/' + entryName;
 
-        // DownloadURL format: mime:filename:url (Chrome/WebKitGTK)
-        event.dataTransfer.setData('DownloadURL', `${mime}:${entryName}:${fileUrl}`);
-        event.dataTransfer.setData('text/uri-list', fileUrl);
-        event.dataTransfer.setData('text/plain', fileUrl);
+        if (entryType === ENTRY_TYPE_DIR) {
+          // Directory: provide the browse URL
+          const browseUrl = `${window.location.origin}/api/v1/browse/${tab.relationshipId}/${encodeURIComponent(filePath + '/')}`;
+          event.dataTransfer.setData('text/uri-list', browseUrl);
+          event.dataTransfer.setData('text/plain', filePath);
+        } else {
+          // File: provide the download URL
+          const fileUrl = `${window.location.origin}/api/v1/files/${tab.relationshipId}/${encodeURIComponent(filePath)}`;
+          const mime = (entry && entry.content_type) || 'application/octet-stream';
+          event.dataTransfer.setData('DownloadURL', `${mime}:${entryName}:${fileUrl}`);
+          event.dataTransfer.setData('text/uri-list', fileUrl);
+          event.dataTransfer.setData('text/plain', fileUrl);
+        }
+
         event.dataTransfer.effectAllowed = 'copy';
       });
     });

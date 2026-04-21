@@ -613,11 +613,11 @@ aeor-file-browser {
   border-radius: var(--radius);
 }
 
-.file-entry[draggable="true"] {
+.file-entry[draggable] {
   cursor: grab;
 }
 
-.file-entry[draggable="true"]:active {
+.file-entry[draggable]:active {
   cursor: grabbing;
 }
 
