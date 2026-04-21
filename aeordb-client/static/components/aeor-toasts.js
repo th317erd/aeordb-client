@@ -13,7 +13,7 @@ class AeorToasts extends HTMLElement {
     this.innerHTML = '<div class="toast-container"></div>';
 
     // Expose global toast function
-    window.aeorToast = (message, type = 'info', duration = 4000) => {
+    window.aeorToast = (message, type = 'info', duration = 6000) => {
       this._addToast(message, type, duration);
     };
 
@@ -135,7 +135,7 @@ class AeorToasts extends HTMLElement {
 
       // Show error toast if any errors
       if (hasErrors) {
-        window.aeorToast(`${name}: ${errors[0]}`, 'error', 6000);
+        window.aeorToast(`${name}: ${errors[0]}`, 'error', 10000);
       }
 
       // Show summary toast for file operations

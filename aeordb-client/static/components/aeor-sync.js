@@ -497,7 +497,7 @@ class AeorSync extends HTMLElement {
         this._fetchActivity(id);
       }
     } catch (error) {
-      window.aeorToast(`Sync failed: ${error.message}`, 'error', 6000);
+      window.aeorToast(`Sync failed: ${error.message}`, 'error', 10000);
     }
   }
 
