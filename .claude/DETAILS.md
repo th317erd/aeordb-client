@@ -37,7 +37,14 @@
 - `connections.rs` — connection CRUD (ConfigStore)
 - `sync/relationships.rs` — relationship CRUD (ConfigStore)
 
-## Test Count: 110 tests passing
+## Shared Components
+- `aeordb-web-components/` is the shared library (separate repo)
+- `build.rs` rsyncs it into `static/shared/` on each build
+- Local `aeor-file-view-shared.js` is a thin re-export shim to shared
+- Shared utils: `escapeHtml`, `escapeAttr`, `formatBytes`, `formatDate`, `formatUptime`, etc.
+- Shared file helpers: `fileIcon`, `ENTRY_TYPE_*`, `bindResizeHandle`, `openFolder`, etc.
+
+## Test Count: 160 tests passing
 
 ## GitHub
 - **Repo**: `git@github.com:th317erd/aeordb-client.git`

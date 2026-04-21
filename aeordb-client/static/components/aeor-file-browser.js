@@ -95,19 +95,21 @@ class AeorFileBrowser extends HTMLElement {
       this._tabCounter   = state.tab_counter || 0;
 
       this._tabs = (state.tabs || []).map((tab) => ({
-        id:                tab.id,
-        relationshipId:   tab.relationshipId || tab.relationship_id,
-        relationshipName: tab.relationshipName || tab.relationship_name,
-        path:              tab.path,
-        viewMode:         tab.viewMode || tab.view_mode || 'list',
-        entries:           [],
-        total:             null,
-        loading:           false,
-        loadingMore:      false,
-        pageSize:         tab.pageSize || tab.page_size || 100,
-        previewEntry:     null,
-        previewComponent: null,
-        previewHeight:    tab.previewHeight || null,
+        id:                 tab.id,
+        relationshipId:     tab.relationshipId || tab.relationship_id,
+        relationshipName:   tab.relationshipName || tab.relationship_name,
+        path:               tab.path,
+        viewMode:           tab.viewMode || tab.view_mode || 'list',
+        entries:            [],
+        total:              null,
+        loading:            false,
+        loadingMore:        false,
+        pageSize:           tab.pageSize || tab.page_size || 100,
+        previewEntry:       null,
+        previewComponent:   null,
+        previewHeight:      tab.previewHeight || null,
+        selectedEntries:    new Set(),
+        lastSelectedIndex:  -1,
       }));
     } catch (error) {
       // start fresh
@@ -472,36 +474,85 @@ class AeorFileBrowser extends HTMLElement {
     });
 
     // File entries (both list rows and grid cards)
-    container.querySelectorAll('.file-entry').forEach((el) => {
-      el.addEventListener('click', () => {
+    const fileEntryElements = container.querySelectorAll('.file-entry');
+    fileEntryElements.forEach((el) => {
+      el.addEventListener('click', (event) => {
+        const entryName = el.dataset.name;
         const entryType = parseInt(el.dataset.type, 10);
-        if (entryType === ENTRY_TYPE_DIR) {
-          const newPath = tab.path.replace(/\/$/, '') + '/' + el.dataset.name + '/';
-          this._navigateTo(newPath);
-        } else {
-          tab.previewEntry = tab.entries.find((e) => e.name === el.dataset.name) || null;
+        const entryIndex = tab.entries.findIndex((e) => e.name === entryName);
+        const isCtrl = event.ctrlKey || event.metaKey;
+        const isShift = event.shiftKey;
+
+        if (!isCtrl && !isShift) {
+          // Plain click — single select
+          if (entryType === ENTRY_TYPE_DIR) {
+            const newPath = tab.path.replace(/\/$/, '') + '/' + entryName + '/';
+            this._navigateTo(newPath);
+            return;
+          }
+          tab.selectedEntries.clear();
+          tab.selectedEntries.add(entryName);
+          tab.lastSelectedIndex = entryIndex;
+          this._updateSelectionVisual(tab);
+
+          // Preview the single file
+          tab.previewEntry = tab.entries.find((e) => e.name === entryName) || null;
           tab.previewComponent = null;
           this._loadPreview();
+        } else if (isCtrl) {
+          // Ctrl+Click — toggle individual entry
+          if (tab.selectedEntries.has(entryName))
+            tab.selectedEntries.delete(entryName);
+          else
+            tab.selectedEntries.add(entryName);
+
+          tab.lastSelectedIndex = entryIndex;
+          this._updateSelectionVisual(tab);
+        } else if (isShift) {
+          // Shift+Click — range select
+          const anchor = (tab.lastSelectedIndex >= 0) ? tab.lastSelectedIndex : 0;
+          const start = Math.min(anchor, entryIndex);
+          const end = Math.max(anchor, entryIndex);
+
+          // Don't clear existing — add the range
+          for (let i = start; i <= end; i++) {
+            if (tab.entries[i])
+              tab.selectedEntries.add(tab.entries[i].name);
+          }
+          this._updateSelectionVisual(tab);
         }
       });
 
       // Context menu
       el.addEventListener('contextmenu', (event) => {
         event.preventDefault();
+        const entryName = el.dataset.name;
         const entryType = parseInt(el.dataset.type, 10);
-        if (entryType === ENTRY_TYPE_DIR) return;
-
-        const entry = tab.entries.find((e) => e.name === el.dataset.name);
+        const entry = tab.entries.find((e) => e.name === entryName);
         if (!entry) return;
 
-        this._showContextMenu(event.clientX, event.clientY, entry);
+        // If right-clicking an unselected entry, select only it
+        if (!tab.selectedEntries.has(entryName)) {
+          tab.selectedEntries.clear();
+          tab.selectedEntries.add(entryName);
+          tab.lastSelectedIndex = tab.entries.findIndex((e) => e.name === entryName);
+          this._updateSelectionVisual(tab);
+        }
+
+        // Show bulk or single context menu
+        if (tab.selectedEntries.size > 1)
+          this._showBulkContextMenu(event.clientX, event.clientY);
+        else
+          this._showContextMenu(event.clientX, event.clientY, entry);
       });
 
-      // Drop onto directory entries — move the dragged entry into this folder
+      // Drop onto directory entries — move the dragged entries into this folder
       const entryType = parseInt(el.dataset.type, 10);
       if (entryType === ENTRY_TYPE_DIR) {
         el.addEventListener('dragover', (event) => {
-          if (event.dataTransfer.types.includes('application/x-aeordb-entry')) {
+          const hasEntries = event.dataTransfer.types.includes('application/x-aeordb-entries')
+            || event.dataTransfer.types.includes('application/x-aeordb-entry');
+          if (hasEntries) {
             event.preventDefault();
             event.dataTransfer.dropEffect = 'move';
             el.classList.add('drop-target');
@@ -517,14 +568,57 @@ class AeorFileBrowser extends HTMLElement {
           event.stopPropagation(); // don't trigger listing-level drop
           el.classList.remove('drop-target');
 
-          const sourceName = event.dataTransfer.getData('application/x-aeordb-entry');
-          if (sourceName && sourceName !== el.dataset.name) {
-            const targetDir = el.dataset.name;
-            this._moveEntryToFolder(sourceName, targetDir);
+          const targetDir = el.dataset.name;
+
+          // Check for multi-entry drag first
+          const entriesJson = event.dataTransfer.getData('application/x-aeordb-entries');
+          if (entriesJson) {
+            try {
+              const names = JSON.parse(entriesJson);
+              const filtered = names.filter((n) => n !== targetDir);
+              if (filtered.length > 0)
+                this._moveEntriesToFolder(filtered, targetDir);
+            } catch (error) {
+              console.error('Failed to parse drag entries:', error);
+            }
+            return;
           }
+
+          // Fall back to single entry
+          const sourceName = event.dataTransfer.getData('application/x-aeordb-entry');
+          if (sourceName && sourceName !== targetDir)
+            this._moveEntriesToFolder([sourceName], targetDir);
         });
       }
     });
+
+    // Keyboard handler for Ctrl+A and Escape
+    const keydownHandler = (event) => {
+      // Only handle when this tab is active
+      if (tab.id !== this._activeTabId) return;
+
+      if ((event.ctrlKey || event.metaKey) && event.key === 'a') {
+        event.preventDefault();
+        for (const entry of tab.entries) {
+          tab.selectedEntries.add(entry.name);
+        }
+        if (tab.entries.length > 0)
+          tab.lastSelectedIndex = tab.entries.length - 1;
+        this._updateSelectionVisual(tab);
+      } else if (event.key === 'Escape') {
+        if (tab.selectedEntries.size > 0) {
+          this._clearSelection(tab);
+        }
+      }
+    };
+
+    // Store reference for cleanup; attach to the component
+    if (this._keydownHandler)
+      this.removeEventListener('keydown', this._keydownHandler);
+
+    this._keydownHandler = keydownHandler;
+    this.setAttribute('tabindex', '0');
+    this.addEventListener('keydown', keydownHandler);
 
     // Upload (button)
     const uploadButton = container.querySelector('.upload-button');
@@ -591,8 +685,18 @@ class AeorFileBrowser extends HTMLElement {
         const fileUrl = `${window.location.origin}/api/v1/files/${tab.relationshipId}/${encodeURIComponent(filePath)}`;
         const mime = (entry && entry.content_type) || 'application/octet-stream';
 
-        // Internal move marker — used when dropping onto a folder in the same view
+        // Determine if we're dragging multiple selected entries
+        const isDraggedSelected = tab.selectedEntries.has(entryName);
+        const dragNames = (isDraggedSelected && tab.selectedEntries.size > 1)
+          ? [...tab.selectedEntries]
+          : [entryName];
+
+        // Internal move marker — single entry (backward compat)
         event.dataTransfer.setData('application/x-aeordb-entry', entryName);
+
+        // Multi-entry marker
+        if (dragNames.length > 1)
+          event.dataTransfer.setData('application/x-aeordb-entries', JSON.stringify(dragNames));
 
         // Set web-standard fallbacks for external drops
         if (entryType !== ENTRY_TYPE_DIR) {
@@ -601,13 +705,20 @@ class AeorFileBrowser extends HTMLElement {
         event.dataTransfer.setData('text/uri-list', fileUrl);
         event.dataTransfer.effectAllowed = 'copyMove';
 
+        // Build paths for all dragged entries
+        const draggedPaths = dragNames.map((name) =>
+          tab.path.replace(/\/$/, '') + '/' + name,
+        );
+
         // Dispatch event for host app to enhance (e.g., Tauri native file drag)
         this.dispatchEvent(new CustomEvent('file-drag-start', {
           bubbles: true,
           detail: {
             event,
             entry,
+            entries:        dragNames.map((n) => tab.entries.find((e) => e.name === n)).filter(Boolean),
             path:           filePath,
+            paths:          draggedPaths,
             relationshipId: tab.relationshipId,
             url:            fileUrl,
             isDirectory:    entryType === ENTRY_TYPE_DIR,
@@ -615,6 +726,9 @@ class AeorFileBrowser extends HTMLElement {
         }));
       });
     });
+
+    // Apply selection visual state after binding (for re-renders that preserve selection)
+    this._updateSelectionVisual(tab);
 
     // Preview panel resize handle (persistent — bound once per tab)
     const resizeHandle = container.querySelector('.preview-resize-handle');
@@ -652,19 +766,21 @@ class AeorFileBrowser extends HTMLElement {
     this._tabCounter++;
     const tabId = 'tab-' + this._tabCounter;
     this._tabs.push({
-      relationshipId:   relationshipId,
-      relationshipName: relationshipName,
+      relationshipId:    relationshipId,
+      relationshipName:  relationshipName,
       path:              '/',
       id:                tabId,
-      viewMode:         'list',
+      viewMode:          'list',
       entries:           [],
       total:             null,
       loading:           false,
-      loadingMore:      false,
-      pageSize:         100,
-      previewEntry:     null,
-      previewComponent: null,
-      previewHeight:    null,
+      loadingMore:       false,
+      pageSize:          100,
+      previewEntry:      null,
+      previewComponent:  null,
+      previewHeight:     null,
+      selectedEntries:   new Set(),
+      lastSelectedIndex: -1,
     });
     this._activeTabId = tabId;
     this._saveState();
@@ -727,6 +843,8 @@ class AeorFileBrowser extends HTMLElement {
     if (!tab) return;
     tab.path = path;
     tab.previewEntry = null;
+    tab.selectedEntries.clear();
+    tab.lastSelectedIndex = -1;
     this._saveState();
     // Update tab bar label (breadcrumb changed)
     this._updateTabBarLabel(tab);
@@ -863,26 +981,7 @@ class AeorFileBrowser extends HTMLElement {
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
-  async _moveEntryToFolder(entryName, folderName) {
-    const tab = this._activeTab();
-    if (!tab) return;
-
-    const fromPath = tab.path.replace(/\/$/, '') + '/' + entryName;
-    const toPath = tab.path.replace(/\/$/, '') + '/' + folderName + '/' + entryName;
-
-    try {
-      const response = await fetch(`/api/v1/files/${tab.relationshipId}/rename`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: fromPath, to: toPath }),
-      });
-      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
-      window.aeorToast(`Moved ${entryName} into ${folderName}/`, 'success');
-      this._fetchListing();
-    } catch (error) {
-      window.aeorToast(`Move failed: ${error.message}`, 'error');
-    }
-  }
+  // _moveEntryToFolder removed — use _moveEntriesToFolder([name], folder) instead
 
   async _renamePreviewFile(newName) {
     const tab = this._activeTab();
@@ -1043,6 +1142,161 @@ class AeorFileBrowser extends HTMLElement {
       }
     };
     setTimeout(() => document.addEventListener('click', closeMenu), 0);
+  }
+
+  _showBulkContextMenu(x, y) {
+    const existing = this.querySelector('.context-menu');
+    if (existing) existing.remove();
+
+    const tab = this._activeTab();
+    if (!tab) return;
+
+    const count = tab.selectedEntries.size;
+    const menu = document.createElement('div');
+    menu.className = 'context-menu';
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+    menu.innerHTML = `
+      <div class="context-menu-item context-menu-danger" data-context="delete-selected">Delete ${count} items</div>
+    `;
+
+    this.appendChild(menu);
+
+    // Adjust position if menu overflows viewport
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth)
+      menu.style.left = (x - rect.width) + 'px';
+    if (rect.bottom > window.innerHeight)
+      menu.style.top = (y - rect.height) + 'px';
+
+    menu.querySelectorAll('.context-menu-item').forEach((item) => {
+      item.addEventListener('click', () => {
+        menu.remove();
+        if (item.dataset.context === 'delete-selected')
+          this._deleteSelected();
+      });
+    });
+
+    const closeMenu = (event) => {
+      if (!menu.contains(event.target)) {
+        menu.remove();
+        document.removeEventListener('click', closeMenu);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu), 0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Selection
+  // ---------------------------------------------------------------------------
+  _updateSelectionVisual(tab) {
+    const container = this.querySelector(`#tab-content-${tab.id}`);
+    if (!container) return;
+
+    container.querySelectorAll('.file-entry').forEach((el) => {
+      if (tab.selectedEntries.has(el.dataset.name))
+        el.classList.add('selected');
+      else
+        el.classList.remove('selected');
+    });
+
+    // Selection bar visibility
+    let selectionBar = container.querySelector('.selection-bar');
+    if (tab.selectedEntries.size > 0) {
+      if (!selectionBar) {
+        selectionBar = document.createElement('div');
+        selectionBar.className = 'selection-bar';
+        const listing = container.querySelector('.tab-listing');
+        if (listing)
+          listing.parentNode.insertBefore(selectionBar, listing);
+      }
+      const count = tab.selectedEntries.size;
+      selectionBar.innerHTML =
+        `<span class="selection-count">${count} selected</span>` +
+        '<button class="secondary small selection-clear">Clear</button>' +
+        '<button class="danger small selection-delete">Delete Selected</button>';
+
+      selectionBar.querySelector('.selection-clear').addEventListener('click', () => {
+        this._clearSelection(tab);
+      });
+      selectionBar.querySelector('.selection-delete').addEventListener('click', () => {
+        this._deleteSelected();
+      });
+    } else if (selectionBar) {
+      selectionBar.remove();
+    }
+  }
+
+  _clearSelection(tab) {
+    tab.selectedEntries.clear();
+    tab.lastSelectedIndex = -1;
+    this._updateSelectionVisual(tab);
+  }
+
+  async _deleteSelected() {
+    const tab = this._activeTab();
+    if (!tab || tab.selectedEntries.size === 0) return;
+
+    const count = tab.selectedEntries.size;
+    if (!confirm(`Delete ${count} item${(count > 1) ? 's' : ''}? This cannot be undone.`)) return;
+
+    let deleted = 0;
+    const names = [...tab.selectedEntries];
+
+    for (const name of names) {
+      const filePath = tab.path.replace(/\/$/, '') + '/' + name;
+      const encodedPath = encodeURIComponent(filePath);
+
+      try {
+        const response = await fetch(`/api/v1/files/${tab.relationshipId}/${encodedPath}`, {
+          method: 'DELETE',
+        });
+        if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+        deleted++;
+      } catch (error) {
+        window.aeorToast(`Delete failed for ${name}: ${error.message}`, 'error');
+      }
+    }
+
+    if (deleted > 0)
+      window.aeorToast(`Deleted ${deleted} item${(deleted > 1) ? 's' : ''}`, 'success');
+
+    tab.selectedEntries.clear();
+    tab.lastSelectedIndex = -1;
+    tab.previewEntry = null;
+    this._fetchListing();
+  }
+
+  async _moveEntriesToFolder(entryNames, folderName) {
+    const tab = this._activeTab();
+    if (!tab) return;
+
+    let moved = 0;
+    for (const entryName of entryNames) {
+      const fromPath = tab.path.replace(/\/$/, '') + '/' + entryName;
+      const toPath = tab.path.replace(/\/$/, '') + '/' + folderName + '/' + entryName;
+
+      try {
+        const response = await fetch(`/api/v1/files/${tab.relationshipId}/rename`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: fromPath, to: toPath }),
+        });
+        if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+        moved++;
+      } catch (error) {
+        window.aeorToast(`Move failed for ${entryName}: ${error.message}`, 'error');
+      }
+    }
+
+    if (moved > 0) {
+      const label = (moved === 1) ? entryNames[0] : `${moved} items`;
+      window.aeorToast(`Moved ${label} into ${folderName}/`, 'success');
+    }
+
+    tab.selectedEntries.clear();
+    tab.lastSelectedIndex = -1;
+    this._fetchListing();
   }
 
   // ---------------------------------------------------------------------------

@@ -714,6 +714,34 @@ aeor-file-browser {
   background-color: var(--bg-tertiary);
 }
 
+.file-entry.selected {
+  background-color: rgba(249, 115, 22, 0.15);
+}
+
+.file-entry.selected td:first-child {
+  border-left: 3px solid var(--accent);
+}
+
+.file-entry.selected.grid-card {
+  border-color: var(--accent);
+}
+
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background-color: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.selection-bar .selection-count {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 .file-icon {
   margin-right: 8px;
 }

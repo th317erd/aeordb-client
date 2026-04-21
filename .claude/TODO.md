@@ -1,41 +1,24 @@
-# TODO — Code Audit Fixes
+# TODO — File Browser Multi-Selection
 
-## Critical — All Done
+## Phase 1: Selection State + Visual — DONE
+- [x] `selectedEntries` (Set) and `lastSelectedIndex` on tab objects
+- [x] Plain click = single select + preview (dirs still navigate)
+- [x] Ctrl/Meta+Click = toggle selection
+- [x] Shift+Click = range select from anchor
+- [x] `.selected` CSS class with accent highlight
+- [x] Selection bar shows count + Clear + Delete Selected buttons
+- [x] Ctrl+A selects all, Escape clears
+- [x] Selection persists across pagination (name-based Set)
+- [x] Selection cleared on directory navigation
 
-- [x] XSS sweep (escapeHtml/escapeAttr across all components)
-- [x] Path traversal hardening (per-segment validation)
-- [x] Config file permissions (0600)
-- [x] Async I/O (tokio::fs for all sync filesystem ops)
-- [x] Streaming transfers (download chunks to disk, upload via ReaderStream)
+## Phase 2: Bulk Actions — DONE
+- [x] Bulk delete via selection bar or context menu
+- [x] Bulk move: drag multiple selected onto a folder
+- [x] Multi-entry drag data (`application/x-aeordb-entries`)
+- [x] `file-drag-start` event includes all selected paths/entries
 
-## Moderate — All Done
-
-- [x] Settings save bug (read inputs before re-render)
-- [x] Sync interval setting wired into runner
-- [x] Stale config refresh in sync loop
-- [x] Frontend DRY (shared formatSize, bindResizeHandle, openFolder, etc.)
-- [x] Backend DRY (ClientError + IntoResponse, shared file_mtime)
-- [x] Shared reqwest::Client with 30s timeout
-- [x] tokio::sync::RwLock for ConfigStore
-- [x] response.ok checks on all fetch calls
-- [x] SSE for toast notifications (replaced polling)
-- [x] Toast debounce (2s window, grouped summaries)
-- [x] Version caching in nav
-- [x] disconnectedCallback cleanup on dashboard, settings, nav
-
-## Minor — All Done
-
-- [x] Unused Path import removed
-- [x] ENTRY_TYPE_DIR constant replacing magic number 3
-- [x] Nested ternary replaced with directionArrow()
-- [x] pick field validation in conflicts resolve
-- [x] event.id slice bounds check
-- [x] console.warn in preview loader catch blocks
-- [x] Context menu viewport bounds check
-- [x] Redundant format! fixed
-- [x] Filter clearing via empty string
-
-## Remaining (deferred)
-
-- [ ] Standardize naming: file-browser snake_case → camelCase (cosmetic, low priority)
-- [ ] (Future) OS keychain integration for API keys
+## Phase 3: Integration — DONE
+- [x] Plain click still previews single files
+- [x] Ctrl/Shift clicks select without previewing
+- [x] Context menu: bulk menu when right-clicking selected entry in multi-select
+- [x] Context menu: selects entry first when right-clicking unselected
