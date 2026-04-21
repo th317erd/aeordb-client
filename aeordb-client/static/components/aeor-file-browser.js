@@ -263,7 +263,7 @@ class AeorFileBrowser extends HTMLElement {
       const [syncClass, syncTitle] = this._syncBadge(entry);
 
       return `
-        <tr class="file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}">
+        <tr class="file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}" ${isDir ? '' : 'draggable="true"'}>
           <td><span class="sync-badge ${syncClass}" title="${syncTitle}"></span><span class="file-icon">${icon}</span>${escapeHtml(entry.name)}</td>
           <td>${size}</td>
           <td>${created}</td>
@@ -297,7 +297,7 @@ class AeorFileBrowser extends HTMLElement {
       }
 
       return `
-        <div class="grid-card file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}">
+        <div class="grid-card file-entry" data-name="${escapeAttr(entry.name)}" data-type="${entry.entry_type}" ${isDir ? '' : 'draggable="true"'}
           <span class="sync-badge ${syncClass}" title="${syncTitle}"></span>
           ${thumbnail}
           <div class="grid-card-name" title="${escapeAttr(entry.name)}">${escapeHtml(this._truncate(entry.name, 20))}</div>
@@ -498,13 +498,70 @@ class AeorFileBrowser extends HTMLElement {
       });
     });
 
-    // Upload
+    // Upload (button)
     const uploadButton = container.querySelector('.upload-button');
     const uploadInput = container.querySelector('.upload-input');
     if (uploadButton && uploadInput) {
       uploadButton.addEventListener('click', () => uploadInput.click());
       uploadInput.addEventListener('change', (event) => this._handleUpload(event));
     }
+
+    // Drag-and-drop: drop files onto the listing to upload
+    const listing = container.querySelector('.tab-listing');
+    if (listing) {
+      let dragCounter = 0; // track nested enter/leave events
+
+      listing.addEventListener('dragover', (event) => {
+        // Only accept external file drops, not internal reorders
+        if (event.dataTransfer.types.includes('Files')) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+        }
+      });
+
+      listing.addEventListener('dragenter', (event) => {
+        if (event.dataTransfer.types.includes('Files')) {
+          event.preventDefault();
+          dragCounter++;
+          listing.classList.add('drop-active');
+        }
+      });
+
+      listing.addEventListener('dragleave', () => {
+        dragCounter--;
+        if (dragCounter <= 0) {
+          dragCounter = 0;
+          listing.classList.remove('drop-active');
+        }
+      });
+
+      listing.addEventListener('drop', (event) => {
+        event.preventDefault();
+        dragCounter = 0;
+        listing.classList.remove('drop-active');
+
+        if (event.dataTransfer.files.length > 0) {
+          this._uploadFiles(event.dataTransfer.files);
+        }
+      });
+    }
+
+    // Drag-out: dragging file entries out for download
+    container.querySelectorAll('.file-entry[draggable="true"]').forEach((el) => {
+      el.addEventListener('dragstart', (event) => {
+        const entryName = el.dataset.name;
+        const filePath = tab.path.replace(/\/$/, '') + '/' + entryName;
+        const fileUrl = `${window.location.origin}/api/v1/files/${tab.relationshipId}/${encodeURIComponent(filePath)}`;
+        const entry = tab.entries.find((e) => e.name === entryName);
+        const mime = (entry && entry.content_type) || 'application/octet-stream';
+
+        // DownloadURL format: mime:filename:url (Chrome/WebKitGTK)
+        event.dataTransfer.setData('DownloadURL', `${mime}:${entryName}:${fileUrl}`);
+        event.dataTransfer.setData('text/uri-list', fileUrl);
+        event.dataTransfer.setData('text/plain', fileUrl);
+        event.dataTransfer.effectAllowed = 'copy';
+      });
+    });
 
     // Preview panel resize handle (persistent — bound once per tab)
     const resizeHandle = container.querySelector('.preview-resize-handle');
@@ -826,28 +883,37 @@ class AeorFileBrowser extends HTMLElement {
   }
 
   async _handleUpload(event) {
-    const tab = this._activeTab();
-    if (!tab) return;
+    await this._uploadFiles(event.target.files);
+    event.target.value = '';
+  }
 
-    const files = event.target.files;
+  async _uploadFiles(files) {
+    const tab = this._activeTab();
+    if (!tab || files.length === 0) return;
+
+    let uploaded = 0;
     for (const file of files) {
       const filePath = tab.path.replace(/\/$/, '') + '/' + file.name;
       const encodedPath = encodeURIComponent(filePath);
 
       try {
         const arrayBuffer = await file.arrayBuffer();
-        const uploadResponse = await fetch(`/api/v1/files/${tab.relationshipId}/${encodedPath}`, {
+        const response = await fetch(`/api/v1/files/${tab.relationshipId}/${encodedPath}`, {
           method: 'PUT',
           headers: { 'Content-Type': file.type || 'application/octet-stream' },
           body: arrayBuffer,
         });
-        if (!uploadResponse.ok) throw new Error(`Request failed: ${uploadResponse.status}`);
+        if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+        uploaded++;
       } catch (error) {
         window.aeorToast(`Upload failed for ${file.name}: ${error.message}`, 'error');
       }
     }
 
-    event.target.value = '';
+    if (uploaded > 0) {
+      window.aeorToast(`Uploaded ${uploaded} file${uploaded > 1 ? 's' : ''}`, 'success');
+    }
+
     this._fetchListing();
   }
 
