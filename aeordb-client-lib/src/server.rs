@@ -6,10 +6,11 @@ use std::time::Instant;
 use axum::Router;
 use axum::routing::{get, post};
 use tokio::net::TcpListener;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, broadcast};
 
 use crate::api::routes::conflicts;
 use crate::api::routes::connections;
+use crate::api::routes::events;
 use crate::api::routes::files;
 use crate::api::routes::settings;
 use crate::api::routes::status::get_status;
@@ -28,6 +29,7 @@ pub struct AppState {
   pub sync_runner:     SyncRunner,
   pub http_client:     reqwest::Client,
   pub shutdown_signal: Option<Arc<Notify>>,
+  pub event_tx:        broadcast::Sender<String>,
   pub config_dir:      PathBuf,
   pub data_dir:        PathBuf,
 }
@@ -79,7 +81,8 @@ pub fn build_router(state: AppState) -> Router {
     .route("/settings", get(settings::get_settings).patch(settings::update_settings))
     .route("/open-folder", post(system::open_folder))
     .route("/pick-directory", post(system::pick_directory))
-    .route("/shutdown", post(system::shutdown));
+    .route("/shutdown", post(system::shutdown))
+    .route("/events", get(events::event_stream));
 
   Router::new()
     .nest("/api/v1", api_routes)
@@ -100,9 +103,11 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
     .build()
     .map_err(|error| ClientError::Server(format!("failed to create HTTP client: {}", error)))?;
 
+  let (event_tx, _) = broadcast::channel(256);
+
   let state_store  = Arc::new(state_store);
   let config_store = Arc::new(config_store);
-  let sync_runner  = SyncRunner::new(state_store.clone(), config_store.clone(), http_client.clone());
+  let sync_runner  = SyncRunner::new(state_store.clone(), config_store.clone(), http_client.clone(), event_tx.clone());
 
   let config_dir = config.config_path.parent()
     .unwrap_or_else(|| std::path::Path::new("."))
@@ -118,6 +123,7 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
     sync_runner,
     http_client,
     shutdown_signal: None,
+    event_tx,
     config_dir,
     data_dir,
   })

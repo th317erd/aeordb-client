@@ -97,6 +97,51 @@ pub async fn trigger_sync(
     tracing::warn!("failed to log trigger activity: {}", error);
   }
 
+  // Broadcast event via SSE.
+  {
+    use crate::sync::activity::SyncEvent;
+    use uuid::Uuid;
+
+    let mut files_affected:    u64 = 0;
+    let mut bytes_transferred: u64 = 0;
+    let mut duration_ms:       u64 = 0;
+    let mut errors: Vec<String>    = Vec::new();
+    let mut parts: Vec<String>     = Vec::new();
+
+    if let Some(ref pull) = result.pull {
+      files_affected    += pull.files_pulled + pull.files_deleted + pull.symlinks_pulled;
+      bytes_transferred += pull.total_bytes;
+      duration_ms       += pull.duration_ms;
+      errors.extend(pull.errors.iter().cloned());
+      parts.push(format!("pull(pulled={}, deleted={}, failed={})", pull.files_pulled, pull.files_deleted, pull.files_failed));
+    }
+    if let Some(ref push) = result.push {
+      files_affected    += push.files_pushed + push.files_deleted;
+      bytes_transferred += push.total_bytes;
+      duration_ms       += push.duration_ms;
+      errors.extend(push.errors.iter().cloned());
+      parts.push(format!("push(pushed={}, deleted={}, failed={})", push.files_pushed, push.files_deleted, push.files_failed));
+    }
+
+    let summary = if parts.is_empty() { "no-op".to_string() } else { parts.join(", ") };
+    let event = SyncEvent {
+      id:                Uuid::new_v4().to_string(),
+      relationship_id:   id.clone(),
+      relationship_name: relationship.name.clone(),
+      event_type:        "full_sync".to_string(),
+      summary,
+      files_affected,
+      bytes_transferred,
+      duration_ms,
+      errors,
+      timestamp:         chrono::Utc::now().timestamp_millis(),
+    };
+
+    if let Ok(json) = serde_json::to_string(&event) {
+      let _ = state.event_tx.send(json);
+    }
+  }
+
   // Build a response summarizing what happened.
   let push_summary = result.push.map(|p| serde_json::json!({
     "files_pushed":  p.files_pushed,

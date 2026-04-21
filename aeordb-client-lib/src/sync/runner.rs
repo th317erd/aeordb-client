@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::task::JoinHandle;
 
 use crate::config::ConfigStore;
@@ -25,6 +25,7 @@ pub struct SyncRunner {
   config:      Arc<ConfigStore>,
   activity:    SyncActivityLog,
   http_client: reqwest::Client,
+  event_tx:    broadcast::Sender<String>,
 }
 
 struct RunningSync {
@@ -40,7 +41,7 @@ pub struct SyncRunnerStatus {
 }
 
 impl SyncRunner {
-  pub fn new(state: Arc<StateStore>, config: Arc<ConfigStore>, http_client: reqwest::Client) -> Self {
+  pub fn new(state: Arc<StateStore>, config: Arc<ConfigStore>, http_client: reqwest::Client, event_tx: broadcast::Sender<String>) -> Self {
     let activity = SyncActivityLog::new(state.clone());
 
     Self {
@@ -49,7 +50,13 @@ impl SyncRunner {
       config,
       activity,
       http_client,
+      event_tx,
     }
+  }
+
+  /// Get a reference to the event broadcast sender.
+  pub fn event_tx(&self) -> &broadcast::Sender<String> {
+    &self.event_tx
   }
 
   /// Get a reference to the activity log.
@@ -91,6 +98,7 @@ impl SyncRunner {
     let activity_clone        = self.activity.clone();
     let http_client_clone     = self.http_client.clone();
     let config_clone          = self.config.clone();
+    let event_tx_clone        = self.event_tx.clone();
 
     let sync_interval = self.config.get().await
       .map(|c| c.settings.sync_interval_seconds)
@@ -99,7 +107,7 @@ impl SyncRunner {
     tracing::info!("starting sync for '{}' ({:?})", relationship.name, relationship.direction);
 
     let handle = tokio::spawn(async move {
-      run_sync_loop(state_clone, activity_clone, config_clone, relationship, connection, http_client_clone, sync_interval).await;
+      run_sync_loop(state_clone, activity_clone, config_clone, relationship, connection, http_client_clone, sync_interval, event_tx_clone).await;
     });
 
     running.insert(relationship_id_owned, RunningSync {
@@ -177,6 +185,7 @@ async fn run_sync_loop(
   connection: crate::connections::RemoteConnection,
   http_client: reqwest::Client,
   sync_interval_seconds: u64,
+  event_tx: broadcast::Sender<String>,
 ) {
   let direction = relationship.direction.clone();
   let filter    = relationship.filter.clone();
@@ -190,12 +199,14 @@ async fn run_sync_loop(
       if let Err(error) = activity.log_full_sync(&relationship.id, &relationship.name, &result) {
         tracing::warn!("failed to log sync activity for '{}': {}", relationship.name, error);
       }
+      broadcast_full_sync(&event_tx, &relationship.id, &relationship.name, &result);
     }
     Err(error) => {
       tracing::error!("initial sync failed for '{}': {}", relationship.name, error);
       if let Err(log_error) = activity.log_error(&relationship.id, &relationship.name, &error.to_string()) {
         tracing::warn!("failed to log error activity for '{}': {}", relationship.name, log_error);
       }
+      broadcast_error(&event_tx, &relationship.id, &relationship.name, &error.to_string());
     }
   }
 
@@ -264,12 +275,14 @@ async fn run_sync_loop(
             if let Err(error) = activity.log_push(&relationship.id, &relationship.name, &result) {
               tracing::warn!("failed to log push activity for '{}': {}", relationship.name, error);
             }
+            broadcast_push(&event_tx, &relationship.id, &relationship.name, &result);
           }
           Err(error) => {
             tracing::error!("push failed for '{}': {}", relationship.name, error);
             if let Err(log_error) = activity.log_error(&relationship.id, &relationship.name, &error.to_string()) {
               tracing::warn!("failed to log error activity for '{}': {}", relationship.name, log_error);
             }
+            broadcast_error(&event_tx, &relationship.id, &relationship.name, &error.to_string());
           }
         }
       }
@@ -293,12 +306,14 @@ async fn run_sync_loop(
             if let Err(error) = activity.log_pull(&relationship.id, &relationship.name, &result) {
               tracing::warn!("failed to log pull activity for '{}': {}", relationship.name, error);
             }
+            broadcast_pull(&event_tx, &relationship.id, &relationship.name, &result);
           }
           Err(error) => {
             tracing::error!("pull failed for '{}': {}", relationship.name, error);
             if let Err(log_error) = activity.log_error(&relationship.id, &relationship.name, &error.to_string()) {
               tracing::warn!("failed to log error activity for '{}': {}", relationship.name, log_error);
             }
+            broadcast_error(&event_tx, &relationship.id, &relationship.name, &error.to_string());
           }
         }
       }
@@ -329,17 +344,140 @@ async fn run_sync_loop(
             if let Err(error) = activity.log_full_sync(&relationship.id, &relationship.name, &result) {
               tracing::warn!("failed to log sync activity for '{}': {}", relationship.name, error);
             }
+            broadcast_full_sync(&event_tx, &relationship.id, &relationship.name, &result);
           }
           Err(error) => {
             tracing::error!("periodic sync failed for '{}': {}", relationship.name, error);
             if let Err(log_error) = activity.log_error(&relationship.id, &relationship.name, &error.to_string()) {
               tracing::warn!("failed to log error activity for '{}': {}", relationship.name, log_error);
             }
+            broadcast_error(&event_tx, &relationship.id, &relationship.name, &error.to_string());
           }
         }
       }
     }
   }
+}
+
+/// Broadcast a SyncEvent as JSON over the event channel.
+fn broadcast_event(event_tx: &broadcast::Sender<String>, event: &crate::sync::activity::SyncEvent) {
+  let json = serde_json::to_string(event).unwrap_or_default();
+  let _ = event_tx.send(json); // ignore if no subscribers
+}
+
+fn broadcast_push(
+  event_tx: &broadcast::Sender<String>,
+  relationship_id: &str,
+  relationship_name: &str,
+  result: &crate::sync::push::PushResult,
+) {
+  let event = crate::sync::activity::SyncEvent {
+    id:                uuid::Uuid::new_v4().to_string(),
+    relationship_id:   relationship_id.to_string(),
+    relationship_name: relationship_name.to_string(),
+    event_type:        "push".to_string(),
+    summary:           format!(
+      "pushed={}, deleted={}, skipped={}, failed={}",
+      result.files_pushed, result.files_deleted, result.files_skipped, result.files_failed,
+    ),
+    files_affected:    result.files_pushed + result.files_deleted,
+    bytes_transferred: result.total_bytes,
+    duration_ms:       result.duration_ms,
+    errors:            result.errors.clone(),
+    timestamp:         chrono::Utc::now().timestamp_millis(),
+  };
+  broadcast_event(event_tx, &event);
+}
+
+fn broadcast_pull(
+  event_tx: &broadcast::Sender<String>,
+  relationship_id: &str,
+  relationship_name: &str,
+  result: &crate::sync::pull::PullResult,
+) {
+  let event = crate::sync::activity::SyncEvent {
+    id:                uuid::Uuid::new_v4().to_string(),
+    relationship_id:   relationship_id.to_string(),
+    relationship_name: relationship_name.to_string(),
+    event_type:        "pull".to_string(),
+    summary:           format!(
+      "pulled={}, deleted={}, skipped={}, failed={}, symlinks={}",
+      result.files_pulled, result.files_deleted, result.files_skipped,
+      result.files_failed, result.symlinks_pulled,
+    ),
+    files_affected:    result.files_pulled + result.files_deleted + result.symlinks_pulled,
+    bytes_transferred: result.total_bytes,
+    duration_ms:       result.duration_ms,
+    errors:            result.errors.clone(),
+    timestamp:         chrono::Utc::now().timestamp_millis(),
+  };
+  broadcast_event(event_tx, &event);
+}
+
+fn broadcast_full_sync(
+  event_tx: &broadcast::Sender<String>,
+  relationship_id: &str,
+  relationship_name: &str,
+  result: &crate::sync::replication::SyncResult,
+) {
+  let mut files_affected:    u64 = 0;
+  let mut bytes_transferred: u64 = 0;
+  let mut duration_ms:       u64 = 0;
+  let mut errors: Vec<String>    = Vec::new();
+  let mut parts: Vec<String>     = Vec::new();
+
+  if let Some(ref pull) = result.pull {
+    files_affected    += pull.files_pulled + pull.files_deleted + pull.symlinks_pulled;
+    bytes_transferred += pull.total_bytes;
+    duration_ms       += pull.duration_ms;
+    errors.extend(pull.errors.iter().cloned());
+    parts.push(format!("pull(pulled={}, deleted={}, failed={})", pull.files_pulled, pull.files_deleted, pull.files_failed));
+  }
+
+  if let Some(ref push) = result.push {
+    files_affected    += push.files_pushed + push.files_deleted;
+    bytes_transferred += push.total_bytes;
+    duration_ms       += push.duration_ms;
+    errors.extend(push.errors.iter().cloned());
+    parts.push(format!("push(pushed={}, deleted={}, failed={})", push.files_pushed, push.files_deleted, push.files_failed));
+  }
+
+  let summary = if parts.is_empty() { "no-op".to_string() } else { parts.join(", ") };
+
+  let event = crate::sync::activity::SyncEvent {
+    id:                uuid::Uuid::new_v4().to_string(),
+    relationship_id:   relationship_id.to_string(),
+    relationship_name: relationship_name.to_string(),
+    event_type:        "full_sync".to_string(),
+    summary,
+    files_affected,
+    bytes_transferred,
+    duration_ms,
+    errors,
+    timestamp:         chrono::Utc::now().timestamp_millis(),
+  };
+  broadcast_event(event_tx, &event);
+}
+
+fn broadcast_error(
+  event_tx: &broadcast::Sender<String>,
+  relationship_id: &str,
+  relationship_name: &str,
+  error_message: &str,
+) {
+  let event = crate::sync::activity::SyncEvent {
+    id:                uuid::Uuid::new_v4().to_string(),
+    relationship_id:   relationship_id.to_string(),
+    relationship_name: relationship_name.to_string(),
+    event_type:        "error".to_string(),
+    summary:           error_message.to_string(),
+    files_affected:    0,
+    bytes_transferred: 0,
+    duration_ms:       0,
+    errors:            vec![error_message.to_string()],
+    timestamp:         chrono::Utc::now().timestamp_millis(),
+  };
+  broadcast_event(event_tx, &event);
 }
 
 /// Log the results of a full sync_relationship call.
