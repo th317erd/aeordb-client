@@ -12,8 +12,18 @@ class AeorSettings extends HTMLElement {
   }
 
   connectedCallback() {
+    this._isConnected = true;
+    this._timeoutIds = [];
     this.render();
     this._fetchSettings();
+  }
+
+  disconnectedCallback() {
+    this._isConnected = false;
+    if (this._timeoutIds) {
+      this._timeoutIds.forEach(id => clearTimeout(id));
+      this._timeoutIds = [];
+    }
   }
 
   render() {
@@ -182,11 +192,12 @@ class AeorSettings extends HTMLElement {
       this.render();
 
       // Reset "Saved!" text after 2 seconds.
-      setTimeout(() => {
+      this._timeoutIds.push(setTimeout(() => {
+        if (!this._isConnected) return;
         this._saved = false;
         const btn = this.querySelector('#save-settings');
         if (btn) btn.textContent = 'Save';
-      }, 2000);
+      }, 2000));
     } catch (error) {
       this._saving = false;
       this._error  = `Failed to save settings: ${error.message}`;

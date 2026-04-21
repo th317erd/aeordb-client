@@ -11,7 +11,12 @@ class AeorNav extends HTMLElement {
   }
 
   connectedCallback() {
+    this._isConnected = true;
     this.render();
+  }
+
+  disconnectedCallback() {
+    this._isConnected = false;
   }
 
   attributeChangedCallback() {
@@ -78,6 +83,7 @@ class AeorNav extends HTMLElement {
       if (!response.ok) return;
 
       const data           = await response.json();
+      if (!this._isConnected) return;
       this._version        = data.version;
       this._cachedVersion  = data.version;
       const versionElement = this.querySelector('.nav-version');

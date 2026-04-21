@@ -1,63 +1,41 @@
 # TODO — Code Audit Fixes
 
-## Critical
+## Critical — All Done
 
-### Security — XSS
-- [x] Apply `escapeHtml()`/`escapeAttr()` to all server-sourced data in innerHTML across all components
+- [x] XSS sweep (escapeHtml/escapeAttr across all components)
+- [x] Path traversal hardening (per-segment validation)
+- [x] Config file permissions (0600)
+- [x] Async I/O (tokio::fs for all sync filesystem ops)
+- [x] Streaming transfers (download chunks to disk, upload via ReaderStream)
 
-### Security — Path Traversal
-- [x] `files.rs:safe_local_path` — per-segment validation (reject `..` segments)
+## Moderate — All Done
 
-### Security — Plaintext API Keys
-- [x] Set config file permissions to 0600 on creation
-- [ ] (Future) Investigate OS keychain integration
+- [x] Settings save bug (read inputs before re-render)
+- [x] Sync interval setting wired into runner
+- [x] Stale config refresh in sync loop
+- [x] Frontend DRY (shared formatSize, bindResizeHandle, openFolder, etc.)
+- [x] Backend DRY (ClientError + IntoResponse, shared file_mtime)
+- [x] Shared reqwest::Client with 30s timeout
+- [x] tokio::sync::RwLock for ConfigStore
+- [x] response.ok checks on all fetch calls
+- [x] SSE for toast notifications (replaced polling)
+- [x] Toast debounce (2s window, grouped summaries)
+- [x] Version caching in nav
+- [x] disconnectedCallback cleanup on dashboard, settings, nav
 
-### Performance — Blocking I/O
-- [x] `pull.rs` — all filesystem ops use `tokio::fs` (create_dir_all, write, remove_file, metadata)
-- [x] `push.rs` — directory walk wrapped in `spawn_blocking`, file reads use `tokio::fs`
+## Minor — All Done
 
-### Performance — Unbounded Memory
-- [x] `remote/mod.rs:download_file` — returns response stream, caller writes chunks to disk
-- [x] `push.rs` — streaming upload via `ReaderStream` + `Body::wrap_stream`
+- [x] Unused Path import removed
+- [x] ENTRY_TYPE_DIR constant replacing magic number 3
+- [x] Nested ternary replaced with directionArrow()
+- [x] pick field validation in conflicts resolve
+- [x] event.id slice bounds check
+- [x] console.warn in preview loader catch blocks
+- [x] Context menu viewport bounds check
+- [x] Redundant format! fixed
+- [x] Filter clearing via empty string
 
-## Moderate
+## Remaining (deferred)
 
-### Bugs
-- [x] `aeor-settings.js` — read input values BEFORE re-render in `_saveSettings`
-- [x] `runner.rs` — use configured `sync_interval_seconds` instead of hardcoded 60s
-- [x] `runner.rs` — re-read relationship/connection config each sync cycle
-
-### DRY — Frontend
-- [x] Use shared `formatSize` — removed duplicates in conflicts, sync, preview-default
-- [x] Use shared `bindResizeHandle()` — replaced in connections, sync, conflicts
-- [x] Use shared `openFolder()` — replaced in dashboard, settings
-- [x] Use shared `formatRelativeTime()` — replaced in sync
-- [x] Use shared `directionLabel()` / `formatUptime()` — replaced in dashboard
-- [x] Extract shared utilities to aeor-file-view-shared.js
-
-### DRY — Backend
-- [x] `ClientError` variants + `IntoResponse`
-- [x] Remove duplicated error-to-status-code string-matching blocks
-- [x] Extract shared `file_mtime()` from push.rs and pull.rs
-
-### Performance — Backend
-- [x] Share a single `reqwest::Client` in AppState with 30s timeout
-- [x] Use `tokio::sync::RwLock` in ConfigStore instead of `std::sync::RwLock`
-
-### Correctness — Frontend
-- [x] Add `response.ok` checks before `.json()` on all fetch calls
-- [ ] Toast polling: use `Promise.all()` for parallel fetches, per-relationship timestamps
-- [ ] Add `disconnectedCallback` cleanup on components (clear timeouts, remove listeners)
-- [x] Cache version in `aeor-nav.js`
-
-## Minor
-- [x] Remove unused `Path` import in `conflicts.rs`
-- [x] Replace magic number `3` (directory) with `ENTRY_TYPE_DIR` constant
-- [ ] Standardize naming: file-browser snake_case → camelCase
-- [x] Fix nested ternary in file-browser (use `directionArrow()`)
-- [x] Validate `pick` field ("winner"/"loser") in conflicts resolve handler
-- [x] Guard `event.id[..8]` slice with bounds check in activity.rs
-- [x] Add `console.warn` to empty catch blocks in preview component loader
-- [ ] Context menu: check viewport bounds before positioning
-- [x] Fix redundant `format!` in `compute_remote_path` (files.rs:216)
-- [ ] Allow clearing sync filter via empty string in `UpdateSyncRelationshipRequest`
+- [ ] Standardize naming: file-browser snake_case → camelCase (cosmetic, low priority)
+- [ ] (Future) OS keychain integration for API keys

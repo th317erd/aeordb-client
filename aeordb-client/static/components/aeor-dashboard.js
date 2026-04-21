@@ -4,8 +4,18 @@ import { escapeHtml, openFolder, directionLabel, formatUptime } from './aeor-fil
 
 class AeorDashboard extends HTMLElement {
   connectedCallback() {
+    this._isConnected = true;
+    this._timeoutIds = [];
     this.render();
     this._fetchData();
+  }
+
+  disconnectedCallback() {
+    this._isConnected = false;
+    if (this._timeoutIds) {
+      this._timeoutIds.forEach(id => clearTimeout(id));
+      this._timeoutIds = [];
+    }
   }
 
   render() {
@@ -176,20 +186,23 @@ class AeorDashboard extends HTMLElement {
       btn.textContent = `\u2713 ${pulled} pulled, ${pushed} pushed`;
       btn.className = 'success small sync-now-btn';
 
-      setTimeout(() => {
+      this._timeoutIds.push(setTimeout(() => {
+        if (!this._isConnected) return;
         btn.textContent = originalText;
         btn.className = 'secondary small sync-now-btn';
         btn.disabled = false;
-      }, 3000);
+      }, 3000));
     } catch (error) {
+      if (!this._isConnected) return;
       btn.textContent = 'Failed';
       btn.className = 'danger small sync-now-btn';
 
-      setTimeout(() => {
+      this._timeoutIds.push(setTimeout(() => {
+        if (!this._isConnected) return;
         btn.textContent = originalText;
         btn.className = 'secondary small sync-now-btn';
         btn.disabled = false;
-      }, 3000);
+      }, 3000));
     }
   }
 

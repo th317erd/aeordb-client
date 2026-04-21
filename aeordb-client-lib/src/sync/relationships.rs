@@ -169,8 +169,8 @@ impl<'a> RelationshipManager<'a> {
       if let Some(direction) = request.direction {
         relationship.direction = direction;
       }
-      if let Some(filter) = request.filter {
-        relationship.filter = Some(filter);
+      if let Some(ref filter) = request.filter {
+        relationship.filter = if filter.is_empty() { None } else { Some(filter.clone()) };
       }
       if let Some(delete_propagation) = request.delete_propagation {
         relationship.delete_propagation = delete_propagation;

@@ -866,6 +866,15 @@ class AeorFileBrowser extends HTMLElement {
 
     this.appendChild(menu);
 
+    // Adjust position if menu overflows viewport
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+      menu.style.left = (x - rect.width) + 'px';
+    }
+    if (rect.bottom > window.innerHeight) {
+      menu.style.top = (y - rect.height) + 'px';
+    }
+
     menu.querySelectorAll('.context-menu-item').forEach((item) => {
       item.addEventListener('click', () => {
         menu.remove();
