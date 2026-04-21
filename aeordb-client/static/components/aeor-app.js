@@ -64,19 +64,23 @@ class AeorApp extends HTMLElement {
   }
 
   _handleFileDragStart(detail) {
-    const { event, relationshipId, path } = detail;
+    const { event, adapter, paths } = detail;
 
-    // Use cached relationship data to resolve the local path synchronously.
+    // Resolve local paths from cached relationship data.
     // dataTransfer is only writable during the synchronous dragstart handler.
-    const relationship = this._relationshipCache && this._relationshipCache[relationshipId];
+    const relId = adapter && adapter.relationshipId;
+    const relationship = relId && this._relationshipCache && this._relationshipCache[relId];
     if (!relationship || !relationship.local_path) return;
 
     const localBase = relationship.local_path.replace(/\/$/, '');
-    const relativePath = path.replace(/^\//, '');
-    const localPath = `${localBase}/${relativePath}`;
-    const fileUri = `file://${encodeURI(localPath)}`;
+    const localUris = (paths || []).map((p) => {
+      const relativePath = p.replace(/^\//, '');
+      return `file://${encodeURI(`${localBase}/${relativePath}`)}`;
+    });
 
-    event.dataTransfer.setData('text/uri-list', fileUri);
+    if (localUris.length > 0) {
+      event.dataTransfer.setData('text/uri-list', localUris.join('\r\n'));
+    }
   }
 
   async _cacheRelationships() {

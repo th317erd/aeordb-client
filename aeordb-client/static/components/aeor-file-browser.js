@@ -734,18 +734,23 @@ class AeorFileBrowser extends HTMLElement {
           tab.path.replace(/\/$/, '') + '/' + name,
         );
 
-        // Dispatch event for host app to enhance (e.g., Tauri native file drag)
+        // Dispatch event for host app to enhance (e.g., native file drag)
+        const draggedUrls = dragNames.map((name) =>
+          tab.adapter.fullFileUrl(tab.path.replace(/\/$/, '') + '/' + name),
+        );
+
         this.dispatchEvent(new CustomEvent('file-drag-start', {
           bubbles: true,
           detail: {
             event,
+            adapter:     tab.adapter,
             entry,
-            entries:        dragNames.map((n) => tab.entries.find((e) => e.name === n)).filter(Boolean),
-            path:           filePath,
-            paths:          draggedPaths,
-            relationshipId: tab.relationshipId,
-            url:            fileUrl,
-            isDirectory:    entryType === ENTRY_TYPE_DIR,
+            entries:     dragNames.map((n) => tab.entries.find((e) => e.name === n)).filter(Boolean),
+            path:        filePath,
+            paths:       draggedPaths,
+            urls:        draggedUrls,
+            url:         fileUrl,
+            isDirectory: entryType === ENTRY_TYPE_DIR,
           },
         }));
       });
