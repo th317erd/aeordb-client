@@ -202,11 +202,30 @@ fn main() -> anyhow::Result<()> {
       let lock_file = File::create(&lock_path)
         .map_err(|e| anyhow::anyhow!("failed to create lock file: {}", e))?;
       if lock_file.try_lock_exclusive().is_err() {
-        eprintln!("aeordb-client is already running.");
-        eprintln!("Use 'aeordb-client status' to check it, or 'aeordb-client stop' to stop it.");
-        std::process::exit(1);
+        // Another instance is running — ask it to shut down and take over.
+        eprintln!("aeordb-client is already running — requesting shutdown for takeover...");
+        let shutdown_url = format!("http://{}:{}/api/v1/shutdown", bind, port);
+        let _ = reqwest::blocking::Client::new()
+          .post(&shutdown_url)
+          .header("Content-Type", "application/json")
+          .body("{}")
+          .send();
+
+        // Wait for the old instance to release the lock (up to 10 seconds).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+          if lock_file.try_lock_exclusive().is_ok() {
+            eprintln!("takeover complete — starting new instance.");
+            break;
+          }
+          if std::time::Instant::now() > deadline {
+            eprintln!("error: old instance did not shut down in time.");
+            std::process::exit(1);
+          }
+          std::thread::sleep(std::time::Duration::from_millis(200));
+        }
       }
-      // Keep lock_file alive for the process lifetime — don't drop it.
+      // Keep lock_file alive for the process lifetime — released on exit.
       let _lock_guard = lock_file;
 
       let server_config = ServerConfig {
