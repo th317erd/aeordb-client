@@ -1,4 +1,5 @@
 pub mod api;
+pub mod autostart;
 pub mod config;
 pub mod connections;
 pub mod error;

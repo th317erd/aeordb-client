@@ -15,6 +15,8 @@ pub struct ClientSettings {
   #[serde(default = "default_auto_start_sync")]
   pub auto_start_sync: bool,
   #[serde(default)]
+  pub auto_start_system: bool,
+  #[serde(default)]
   pub client_name: Option<String>,
 }
 
@@ -26,6 +28,7 @@ impl Default for ClientSettings {
     Self {
       sync_interval_seconds: 60,
       auto_start_sync: true,
+      auto_start_system: false,
       client_name: None,
     }
   }

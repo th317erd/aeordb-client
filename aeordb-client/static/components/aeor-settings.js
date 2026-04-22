@@ -64,6 +64,12 @@ class AeorSettings extends HTMLElement {
             Auto-start sync on launch
           </label>
         </div>
+        <div class="form-row">
+          <label class="checkbox-row">
+            <input type="checkbox" class="checkbox-large" id="setting-auto-start-system" ${(s.auto_start_system) ? 'checked' : ''}>
+            Start when system starts
+          </label>
+        </div>
       </div>
 
       <div class="form-panel">
@@ -147,13 +153,15 @@ class AeorSettings extends HTMLElement {
     if (this._saving) return;
 
     // Read input values BEFORE any re-render destroys the DOM inputs.
-    const clientNameInput   = this.querySelector('#setting-client-name');
-    const syncIntervalInput = this.querySelector('#setting-sync-interval');
-    const autoStartInput    = this.querySelector('#setting-auto-start');
+    const clientNameInput       = this.querySelector('#setting-client-name');
+    const syncIntervalInput     = this.querySelector('#setting-sync-interval');
+    const autoStartInput        = this.querySelector('#setting-auto-start');
+    const autoStartSystemInput  = this.querySelector('#setting-auto-start-system');
 
-    const clientName   = clientNameInput?.value?.trim() || null;
-    const syncInterval = parseInt(syncIntervalInput?.value, 10);
-    const autoStart    = autoStartInput?.checked ?? true;
+    const clientName      = clientNameInput?.value?.trim() || null;
+    const syncInterval    = parseInt(syncIntervalInput?.value, 10);
+    const autoStart       = autoStartInput?.checked ?? true;
+    const autoStartSystem = autoStartSystemInput?.checked ?? false;
 
     this._saving = true;
     this._saved  = false;
@@ -175,6 +183,7 @@ class AeorSettings extends HTMLElement {
           client_name:           clientName,
           sync_interval_seconds: syncInterval,
           auto_start_sync:       autoStart,
+          auto_start_system:     autoStartSystem,
         }),
       });
 
