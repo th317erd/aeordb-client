@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::fs::File;
+use fs2::FileExt;
 
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
@@ -189,15 +191,23 @@ fn main() -> anyhow::Result<()> {
       tracing::info!("config: {}", config_path.display());
       tracing::info!("data:   {}", data_path.display());
 
-      // Singleton check: if an instance is already running on this port, don't start another
-      let check_url = format!("http://{}:{}/api/v1/status", bind, port);
-      if let Ok(response) = reqwest::blocking::get(&check_url) {
-        if response.status().is_success() {
-          eprintln!("aeordb-client is already running on {}:{}", bind, port);
-          eprintln!("Use 'aeordb-client status' to check it, or 'aeordb-client stop' to stop it.");
-          std::process::exit(1);
-        }
+      // Singleton: acquire an exclusive file lock to prevent multiple instances.
+      // The lock is held for the lifetime of the process — released on exit.
+      let lock_path = data_path.parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("aeordb-client.lock");
+      if let Some(parent) = lock_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
       }
+      let lock_file = File::create(&lock_path)
+        .map_err(|e| anyhow::anyhow!("failed to create lock file: {}", e))?;
+      if lock_file.try_lock_exclusive().is_err() {
+        eprintln!("aeordb-client is already running.");
+        eprintln!("Use 'aeordb-client status' to check it, or 'aeordb-client stop' to stop it.");
+        std::process::exit(1);
+      }
+      // Keep lock_file alive for the process lifetime — don't drop it.
+      let _lock_guard = lock_file;
 
       let server_config = ServerConfig {
         host:        bind.clone(),
