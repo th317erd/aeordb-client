@@ -26,7 +26,19 @@ pub struct ClientIdentity {
 
 impl StateStore {
   /// Open or create the local state database at the given path.
-  /// If the database is corrupted, backs it up and creates a fresh one.
+  ///
+  /// AeorDB uses an append-only log. Corruption (from interrupted writes or
+  /// concurrent access) typically damages individual entries, not the whole
+  /// file. The entry scanner skips corrupted entries and continues reading
+  /// valid ones beyond them.
+  ///
+  /// Strategy:
+  /// 1. Try to open the existing database. The scanner will skip corrupt
+  ///    entries during initialization, preserving all valid data.
+  /// 2. If the file is so damaged it can't even be opened (e.g., truncated
+  ///    header), back it up and create a fresh one.
+  /// 3. If the directory structure can't be created (write path is broken),
+  ///    back up and recreate as a last resort.
   pub fn open_or_create(database_path: &str) -> Result<Self> {
     let path = Path::new(database_path);
 
@@ -37,10 +49,16 @@ impl StateStore {
     // Try to open or create the database
     let engine = if path.exists() {
       match StorageEngine::open(database_path) {
-        Ok(engine) => engine,
+        Ok(engine) => {
+          // Open succeeded — the scanner skipped any corrupt entries.
+          // The database is usable even if some entries are damaged.
+          engine
+        }
         Err(error) => {
+          // File is too damaged to even open (truncated, totally garbled).
+          // This is the only case where we recreate.
           tracing::warn!(
-            "state database at {} is corrupted ({}), backing up and recreating",
+            "state database at {} cannot be opened ({}), backing up and creating fresh",
             database_path, error,
           );
           Self::backup_and_recreate(database_path)?
@@ -57,21 +75,37 @@ impl StateStore {
     let store = Self { engine };
 
     // Try to initialize the directory structure.
-    // If this fails (corrupted DB that passed open but can't write),
-    // back up and recreate.
+    // This creates placeholder files — if it fails, individual entries
+    // are corrupt but the DB is still usable for reads. Try to continue.
     match store.initialize() {
       Ok(()) => Ok(store),
       Err(error) => {
         tracing::warn!(
-          "state database initialization failed ({}), backing up and recreating",
+          "state database directory init failed ({}), attempting recovery",
           error,
         );
-        drop(store);
-        let engine = Self::backup_and_recreate(database_path)?;
-        let engine = Arc::new(engine);
-        let store = Self { engine };
-        store.initialize()?;
-        Ok(store)
+
+        // Try once more — sometimes the write succeeds on retry
+        // after the scanner has skipped past the corrupt region.
+        match store.initialize() {
+          Ok(()) => {
+            tracing::info!("state database recovered on retry");
+            Ok(store)
+          }
+          Err(retry_error) => {
+            // Write path is fundamentally broken. Last resort: recreate.
+            tracing::error!(
+              "state database write path broken ({}), backing up and recreating",
+              retry_error,
+            );
+            drop(store);
+            let engine = Self::backup_and_recreate(database_path)?;
+            let engine = Arc::new(engine);
+            let store = Self { engine };
+            store.initialize()?;
+            Ok(store)
+          }
+        }
       }
     }
   }
