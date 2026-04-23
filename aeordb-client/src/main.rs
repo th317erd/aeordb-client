@@ -244,6 +244,7 @@ fn main() -> anyhow::Result<()> {
 
       let sync_runner   = state.sync_runner.clone();
       let sync_runner_shutdown = sync_runner.clone();
+      let sync_runner_post_tauri = sync_runner.clone();
       let api_router    = build_router(state);
       let static_router = static_files::static_routes();
       let app           = api_router.merge(static_router);
@@ -342,9 +343,10 @@ fn main() -> anyhow::Result<()> {
             let icon = Image::from_bytes(icon_bytes)
               .unwrap_or_else(|_| Image::new(&[255, 255, 255, 255], 1, 1));
 
-            let window_for_open     = window.clone();
-            let app_handle_for_quit = app.handle().clone();
-            let api_base            = format!("http://{}", bound_addr);
+            let window_for_open      = window.clone();
+            let app_handle_for_quit  = app.handle().clone();
+            let sync_runner_for_quit = sync_runner_shutdown.clone();
+            let api_base             = format!("http://{}", bound_addr);
             let paused              = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
             let open_item  = MenuItemBuilder::with_id("open", "Open AeorDB Client").build(app)?;
@@ -395,8 +397,14 @@ fn main() -> anyhow::Result<()> {
                     }
                   }
                   "quit" => {
-                    tracing::info!("quit requested from tray");
-                    app_handle_for_quit.exit(0);
+                    tracing::info!("quit requested from tray — shutting down gracefully");
+                    let runner = sync_runner_for_quit.clone();
+                    let handle = app_handle_for_quit.clone();
+                    std::thread::spawn(move || {
+                      let rt = tokio::runtime::Runtime::new().unwrap();
+                      rt.block_on(async { runner.stop_all().await });
+                      handle.exit(0);
+                    });
                   }
                   _ => {}
                 }
@@ -419,7 +427,7 @@ fn main() -> anyhow::Result<()> {
         // Tauri exited — stop all sync runners before runtime drops
         runtime.block_on(async {
           tracing::info!("stopping all sync runners...");
-          sync_runner_shutdown.stop_all().await;
+          sync_runner_post_tauri.stop_all().await;
         });
       }
     }
