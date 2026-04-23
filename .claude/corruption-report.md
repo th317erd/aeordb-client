@@ -8,6 +8,33 @@
 
 ---
 
+## Evidence Files
+
+All preserved at `/tmp/claude/` on the development machine:
+
+| File | Size | Description |
+|------|------|-------------|
+| `state-healthy-snapshot.aeordb` | 41 MB | Clean database before any corruption — baseline |
+| `state-after-sigkill.aeordb` | 44 MB | Database after SIGKILL during concurrent sync writes |
+| `state-injected-corruption.aeordb` | 62 MB | Database with 128 bytes of garbage injected at 3 offsets (25%, 50%, 75% of file) |
+| `corruption-experiment.log` | — | Client startup log from clean start |
+| `corruption-restart-injected.log` | — | Client restart log showing scanner skip behavior |
+
+### Injected corruption details
+
+Three 128-byte blocks of `/dev/urandom` written with `dd conv=notrunc` at:
+- Offset 16,104,453 (25% of file) — scanner reported: `Hash verification failed at offset 16104364`
+- Offset 32,208,906 (50% of file) — scanner reported: `Hash verification failed at offset 32190478`
+- Offset 48,313,359 (75% of file) — scanner reported: `Hash verification failed at offset 48311809`
+
+The scanner successfully skipped all three corrupt entries and the database remained fully functional. Client identity was preserved across the corruption.
+
+### SIGKILL during concurrent writes
+
+Three sync triggers fired simultaneously, then `kill -9` sent 1 second later. The database grew from 42MB to 46MB during the writes. On restart, the scanner reported **no corruption warnings** — the incomplete write was handled gracefully (likely because the entry header wasn't fully written, so the scanner treated it as EOF).
+
+---
+
 ## Summary
 
 The aeordb-client embeds a `StorageEngine` instance as its local state database (`~/.local/share/aeordb-client/state.aeordb`). This database stores sync metadata, client identity, activity logs, and file sync state. We are experiencing **frequent corruption** of this database, resulting in application startup failures and data loss.
@@ -47,21 +74,83 @@ WARN failed to log sync activity for 'E2E Wallpapers': server error: failed to s
 
 ---
 
-## Reproduction Scenario
+## Reproduction Steps
 
-The corruption is **reliably reproducible** with the following setup:
+### Method 1: Natural corruption via concurrent writes (observed in production)
 
-1. Start `aeordb-client` with 3 enabled sync relationships (bidirectional)
-2. All 3 sync runners start simultaneously in `start_all_enabled()`
-3. Each runner performs an initial full sync (push + pull), writing sync metadata to the state DB concurrently
-4. After several minutes of operation (concurrent writes from push, pull, activity logging, and periodic sync), the database shows corruption warnings
-5. On the next restart, the database fails to read previously-written entries
+```bash
+# 1. Start with a fresh state database
+rm -f ~/.local/share/aeordb-client/state.aeordb
+
+# 2. Ensure the remote aeordb server is running with test data
+aeordb start -p 3456 -D /tmp/test.aeordb --auth false
+
+# 3. Configure 3 bidirectional sync relationships in the client
+#    (pointing to different paths on the same remote server)
+
+# 4. Start the client — all 3 sync runners launch simultaneously
+cargo run -- start --headless
+
+# 5. Wait 2-5 minutes. The sync runners write concurrently:
+#    - Sync metadata to /sync/state/
+#    - Activity logs to /sync/activity/
+#    - File metadata during push/pull operations
+#
+# 6. Monitor for corruption:
+journalctl --user -f | grep "Hash verification\|Invalid magic\|Corrupt entry"
+
+# 7. Kill and restart the client:
+kill -9 $(pgrep -f "aeordb-client.*headless")
+cargo run -- start --headless
+# → Observe "Chunk not found" or "Invalid magic bytes" errors
+```
+
+### Method 2: Injected corruption (deterministic, for testing)
+
+```bash
+# 1. Start the client and let it build a state DB (wait ~30 seconds)
+cargo run -- start --headless &
+sleep 30
+
+# 2. Inject garbage at known offsets
+DB=~/.local/share/aeordb-client/state.aeordb
+SIZE=$(stat -c %s "$DB")
+
+dd if=/dev/urandom of="$DB" bs=1 count=128 seek=$((SIZE/4)) conv=notrunc
+dd if=/dev/urandom of="$DB" bs=1 count=128 seek=$((SIZE/2)) conv=notrunc
+dd if=/dev/urandom of="$DB" bs=1 count=128 seek=$((SIZE*3/4)) conv=notrunc
+
+# 3. Kill and restart
+kill -9 $(pgrep -f "aeordb-client.*headless")
+cargo run -- start --headless
+# → Scanner logs 3 "Hash verification failed" warnings, skips corrupt entries
+```
+
+### Method 3: SIGKILL during concurrent writes
+
+```bash
+# 1. Start the client
+cargo run -- start --headless &
+
+# 2. Trigger all 3 syncs simultaneously
+curl -X POST http://127.0.0.1:9400/api/v1/sync/REL_ID_1/trigger &
+curl -X POST http://127.0.0.1:9400/api/v1/sync/REL_ID_2/trigger &
+curl -X POST http://127.0.0.1:9400/api/v1/sync/REL_ID_3/trigger &
+
+# 3. Kill immediately (1 second into the writes)
+sleep 1
+kill -9 $(pgrep -f "aeordb-client.*headless")
+
+# 4. Restart and check
+cargo run -- start --headless
+```
 
 **Environment:**
 - OS: Ubuntu 24.04 (KUbuntu), Linux 6.17
 - aeordb version: 0.9.0 (both embedded and server)
 - Rust toolchain: stable
-- State DB file size when corruption occurs: typically 80-170 MB
+- State DB file size when corruption occurs: typically 40-170 MB
+- Concurrent writers: 3 sync runners + API handlers + activity logger (3-6 threads)
 
 ---
 
