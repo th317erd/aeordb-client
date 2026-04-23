@@ -243,6 +243,7 @@ fn main() -> anyhow::Result<()> {
       state.shutdown_signal = Some(api_shutdown.clone());
 
       let sync_runner   = state.sync_runner.clone();
+      let sync_runner_shutdown = sync_runner.clone();
       let api_router    = build_router(state);
       let static_router = static_files::static_routes();
       let app           = api_router.merge(static_router);
@@ -297,9 +298,11 @@ fn main() -> anyhow::Result<()> {
       let bound_addr = ready_rx.recv()??;
 
       if headless {
-        // Block the main thread until shutdown signal
+        // Block the main thread until shutdown signal, then stop all sync runners
         runtime.block_on(async {
           shutdown_signal().await;
+          tracing::info!("stopping all sync runners...");
+          sync_runner_shutdown.stop_all().await;
         });
       } else {
         // Run Tauri on the main thread -- webview loads from our HTTP server
@@ -412,6 +415,12 @@ fn main() -> anyhow::Result<()> {
           })
           .run(tauri::generate_context!())
           .expect("error while running tauri application");
+
+        // Tauri exited — stop all sync runners before runtime drops
+        runtime.block_on(async {
+          tracing::info!("stopping all sync runners...");
+          sync_runner_shutdown.stop_all().await;
+        });
       }
     }
 
