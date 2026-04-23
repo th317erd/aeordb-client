@@ -931,6 +931,8 @@ input.preview-title {
   padding: 4px 8px;
   flex: 1;
   min-width: 0;
+  width: auto;
+  margin-right: 12px;
   font-family: var(--font-sans);
 }
 

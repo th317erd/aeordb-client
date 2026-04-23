@@ -276,13 +276,14 @@ impl RemoteClient {
   }
 
   /// Rename/move a file or directory on the remote.
-  /// Uses PATCH /files/ with {"from": "...", "to": "..."} body.
+  /// Uses PATCH /files/{from_path} with {"to": "..."} body.
   pub async fn rename_file(&self, from_path: &str, to_path: &str) -> Result<()> {
-    let url = format!("{}/files/", self.base_url);
+    let clean_from = from_path.trim_start_matches('/');
+    let url = format!("{}/files/{}", self.base_url, clean_from);
 
     let mut request = self.http_client
       .patch(&url)
-      .json(&serde_json::json!({ "from": from_path, "to": to_path }));
+      .json(&serde_json::json!({ "to": to_path }));
 
     if let Some(ref auth) = self.auth_header() {
       request = request.header("Authorization", auth);
