@@ -632,14 +632,6 @@ aeor-file-browser {
   border-radius: var(--radius);
 }
 
-.file-entry[draggable] {
-  cursor: grab;
-}
-
-.file-entry[draggable]:active {
-  cursor: grabbing;
-}
-
 .file-entry.drop-target {
   background-color: rgba(249, 115, 22, 0.1);
   outline: 2px solid var(--accent);
