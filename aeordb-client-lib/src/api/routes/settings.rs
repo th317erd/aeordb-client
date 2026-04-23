@@ -34,7 +34,8 @@ pub async fn get_settings(
     sync_interval_seconds: config.settings.sync_interval_seconds,
     auto_start_sync:       config.settings.auto_start_sync,
     auto_start_system:     config.settings.auto_start_system,
-    client_name:           config.settings.client_name,
+    client_name:           config.settings.client_name
+                                .or_else(|| Some(gethostname::gethostname().to_string_lossy().to_string())),
     config_dir:            state.config_dir.to_string_lossy().to_string(),
     data_dir:              state.data_dir.to_string_lossy().to_string(),
   }))
