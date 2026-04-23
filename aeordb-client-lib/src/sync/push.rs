@@ -49,6 +49,30 @@ pub async fn push_sync(
     ));
   }
 
+  // Pre-fetch remote file hashes to avoid redundant uploads.
+  // This prevents circular sync and skips files whose content is already
+  // on the remote (e.g., pulled from another relationship with the same data).
+  let remote_hashes = match remote_client
+    .list_directory_paginated(&relationship.remote_path, None, None)
+    .await
+  {
+    Ok(listing) => {
+      let mut hashes = std::collections::HashMap::new();
+      for item in &listing.items {
+        if let Some(ref hash) = item.hash {
+          let full_path = format!(
+            "{}/{}",
+            relationship.remote_path.trim_end_matches('/'),
+            item.name,
+          );
+          hashes.insert(full_path, hash.clone());
+        }
+      }
+      hashes
+    }
+    Err(_) => std::collections::HashMap::new(), // proceed without pre-check
+  };
+
   let mut files_pushed: u64 = 0;
   let mut files_skipped: u64 = 0;
   let mut files_failed: u64 = 0;
@@ -194,6 +218,27 @@ pub async fn push_sync(
           last_synced_at: now_ms,
         };
 
+        metadata_store.set_file_meta(&relationship.id, &updated_meta)?;
+        files_skipped += 1;
+        continue;
+      }
+    }
+
+    // Remote hash check: if the remote already has this file with the same
+    // content hash, skip the upload entirely. This prevents circular sync
+    // (where files pulled from one sync get pushed back redundantly) and
+    // avoids redundant uploads when content hasn't changed.
+    if let Some(remote_hash) = remote_hashes.get(&remote_path) {
+      if *remote_hash == content_hash {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let updated_meta = FileSyncMeta {
+          path:           remote_path.clone(),
+          content_hash:   content_hash.clone(),
+          size:           file_size,
+          modified_at:    mtime,
+          sync_status:    SyncStatus::Synced,
+          last_synced_at: now_ms,
+        };
         metadata_store.set_file_meta(&relationship.id, &updated_meta)?;
         files_skipped += 1;
         continue;
