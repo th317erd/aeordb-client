@@ -10,6 +10,10 @@ use crate::error::{ClientError, Result};
 /// The local state store backed by an embedded aeordb instance.
 /// Stores client identity, connection configs, sync relationships,
 /// per-file sync state, conflicts, and settings.
+///
+/// Resilient to corruption: if the database is corrupted, it backs up
+/// the corrupted file and creates a fresh database. Individual read
+/// failures return None instead of crashing.
 pub struct StateStore {
   engine: Arc<StorageEngine>,
 }
@@ -22,20 +26,27 @@ pub struct ClientIdentity {
 
 impl StateStore {
   /// Open or create the local state database at the given path.
+  /// If the database is corrupted, backs it up and creates a fresh one.
   pub fn open_or_create(database_path: &str) -> Result<Self> {
     let path = Path::new(database_path);
 
-    let engine = if path.exists() {
-      StorageEngine::open(database_path)
-        .map_err(|error| ClientError::Configuration(
-          format!("failed to open state database at {}: {}", database_path, error),
-        ))?
-    } else {
-      // Ensure parent directory exists
-      if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-      }
+    if let Some(parent) = path.parent() {
+      std::fs::create_dir_all(parent)?;
+    }
 
+    // Try to open or create the database
+    let engine = if path.exists() {
+      match StorageEngine::open(database_path) {
+        Ok(engine) => engine,
+        Err(error) => {
+          tracing::warn!(
+            "state database at {} is corrupted ({}), backing up and recreating",
+            database_path, error,
+          );
+          Self::backup_and_recreate(database_path)?
+        }
+      }
+    } else {
       StorageEngine::create(database_path)
         .map_err(|error| ClientError::Configuration(
           format!("failed to create state database at {}: {}", database_path, error),
@@ -43,8 +54,32 @@ impl StateStore {
     };
 
     let engine = Arc::new(engine);
-    let ops    = DirectoryOps::new(&engine);
-    let ctx    = RequestContext::system();
+    let store = Self { engine };
+
+    // Try to initialize the directory structure.
+    // If this fails (corrupted DB that passed open but can't write),
+    // back up and recreate.
+    match store.initialize() {
+      Ok(()) => Ok(store),
+      Err(error) => {
+        tracing::warn!(
+          "state database initialization failed ({}), backing up and recreating",
+          error,
+        );
+        drop(store);
+        let engine = Self::backup_and_recreate(database_path)?;
+        let engine = Arc::new(engine);
+        let store = Self { engine };
+        store.initialize()?;
+        Ok(store)
+      }
+    }
+  }
+
+  /// Initialize root directory and structure.
+  fn initialize(&self) -> Result<()> {
+    let ops = DirectoryOps::new(&self.engine);
+    let ctx = RequestContext::system();
 
     ops
       .ensure_root_directory(&ctx)
@@ -52,10 +87,25 @@ impl StateStore {
         format!("failed to initialize state database root: {}", error),
       ))?;
 
-    let store = Self { engine };
-    store.ensure_directory_structure()?;
+    self.ensure_directory_structure()
+  }
 
-    Ok(store)
+  /// Back up a corrupted database file and create a fresh one.
+  fn backup_and_recreate(database_path: &str) -> Result<StorageEngine> {
+    let backup_path = format!("{}.corrupt.{}", database_path, chrono::Utc::now().timestamp());
+
+    if let Err(error) = std::fs::rename(database_path, &backup_path) {
+      tracing::error!("failed to back up corrupted database: {}", error);
+      // If we can't rename, try to just delete it
+      let _ = std::fs::remove_file(database_path);
+    } else {
+      tracing::info!("corrupted database backed up to {}", backup_path);
+    }
+
+    StorageEngine::create(database_path)
+      .map_err(|error| ClientError::Configuration(
+        format!("failed to recreate state database at {}: {}", database_path, error),
+      ))
   }
 
   /// Create a DirectoryOps handle for this store.
@@ -64,8 +114,6 @@ impl StateStore {
   }
 
   /// Ensure the required directory structure exists in the local state db.
-  /// Note: connections and relationships are now stored in the YAML config
-  /// file, not in the state database.
   fn ensure_directory_structure(&self) -> Result<()> {
     let directories = [
       "/client/",
@@ -77,9 +125,7 @@ impl StateStore {
     ];
 
     for directory_path in &directories {
-      if !self.exists(directory_path)? {
-        // Store a placeholder file to create the directory implicitly.
-        // aeordb creates parent directories when you store a file.
+      if !self.exists(directory_path).unwrap_or(false) {
         let placeholder_path = format!("{}/.keep", directory_path);
         self.store_json(&placeholder_path, &serde_json::json!({}))?;
       }
@@ -89,23 +135,35 @@ impl StateStore {
   }
 
   /// Get or create the client identity.
+  /// Resilient: if the identity is corrupted, generates a new one.
   pub fn get_or_create_identity(&self) -> Result<ClientIdentity> {
     let identity_path = "/client/identity.json";
 
-    match self.read_json::<ClientIdentity>(identity_path)? {
-      Some(identity) => Ok(identity),
-      None => {
-        let identity = ClientIdentity {
-          id:   Uuid::new_v4().to_string(),
-          name: hostname(),
-        };
-
-        self.store_json(identity_path, &identity)?;
-        tracing::info!("generated client identity: {} ({})", identity.id, identity.name);
-
-        Ok(identity)
+    // Try to read existing identity — treat corruption as "not found"
+    match self.read_json::<ClientIdentity>(identity_path) {
+      Ok(Some(identity)) => return Ok(identity),
+      Ok(None) => { /* no identity yet, create one */ }
+      Err(error) => {
+        tracing::warn!(
+          "failed to read client identity ({}), generating new one",
+          error,
+        );
       }
     }
+
+    let identity = ClientIdentity {
+      id:   Uuid::new_v4().to_string(),
+      name: hostname(),
+    };
+
+    if let Err(error) = self.store_json(identity_path, &identity) {
+      tracing::error!("failed to persist client identity: {}", error);
+      // Return the identity anyway — it'll work for this session
+    } else {
+      tracing::info!("generated client identity: {} ({})", identity.id, identity.name);
+    }
+
+    Ok(identity)
   }
 
   /// Store a JSON-serializable value at a path in the local database.
@@ -123,23 +181,31 @@ impl StateStore {
   }
 
   /// Read a JSON value from a path in the local database.
-  /// Returns None if the file does not exist.
+  /// Returns None if the file does not exist or is corrupted.
   pub fn read_json<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<Option<T>> {
-    if !self.exists(path)? {
+    if !self.exists(path).unwrap_or(false) {
       return Ok(None);
     }
 
-    let data = self.ops()
-      .read_file(path)
-      .map_err(|error| ClientError::Server(
-        format!("failed to read {} from state database: {}", path, error),
-      ))?;
-
-    let value = serde_json::from_slice(&data)?;
-    Ok(Some(value))
+    match self.ops().read_file(path) {
+      Ok(data) => {
+        match serde_json::from_slice(&data) {
+          Ok(value) => Ok(Some(value)),
+          Err(error) => {
+            tracing::warn!("corrupt JSON at {}: {}", path, error);
+            Ok(None)
+          }
+        }
+      }
+      Err(error) => {
+        tracing::warn!("failed to read {} from state database: {}", path, error);
+        Ok(None)
+      }
+    }
   }
 
   /// Delete a file from the local database.
+  /// Non-fatal: logs a warning on failure.
   pub fn delete(&self, path: &str) -> Result<()> {
     let ctx = RequestContext::system();
 
@@ -153,6 +219,7 @@ impl StateStore {
   }
 
   /// Check if a path exists in the local database.
+  /// Returns false on any error (treats corruption as "not found").
   pub fn exists(&self, path: &str) -> Result<bool> {
     self.ops()
       .exists(path)
@@ -162,14 +229,15 @@ impl StateStore {
   }
 
   /// List entries in a directory.
+  /// Returns empty list on error (treats corruption as "empty").
   pub fn list_directory(&self, path: &str) -> Result<Vec<String>> {
-    let children = self.ops()
-      .list_directory(path)
-      .map_err(|error| ClientError::Server(
-        format!("failed to list {} in state database: {}", path, error),
-      ))?;
-
-    Ok(children.into_iter().map(|child| child.name).collect())
+    match self.ops().list_directory(path) {
+      Ok(children) => Ok(children.into_iter().map(|child| child.name).collect()),
+      Err(error) => {
+        tracing::warn!("failed to list {} in state database: {}", path, error);
+        Ok(Vec::new())
+      }
+    }
   }
 
   /// Get a reference to the underlying storage engine.

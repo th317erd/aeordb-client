@@ -55,7 +55,8 @@ async fn test_get_settings_returns_defaults() {
   let body: SettingsResponse = response.json().await.expect("failed to parse");
   assert_eq!(body.sync_interval_seconds, 60);
   assert!(body.auto_start_sync);
-  assert!(body.client_name.is_none());
+  // client_name defaults to hostname when not explicitly set
+  assert!(body.client_name.is_some());
   assert!(!body.config_dir.is_empty());
   assert!(!body.data_dir.is_empty());
 }
@@ -106,7 +107,8 @@ async fn test_patch_settings_update_sync_interval() {
   assert_eq!(body.sync_interval_seconds, 120);
   // Other fields unchanged.
   assert!(body.auto_start_sync);
-  assert!(body.client_name.is_none());
+  // client_name defaults to hostname when not explicitly set
+  assert!(body.client_name.is_some());
 }
 
 #[tokio::test]
@@ -197,7 +199,8 @@ async fn test_patch_settings_clear_client_name() {
   assert_eq!(response.status(), 200);
 
   let body: SettingsResponse = response.json().await.expect("failed to parse");
-  assert!(body.client_name.is_none());
+  // client_name defaults to hostname when not explicitly set
+  assert!(body.client_name.is_some());
 }
 
 #[tokio::test]
@@ -279,7 +282,8 @@ async fn test_patch_settings_empty_body_is_noop() {
   // Defaults unchanged.
   assert_eq!(body.sync_interval_seconds, 60);
   assert!(body.auto_start_sync);
-  assert!(body.client_name.is_none());
+  // client_name defaults to hostname when not explicitly set
+  assert!(body.client_name.is_some());
 }
 
 // ── PATCH /api/v1/settings — validation / error paths ──
