@@ -84,12 +84,13 @@ class AeorApp extends HTMLElement {
   }
 
   _showPage(activePage) {
-    // Toggle page visibility
-    for (const page of PAGES) {
-      const el = this.querySelector(`[data-page="${page}"]`);
-      if (el) {
-        el.style.display = (page === activePage) ? '' : 'none';
-      }
+    // Toggle page visibility — select only direct children of .app-content
+    const content = this.querySelector('.app-content');
+    if (!content) return;
+
+    for (const child of content.children) {
+      if (!child.dataset.page) continue;
+      child.style.display = (child.dataset.page === activePage) ? '' : 'none';
     }
 
     // Update nav active state
