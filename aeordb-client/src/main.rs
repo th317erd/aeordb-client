@@ -204,25 +204,73 @@ fn main() -> anyhow::Result<()> {
       if lock_file.try_lock_exclusive().is_err() {
         // Another instance is running — ask it to shut down and take over.
         eprintln!("aeordb-client is already running — requesting shutdown for takeover...");
-        let shutdown_url = format!("http://{}:{}/api/v1/shutdown", bind, port);
-        let _ = reqwest::blocking::Client::new()
-          .post(&shutdown_url)
-          .header("Content-Type", "application/json")
-          .body("{}")
-          .send();
 
-        // Wait for the old instance to release the lock (up to 10 seconds).
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
+        // Try graceful shutdown via API (may fail if the instance is unresponsive)
+        let shutdown_url = format!("http://{}:{}/api/v1/shutdown", bind, port);
+        let api_responded = reqwest::blocking::Client::builder()
+          .timeout(std::time::Duration::from_secs(3))
+          .build()
+          .ok()
+          .and_then(|client| {
+            client.post(&shutdown_url)
+              .header("Content-Type", "application/json")
+              .body("{}")
+              .send()
+              .ok()
+          })
+          .is_some();
+
+        if !api_responded {
+          eprintln!("API unresponsive — finding and killing the old process...");
+        }
+
+        // Wait for the lock to be released (up to 5 seconds for graceful shutdown)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut acquired = false;
+        while std::time::Instant::now() < deadline {
           if lock_file.try_lock_exclusive().is_ok() {
-            eprintln!("takeover complete — starting new instance.");
+            acquired = true;
             break;
           }
-          if std::time::Instant::now() > deadline {
-            eprintln!("error: old instance did not shut down in time.");
-            std::process::exit(1);
-          }
           std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+
+        if !acquired {
+          // Graceful shutdown failed — forcibly kill the process holding the lock.
+          // On Linux/macOS, we can find the PID from the lock file.
+          eprintln!("graceful shutdown failed — force-killing old instance...");
+
+          #[cfg(unix)]
+          {
+            use std::process::Command;
+            // Use fuser to find who holds the lock
+            if let Ok(output) = Command::new("fuser").arg(&lock_path).output() {
+              let pids = String::from_utf8_lossy(&output.stdout);
+              for pid_str in pids.split_whitespace() {
+                if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                  unsafe { libc::kill(pid, libc::SIGTERM); }
+                  eprintln!("sent SIGTERM to PID {}", pid);
+                }
+              }
+            }
+          }
+
+          // Wait a bit more for SIGTERM to take effect
+          let kill_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+          while std::time::Instant::now() < kill_deadline {
+            if lock_file.try_lock_exclusive().is_ok() {
+              acquired = true;
+              break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+          }
+        }
+
+        if acquired {
+          eprintln!("takeover complete — starting new instance.");
+        } else {
+          eprintln!("error: could not acquire lock. Kill the old instance manually.");
+          std::process::exit(1);
         }
       }
       // Keep lock_file alive for the process lifetime — released on exit.

@@ -10,6 +10,7 @@ anyhow = "1"
 axum = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
 fs2 = "0.4"
+libc = "0.2"
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
