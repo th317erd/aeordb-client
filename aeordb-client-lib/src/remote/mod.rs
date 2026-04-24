@@ -54,10 +54,13 @@ pub struct RemoteFileMetadata {
 }
 
 /// Client for talking to a remote aeordb instance.
+/// Handles JWT token exchange: exchanges the API key for a JWT on first
+/// authenticated request, caches it, and re-exchanges on 401.
 pub struct RemoteClient {
   http_client: reqwest::Client,
   base_url:    String,
   api_key:     Option<String>,
+  jwt_token:   std::sync::Mutex<Option<String>>,
 }
 
 impl RemoteClient {
@@ -72,11 +75,65 @@ impl RemoteClient {
       http_client: http_client.clone(),
       base_url:    connection.url.clone(),
       api_key,
+      jwt_token:   std::sync::Mutex::new(None),
     }
   }
 
-  fn auth_header(&self) -> Option<String> {
-    self.api_key.as_ref().map(|key| format!("Bearer {}", key))
+  /// Get the auth header, exchanging API key for JWT if needed.
+  async fn auth_header(&self) -> Option<String> {
+    let api_key = self.api_key.as_ref()?;
+
+    // Check for cached JWT
+    {
+      let cached = self.jwt_token.lock().unwrap();
+      if let Some(ref token) = *cached {
+        return Some(format!("Bearer {}", token));
+      }
+    }
+
+    // Exchange API key for JWT
+    match self.exchange_token(api_key).await {
+      Ok(token) => {
+        let header = format!("Bearer {}", token);
+        *self.jwt_token.lock().unwrap() = Some(token);
+        Some(header)
+      }
+      Err(error) => {
+        tracing::warn!("JWT token exchange failed: {}", error);
+        // Fall back to raw API key
+        Some(format!("Bearer {}", api_key))
+      }
+    }
+  }
+
+  /// Clear the cached JWT (e.g., on 401) so the next request re-exchanges.
+  fn invalidate_token(&self) {
+    *self.jwt_token.lock().unwrap() = None;
+  }
+
+  /// Exchange an API key for a JWT token via POST /auth/token.
+  async fn exchange_token(&self, api_key: &str) -> Result<String> {
+    let url = format!("{}/auth/token", self.base_url);
+    let response = self.http_client
+      .post(&url)
+      .json(&serde_json::json!({ "api_key": api_key }))
+      .send()
+      .await
+      .map_err(|e| ClientError::Server(format!("token exchange failed: {}", e)))?;
+
+    if !response.status().is_success() {
+      return Err(ClientError::Server(
+        format!("token exchange returned HTTP {}", response.status()),
+      ));
+    }
+
+    let body: serde_json::Value = response.json().await
+      .map_err(|e| ClientError::Server(format!("token exchange response parse failed: {}", e)))?;
+
+    body.get("token")
+      .and_then(|t| t.as_str())
+      .map(|s| s.to_string())
+      .ok_or_else(|| ClientError::Server("token exchange response missing 'token' field".to_string()))
   }
 
   /// List the contents of a remote directory.
@@ -84,7 +141,7 @@ impl RemoteClient {
     let url = format!("{}/files{}", self.base_url, remote_path);
 
     let mut request = self.http_client.get(&url);
-    if let Some(ref auth) = self.auth_header() {
+    if let Some(ref auth) = self.auth_header().await {
       request = request.header("Authorization", auth);
     }
 
@@ -122,7 +179,7 @@ impl RemoteClient {
     let url = format!("{}/files{}", self.base_url, remote_path);
 
     let mut request = self.http_client.get(&url);
-    if let Some(ref auth) = self.auth_header() {
+    if let Some(ref auth) = self.auth_header().await {
       request = request.header("Authorization", auth);
     }
 
@@ -177,7 +234,7 @@ impl RemoteClient {
     let url = format!("{}/files{}", self.base_url, remote_path);
 
     let mut request = self.http_client.head(&url);
-    if let Some(ref auth) = self.auth_header() {
+    if let Some(ref auth) = self.auth_header().await {
       request = request.header("Authorization", auth);
     }
 
@@ -207,7 +264,7 @@ impl RemoteClient {
       request = request.header("Content-Type", content_type);
     }
 
-    if let Some(ref auth) = self.auth_header() {
+    if let Some(ref auth) = self.auth_header().await {
       request = request.header("Authorization", auth);
     }
 
@@ -230,7 +287,7 @@ impl RemoteClient {
     let url = format!("{}/files{}", self.base_url, remote_path);
 
     let mut request = self.http_client.delete(&url);
-    if let Some(ref auth) = self.auth_header() {
+    if let Some(ref auth) = self.auth_header().await {
       request = request.header("Authorization", auth);
     }
 
@@ -257,7 +314,7 @@ impl RemoteClient {
       .put(&url)
       .json(&serde_json::json!({ "target": target }));
 
-    if let Some(ref auth) = self.auth_header() {
+    if let Some(ref auth) = self.auth_header().await {
       request = request.header("Authorization", auth);
     }
 
@@ -285,7 +342,7 @@ impl RemoteClient {
       .patch(&url)
       .json(&serde_json::json!({ "to": to_path }));
 
-    if let Some(ref auth) = self.auth_header() {
+    if let Some(ref auth) = self.auth_header().await {
       request = request.header("Authorization", auth);
     }
 
@@ -324,7 +381,7 @@ impl RemoteClient {
     }
 
     let mut request = self.http_client.get(&url);
-    if let Some(ref auth) = self.auth_header() {
+    if let Some(ref auth) = self.auth_header().await {
       request = request.header("Authorization", auth);
     }
 

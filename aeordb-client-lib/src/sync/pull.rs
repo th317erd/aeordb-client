@@ -389,9 +389,29 @@ async fn fetch_remote_diff(
 
   let mut request = http_client.post(&url).json(&body);
 
+  // Use JWT token exchange for authentication
   if connection.auth_type == AuthType::ApiKey {
     if let Some(ref api_key) = connection.api_key {
-      request = request.header("Authorization", format!("Bearer {}", api_key));
+      // Try to exchange the API key for a JWT first
+      let token_url = format!("{}/auth/token", connection.url);
+      let token = http_client
+        .post(&token_url)
+        .json(&serde_json::json!({ "api_key": api_key }))
+        .send()
+        .await
+        .ok()
+        .and_then(|r| if r.status().is_success() { Some(r) } else { None });
+
+      if let Some(token_response) = token {
+        if let Ok(body) = token_response.json::<serde_json::Value>().await {
+          if let Some(jwt) = body.get("token").and_then(|t| t.as_str()) {
+            request = request.header("Authorization", format!("Bearer {}", jwt));
+          }
+        }
+      } else {
+        // Fall back to raw API key
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+      }
     }
   }
 
