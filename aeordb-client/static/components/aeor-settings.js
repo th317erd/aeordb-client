@@ -117,6 +117,25 @@ class AeorSettings extends HTMLElement {
         openFolder(this._settings.data_dir);
       });
     }
+
+    // When any setting changes, flip back to unsaved state
+    const markDirty = () => {
+      if (!this._saved) return;
+      this._saved = false;
+      const btn = this.querySelector('#save-settings');
+      if (btn) {
+        btn.textContent = 'Save';
+        btn.className = 'primary';
+        btn.disabled = false;
+      }
+    };
+
+    this.querySelectorAll('#setting-client-name, #setting-sync-interval').forEach((el) => {
+      el.addEventListener('input', markDirty);
+    });
+    this.querySelectorAll('#setting-auto-start, #setting-auto-start-system').forEach((el) => {
+      el.addEventListener('change', markDirty);
+    });
   }
 
   async _fetchSettings() {
@@ -199,14 +218,6 @@ class AeorSettings extends HTMLElement {
       this._saving   = false;
       this._saved    = true;
       this.render();
-
-      // Reset "Saved!" text after 2 seconds.
-      this._timeoutIds.push(setTimeout(() => {
-        if (!this._isConnected) return;
-        this._saved = false;
-        const btn = this.querySelector('#save-settings');
-        if (btn) btn.textContent = 'Save';
-      }, 2000));
     } catch (error) {
       this._saving = false;
       this._error  = `Failed to save settings: ${error.message}`;
