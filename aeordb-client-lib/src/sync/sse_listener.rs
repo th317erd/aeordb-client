@@ -47,19 +47,32 @@ async fn sse_listener_loop(
 ) {
   let mut backoff = Duration::from_secs(1);
   let max_backoff = Duration::from_secs(60);
+  let mut consecutive_failures: u32 = 0;
 
   loop {
     match connect_and_listen(&connection, &path_prefixes, &sender).await {
       Ok(()) => {
         // Stream ended cleanly (server closed connection)
-        tracing::info!("SSE stream closed for {}, reconnecting...", connection.name);
-        backoff = Duration::from_secs(1); // Reset backoff on clean close
+        if consecutive_failures > 0 {
+          tracing::info!("SSE connection to '{}' recovered after {} failures", connection.name, consecutive_failures);
+        }
+        tracing::info!("SSE stream closed for '{}', reconnecting...", connection.name);
+        backoff = Duration::from_secs(1);
+        consecutive_failures = 0;
       }
       Err(error) => {
-        tracing::warn!(
-          "SSE connection to '{}' failed: {}. Retrying in {:?}",
-          connection.name, error, backoff,
-        );
+        consecutive_failures += 1;
+        if consecutive_failures <= 1 {
+          tracing::warn!(
+            "SSE connection to '{}' failed: {}. Retrying in {:?}",
+            connection.name, error, backoff,
+          );
+        } else {
+          tracing::debug!(
+            "SSE connection to '{}' still failing (attempt {}). Retrying in {:?}",
+            connection.name, consecutive_failures, backoff,
+          );
+        }
       }
     }
 
