@@ -9,65 +9,106 @@ import { AeorFileBrowser } from './aeor-file-browser.js';
 import { AeorSettings } from './aeor-settings.js';
 import { AeorToasts } from './aeor-toasts.js';
 
+const PAGES = ['dashboard', 'connections', 'sync', 'files', 'conflicts', 'settings'];
+
+const PAGE_TAGS = {
+  dashboard:   'aeor-dashboard',
+  connections: 'aeor-connections',
+  sync:        'aeor-sync',
+  files:       'aeor-file-browser',
+  conflicts:   'aeor-conflicts',
+  settings:    'aeor-settings',
+};
+
 class AeorApp extends HTMLElement {
   constructor() {
     super();
     this._currentPage = 'dashboard';
     this._pageOptions = {};
+    this._rendered = false;
   }
 
   connectedCallback() {
     this._relationshipCache = {};
     this._cacheRelationships();
-    this.render();
+
+    if (!this._rendered) {
+      this._buildDOM();
+      this._rendered = true;
+    }
+
+    this._showPage(this._currentPage);
   }
 
-  render() {
+  // Build the full DOM once — all pages created, only one visible.
+  _buildDOM() {
+    // Create shell
+    const pagesHTML = PAGES.map((page) => {
+      const tag = PAGE_TAGS[page];
+      const hidden = (page !== this._currentPage) ? 'style="display:none"' : '';
+      return `<${tag} data-page="${page}" ${hidden}></${tag}>`;
+    }).join('\n        ');
+
     this.innerHTML = `
       <aeor-nav active="${this._currentPage}"></aeor-nav>
       <div class="app-content">
-        ${this._renderPage()}
+        ${pagesHTML}
       </div>
       <aeor-toasts></aeor-toasts>
     `;
 
-    // Listen for navigation from nav bar
+    // Navigation events
     this.querySelector('aeor-nav')
       .addEventListener('navigate', (event) => {
-        this._currentPage = event.detail.page;
-        this._pageOptions = event.detail;
-        this.render();
+        this._navigateTo(event.detail.page, event.detail);
       });
 
-    // Listen for navigation from anywhere (e.g., sync page → connections)
     this.querySelector('.app-content')
       .addEventListener('navigate', (event) => {
-        this._currentPage = event.detail.page;
-        this._pageOptions = event.detail;
-        this.render();
+        this._navigateTo(event.detail.page, event.detail);
       });
 
-    // Handle file drag-start from the file browser — resolve local paths
+    // File drag-start
     this.querySelector('.app-content')
       .addEventListener('file-drag-start', (event) => {
         this._handleFileDragStart(event.detail);
       });
+  }
 
-    // Pass autoAdd option to connections component if present
-    if (this._currentPage === 'connections' && this._pageOptions.autoAdd) {
-      const connectionsElement = this.querySelector('aeor-connections');
-      if (connectionsElement)
-        connectionsElement.openAddForm();
+  _navigateTo(page, options = {}) {
+    if (!PAGES.includes(page)) return;
 
+    this._currentPage = page;
+    this._pageOptions = options;
+    this._showPage(page);
+
+    // Handle page-specific options
+    if (page === 'connections' && options.autoAdd) {
+      const el = this.querySelector('aeor-connections');
+      if (el) el.openAddForm();
       this._pageOptions = {};
+    }
+  }
+
+  _showPage(activePage) {
+    // Toggle page visibility
+    for (const page of PAGES) {
+      const el = this.querySelector(`[data-page="${page}"]`);
+      if (el) {
+        el.style.display = (page === activePage) ? '' : 'none';
+      }
+    }
+
+    // Update nav active state
+    const nav = this.querySelector('aeor-nav');
+    if (nav) {
+      nav.setAttribute('active', activePage);
     }
   }
 
   _handleFileDragStart(detail) {
     const { event, adapter, paths } = detail;
 
-    // Resolve local paths from cached relationship data.
-    // dataTransfer is only writable during the synchronous dragstart handler.
     const relId = adapter && adapter.relationshipId;
     const relationship = relId && this._relationshipCache && this._relationshipCache[relId];
     if (!relationship || !relationship.local_path) return;
@@ -94,25 +135,6 @@ class AeorApp extends HTMLElement {
       }
     } catch (error) {
       // Non-critical
-    }
-  }
-
-  _renderPage() {
-    switch (this._currentPage) {
-      case 'dashboard':
-        return '<aeor-dashboard></aeor-dashboard>';
-      case 'connections':
-        return '<aeor-connections></aeor-connections>';
-      case 'sync':
-        return '<aeor-sync></aeor-sync>';
-      case 'files':
-        return '<aeor-file-browser></aeor-file-browser>';
-      case 'conflicts':
-        return '<aeor-conflicts></aeor-conflicts>';
-      case 'settings':
-        return '<aeor-settings></aeor-settings>';
-      default:
-        return '<aeor-dashboard></aeor-dashboard>';
     }
   }
 }
