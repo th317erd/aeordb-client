@@ -1,6 +1,6 @@
 'use strict';
 
-import { escapeHtml, escapeAttr, bindResizeHandle } from './aeor-file-view-shared.js';
+import { escapeHtml, escapeAttr, bindResizeHandle, showConfirm } from './aeor-file-view-shared.js';
 import { AeorDashboard } from '../shared/components/aeor-dashboard.js';
 
 // Register the shared dashboard under a distinct tag name so it does not
@@ -273,8 +273,8 @@ class AeorConnections extends HTMLElement {
   }
 
   async _deleteConnection(id) {
-    if (!confirm('Delete this connection?'))
-      return;
+    const confirmed = await showConfirm('Delete Connection', 'Are you sure you want to delete this connection?', { confirmText: 'Delete', danger: true });
+    if (!confirmed) return;
 
     try {
       const response = await fetch(`/api/v1/connections/${id}`, { method: 'DELETE' });

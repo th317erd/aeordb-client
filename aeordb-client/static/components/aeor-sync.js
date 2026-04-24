@@ -1,6 +1,6 @@
 'use strict';
 
-import { escapeHtml, escapeAttr, formatSize, bindResizeHandle, formatRelativeTime } from './aeor-file-view-shared.js';
+import { escapeHtml, escapeAttr, formatSize, bindResizeHandle, formatRelativeTime, showConfirm } from './aeor-file-view-shared.js';
 
 class AeorSync extends HTMLElement {
   constructor() {
@@ -513,8 +513,8 @@ class AeorSync extends HTMLElement {
   }
 
   async _deleteSync(id) {
-    if (!confirm('Delete this sync relationship?'))
-      return;
+    const confirmed = await showConfirm('Delete Sync Relationship', 'Are you sure you want to delete this sync relationship?', { confirmText: 'Delete', danger: true });
+    if (!confirmed) return;
 
     try {
       const response = await fetch(`/api/v1/sync/${id}`, { method: 'DELETE' });

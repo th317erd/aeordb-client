@@ -1,6 +1,6 @@
 'use strict';
 
-import { escapeHtml, escapeAttr, formatSize, bindResizeHandle } from './aeor-file-view-shared.js';
+import { escapeHtml, escapeAttr, formatSize, bindResizeHandle, showConfirm } from './aeor-file-view-shared.js';
 
 class AeorConflicts extends HTMLElement {
   constructor() {
@@ -293,8 +293,12 @@ class AeorConflicts extends HTMLElement {
   }
 
   async _dismissAll() {
-    if (!confirm(`Accept all ${this._conflicts.length} auto-winners?\n\nLosing versions remain in version history.`))
-      return;
+    const confirmed = await showConfirm(
+      'Accept All Winners',
+      `Accept all ${this._conflicts.length} auto-winner(s)? Losing versions remain in version history.`,
+      { confirmText: 'Accept All' },
+    );
+    if (!confirmed) return;
 
     try {
       const response = await fetch('/api/v1/conflicts/dismiss-all', { method: 'POST' });
