@@ -93,7 +93,7 @@ class AeorSettings extends HTMLElement {
       </div>
 
       <div class="form-actions" style="margin-top: 16px;">
-        <button class="primary" id="save-settings" ${(this._saving) ? 'disabled' : ''}>${(this._saved) ? 'Saved!' : (this._saving) ? 'Saving...' : 'Save'}</button>
+        <button class="${(this._saved) ? 'success' : 'primary'}" id="save-settings" ${(this._saving || this._saved) ? 'disabled' : ''}>${(this._saved) ? '\u2713 Saved!' : (this._saving) ? 'Saving...' : 'Save'}</button>
       </div>
     `;
   }
