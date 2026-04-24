@@ -21,8 +21,16 @@ pub async fn create_relationship(
   Json(request): Json<CreateSyncRelationshipRequest>,
 ) -> Result<(StatusCode, Json<SyncRelationship>), ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-  manager.create(request).await
-    .map(|relationship| (StatusCode::CREATED, Json(relationship)))
+  let relationship = manager.create(request).await?;
+
+  // Auto-start the sync runner for the new relationship
+  if relationship.enabled {
+    if let Err(error) = state.sync_runner.start(&relationship.id).await {
+      tracing::warn!("failed to auto-start sync for '{}': {}", relationship.name, error);
+    }
+  }
+
+  Ok((StatusCode::CREATED, Json(relationship)))
 }
 
 pub async fn get_relationship(
@@ -59,7 +67,14 @@ pub async fn enable_relationship(
   Path(id): Path<String>,
 ) -> Result<Json<SyncRelationship>, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-  manager.enable(&id).await.map(Json)
+  let relationship = manager.enable(&id).await?;
+
+  // Start the sync runner
+  if let Err(error) = state.sync_runner.start(&id).await {
+    tracing::warn!("failed to start sync for '{}': {}", relationship.name, error);
+  }
+
+  Ok(Json(relationship))
 }
 
 pub async fn disable_relationship(
@@ -67,7 +82,12 @@ pub async fn disable_relationship(
   Path(id): Path<String>,
 ) -> Result<Json<SyncRelationship>, ClientError> {
   let manager = RelationshipManager::new(&state.config_store);
-  manager.disable(&id).await.map(Json)
+  let relationship = manager.disable(&id).await?;
+
+  // Stop the sync runner
+  let _ = state.sync_runner.stop(&id).await;
+
+  Ok(Json(relationship))
 }
 
 pub async fn trigger_sync(
