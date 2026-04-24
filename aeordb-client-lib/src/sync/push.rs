@@ -200,6 +200,44 @@ pub async fn push_sync(
       }
     }
 
+    // Move detection: if no metadata exists for this path but another path
+    // has the same content hash, this is likely a file that was moved/renamed
+    // locally. Use a remote rename instead of re-uploading the content.
+    if stored_meta.is_none() {
+      let all_metas = metadata_store.list_file_metas(&relationship.id).unwrap_or_default();
+      let moved_from = all_metas.iter().find(|m| {
+        m.content_hash == content_hash && m.path != remote_path && !seen_remote_paths.contains(&m.path)
+      });
+
+      if let Some(source_meta) = moved_from {
+        let old_path = source_meta.path.clone();
+        match remote_client.rename_file(&old_path, &remote_path).await {
+          Ok(()) => {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            // Remove old metadata
+            metadata_store.delete_file_meta(&relationship.id, &old_path)?;
+            // Create new metadata at the new path
+            let new_meta = FileSyncMeta {
+              path:           remote_path.clone(),
+              content_hash:   content_hash.clone(),
+              size:           file_size,
+              modified_at:    mtime,
+              sync_status:    SyncStatus::Synced,
+              last_synced_at: now_ms,
+            };
+            metadata_store.set_file_meta(&relationship.id, &new_meta)?;
+            files_pushed += 1;
+            tracing::info!("moved on remote: {} -> {}", old_path, remote_path);
+            continue;
+          }
+          Err(error) => {
+            // Move failed — fall through to upload
+            tracing::debug!("remote move failed ({}), will upload instead", error);
+          }
+        }
+      }
+    }
+
     // Upload to remote using a streaming body from the file on disk.
     let content_type = mime_from_extension(&entry_path);
 
