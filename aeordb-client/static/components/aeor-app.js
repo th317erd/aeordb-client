@@ -90,7 +90,13 @@ class AeorApp extends HTMLElement {
 
     for (const child of content.children) {
       if (!child.dataset.page) continue;
-      child.style.display = (child.dataset.page === activePage) ? '' : 'none';
+      const isActive = (child.dataset.page === activePage);
+      child.style.display = isActive ? '' : 'none';
+
+      // Notify the page it became visible so it can refresh stale data
+      if (isActive && typeof child.refresh === 'function') {
+        child.refresh();
+      }
     }
 
     // Update nav active state

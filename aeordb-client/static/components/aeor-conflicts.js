@@ -14,6 +14,10 @@ class AeorConflicts extends HTMLElement {
     this._fetchConflicts();
   }
 
+  refresh() {
+    this._fetchConflicts();
+  }
+
   render() {
     this.innerHTML = `
       <div class="page-header">

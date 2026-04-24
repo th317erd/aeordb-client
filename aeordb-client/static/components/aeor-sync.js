@@ -18,6 +18,10 @@ class AeorSync extends HTMLElement {
     this._fetchData();
   }
 
+  refresh() {
+    this._fetchData();
+  }
+
   render() {
     const hasConnections = this._connections.length > 0;
     const canAdd         = hasConnections;

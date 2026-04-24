@@ -10,6 +10,10 @@ class AeorDashboard extends HTMLElement {
     this._fetchData();
   }
 
+  refresh() {
+    this._fetchData();
+  }
+
   disconnectedCallback() {
     this._isConnected = false;
     if (this._timeoutIds) {

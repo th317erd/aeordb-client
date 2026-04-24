@@ -18,6 +18,10 @@ class AeorSettings extends HTMLElement {
     this._fetchSettings();
   }
 
+  refresh() {
+    this._fetchSettings();
+  }
+
   disconnectedCallback() {
     this._isConnected = false;
     if (this._timeoutIds) {

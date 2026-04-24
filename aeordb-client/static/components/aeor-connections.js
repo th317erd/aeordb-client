@@ -21,6 +21,10 @@ class AeorConnections extends HTMLElement {
     this._fetchConnections();
   }
 
+  refresh() {
+    this._fetchConnections();
+  }
+
   openAddForm() {
     this._showAddForm = true;
     this.render();
