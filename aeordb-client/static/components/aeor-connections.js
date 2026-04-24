@@ -51,7 +51,6 @@ class AeorConnections extends HTMLElement {
           </div>
         </div>
         <div class="preview-dashboard-container">
-          <aeor-remote-dashboard class="connection-dashboard"></aeor-remote-dashboard>
         </div>
       </div>
     `;
@@ -199,10 +198,17 @@ class AeorConnections extends HTMLElement {
     // Update header
     panel.querySelector('.preview-title').textContent = `${connection.name} — Dashboard`;
 
-    // Point the embedded dashboard at the remote server
-    const dashboard = panel.querySelector('.connection-dashboard');
-    if (dashboard)
+    // Create or update the embedded dashboard
+    const container = panel.querySelector('.preview-dashboard-container');
+    if (container) {
+      let dashboard = container.querySelector('.connection-dashboard');
+      if (!dashboard) {
+        dashboard = document.createElement('aeor-remote-dashboard');
+        dashboard.className = 'connection-dashboard';
+        container.appendChild(dashboard);
+      }
       dashboard.setAttribute('base-url', connection.url);
+    }
 
     panel.style.display = '';
   }
@@ -213,11 +219,10 @@ class AeorConnections extends HTMLElement {
 
     panel.style.display = 'none';
 
-    // Disconnect the dashboard by removing its base-url (triggers disconnectedCallback
-    // when the panel is hidden and the element is no longer rendered).
+    // Remove the dashboard element entirely so it stops polling/SSE
     const dashboard = panel.querySelector('.connection-dashboard');
     if (dashboard)
-      dashboard.removeAttribute('base-url');
+      dashboard.remove();
   }
 
   async _fetchConnections() {

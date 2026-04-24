@@ -57,22 +57,15 @@ class AeorApp extends HTMLElement {
       <aeor-toasts></aeor-toasts>
     `;
 
-    // Navigation events
-    this.querySelector('aeor-nav')
-      .addEventListener('navigate', (event) => {
-        this._navigateTo(event.detail.page, event.detail);
-      });
+    // Listen on the root element — events bubble up from nav and all pages.
+    // This survives child re-renders (e.g., aeor-nav rebuilding its DOM).
+    this.addEventListener('navigate', (event) => {
+      this._navigateTo(event.detail.page, event.detail);
+    });
 
-    this.querySelector('.app-content')
-      .addEventListener('navigate', (event) => {
-        this._navigateTo(event.detail.page, event.detail);
-      });
-
-    // File drag-start
-    this.querySelector('.app-content')
-      .addEventListener('file-drag-start', (event) => {
-        this._handleFileDragStart(event.detail);
-      });
+    this.addEventListener('file-drag-start', (event) => {
+      this._handleFileDragStart(event.detail);
+    });
   }
 
   _navigateTo(page, options = {}) {
