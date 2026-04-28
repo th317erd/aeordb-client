@@ -27,10 +27,11 @@ async fn start_test_server() -> String {
 
 fn create_request() -> CreateConnectionRequest {
   CreateConnectionRequest {
-    name:      "Test Server".to_string(),
-    url:       "http://localhost:3000".to_string(),
-    auth_type: AuthType::ApiKey,
-    api_key:   Some("aeor_test_key_abc123".to_string()),
+    name:           "Test Server".to_string(),
+    url:            "http://localhost:3000".to_string(),
+    auth_type:      AuthType::ApiKey,
+    api_key:        Some("aeor_test_key_abc123".to_string()),
+    share_base_url: None,
   }
 }
 
@@ -97,19 +98,21 @@ async fn test_list_connections_after_create() {
   // Create two connections
   client.post(format!("{}/api/v1/connections", base_url))
     .json(&CreateConnectionRequest {
-      name: "Server B".to_string(),
-      url: "http://b.example.com".to_string(),
-      auth_type: AuthType::None,
-      api_key: None,
+      name:           "Server B".to_string(),
+      url:            "http://b.example.com".to_string(),
+      auth_type:      AuthType::None,
+      api_key:        None,
+      share_base_url: None,
     })
     .send().await.expect("create failed");
 
   client.post(format!("{}/api/v1/connections", base_url))
     .json(&CreateConnectionRequest {
-      name: "Server A".to_string(),
-      url: "http://a.example.com".to_string(),
-      auth_type: AuthType::None,
-      api_key: None,
+      name:           "Server A".to_string(),
+      url:            "http://a.example.com".to_string(),
+      auth_type:      AuthType::None,
+      api_key:        None,
+      share_base_url: None,
     })
     .send().await.expect("create failed");
 
@@ -169,10 +172,11 @@ async fn test_update_connection() {
   let created: RemoteConnection = create_response.json().await.expect("parse failed");
 
   let update = UpdateConnectionRequest {
-    name:      Some("Updated Name".to_string()),
-    url:       Some("http://new-url.example.com".to_string()),
-    auth_type: None,
-    api_key:   None,
+    name:           Some("Updated Name".to_string()),
+    url:            Some("http://new-url.example.com".to_string()),
+    auth_type:      None,
+    api_key:        None,
+    share_base_url: None,
   };
 
   let update_response = client
@@ -235,10 +239,11 @@ async fn test_connection_test_unreachable_server() {
   let create_response = client
     .post(format!("{}/api/v1/connections", base_url))
     .json(&CreateConnectionRequest {
-      name:      "Unreachable".to_string(),
-      url:       "http://192.0.2.1:9999".to_string(), // RFC 5737 TEST-NET, guaranteed unreachable
-      auth_type: AuthType::None,
-      api_key:   None,
+      name:           "Unreachable".to_string(),
+      url:            "http://192.0.2.1:9999".to_string(), // RFC 5737 TEST-NET, guaranteed unreachable
+      auth_type:      AuthType::None,
+      api_key:        None,
+      share_base_url: None,
     })
     .send().await.expect("create failed");
 

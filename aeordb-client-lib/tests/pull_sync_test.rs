@@ -145,13 +145,14 @@ fn make_relationship(
 fn make_connection(base_url: &str) -> RemoteConnection {
   let now = Utc::now();
   RemoteConnection {
-    id:         "test-conn-001".to_string(),
-    name:       "test-remote".to_string(),
-    url:        base_url.to_string(),
-    auth_type:  AuthType::None,
-    api_key:    None,
-    created_at: now,
-    updated_at: now,
+    id:             "test-conn-001".to_string(),
+    name:           "test-remote".to_string(),
+    url:            base_url.to_string(),
+    auth_type:      AuthType::None,
+    api_key:        None,
+    share_base_url: None,
+    created_at:     now,
+    updated_at:     now,
   }
 }
 

@@ -11,6 +11,7 @@ export {
   formatBytes as formatSize,
   formatDate,
   formatUptime,
+  flashButton,
 } from '../shared/utils.js';
 
 export {

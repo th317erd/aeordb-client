@@ -45,6 +45,7 @@ pub struct BrowseEntry {
   pub updated_at:   i64,
   pub sync_status:  String,
   pub has_local:    bool,
+  pub effective_permissions: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -227,6 +228,7 @@ pub async fn browse(
       updated_at:   entry.updated_at,
       sync_status,
       has_local,
+      effective_permissions: entry.effective_permissions,
     });
   }
 

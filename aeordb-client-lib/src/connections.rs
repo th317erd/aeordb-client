@@ -19,8 +19,20 @@ pub struct RemoteConnection {
   pub url:        String,
   pub auth_type:  AuthType,
   pub api_key:    Option<String>,
+  #[serde(default)]
+  pub share_base_url: Option<String>,
   pub created_at: DateTime<Utc>,
   pub updated_at: DateTime<Utc>,
+}
+
+impl RemoteConnection {
+  /// The base URL to use when generating share links.
+  /// Falls back to the connection URL if no explicit share domain is set.
+  pub fn effective_share_url(&self) -> &str {
+    self.share_base_url.as_deref()
+      .filter(|s| !s.is_empty())
+      .unwrap_or(&self.url)
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +41,7 @@ pub struct CreateConnectionRequest {
   pub url:       String,
   pub auth_type: AuthType,
   pub api_key:   Option<String>,
+  pub share_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +50,7 @@ pub struct UpdateConnectionRequest {
   pub url:       Option<String>,
   pub auth_type: Option<AuthType>,
   pub api_key:   Option<String>,
+  pub share_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +82,7 @@ impl<'a> ConnectionManager<'a> {
       url,
       auth_type:  request.auth_type,
       api_key:    request.api_key,
+      share_base_url: request.share_base_url,
       created_at: now,
       updated_at: now,
     };
@@ -112,6 +127,9 @@ impl<'a> ConnectionManager<'a> {
       }
       if let Some(api_key) = request.api_key {
         connection.api_key = Some(api_key);
+      }
+      if let Some(share_base_url) = request.share_base_url {
+        connection.share_base_url = Some(share_base_url).filter(|s| !s.is_empty());
       }
 
       connection.updated_at = Utc::now();

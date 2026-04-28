@@ -1,0 +1,101 @@
+title: Full Share Support + Server Changelog Parity
+date: 2026-04-28
+description: |
+  Implement full share functionality in the client, add effective_permissions
+  passthrough, add share_base_url to connections, and ensure parity with
+  server changelog changes since 2026-04-24.
+
+phases:
+  - name: "Phase 1: Rust Models & Remote Client"
+    tasks:
+      - id: models-connection
+        description: |
+          Add `share_base_url: Option<String>` to RemoteConnection,
+          CreateConnectionRequest, and UpdateConnectionRequest in connections.rs.
+          Handle in ConnectionManager::create and ::update.
+      - id: models-remote-entry
+        description: |
+          Add `effective_permissions: Option<String>` to RemoteEntry in remote/mod.rs.
+          Add same field to BrowseEntry in api/routes/files.rs.
+          Pass through from remote listing response to browse response.
+      - id: remote-client-share-methods
+        description: |
+          Add 8 share methods to RemoteClient in remote/mod.rs:
+          - get_shares(path) -> GET /files/shares?path=...
+          - share(paths, users, groups, permissions) -> POST /files/share
+          - unshare(path, group, path_pattern) -> DELETE /files/shares
+          - get_shareable_users() -> GET /auth/keys/users
+          - get_shareable_groups() -> GET /system/groups
+          - create_share_link(paths, permissions, expires_in_days, base_url) -> POST /files/share-link
+          - get_share_links(path) -> GET /files/share-links?path=...
+          - revoke_share_link(key_id) -> DELETE /files/share-links/{key_id}
+          All methods use auth_header() and return serde_json::Value for passthrough.
+
+  - name: "Phase 2: Rust API Routes"
+    tasks:
+      - id: share-routes
+        description: |
+          Create api/routes/shares.rs with 8 proxy handlers:
+          - GET  /api/v1/shares/{rel_id}?path=...          -> getShares
+          - POST /api/v1/shares/{rel_id}                   -> share
+          - DELETE /api/v1/shares/{rel_id}                  -> unshare
+          - GET  /api/v1/shares/{rel_id}/users             -> getShareableUsers
+          - GET  /api/v1/shares/{rel_id}/groups            -> getShareableGroups
+          - POST /api/v1/shares/{rel_id}/link              -> createShareLink
+          - GET  /api/v1/shares/{rel_id}/links?path=...    -> getShareLinks
+          - DELETE /api/v1/shares/{rel_id}/links/{key_id}  -> revokeShareLink
+
+          For createShareLink: inject base_url from connection.share_base_url
+          (falling back to connection.url).
+
+          Each handler: load relationship+connection, create RemoteClient, forward.
+      - id: wire-routes
+        description: |
+          Register share routes in server.rs build_router().
+          Add `mod shares;` to api/routes.rs.
+
+  - name: "Phase 3: Web Components - Client File Browser Share Methods"
+    tasks:
+      - id: client-browser-share
+        description: |
+          In aeordb-web-components/components/aeor-file-browser.js, implement:
+          - getShares(path)
+          - share(paths, users, groups, permissions)
+          - unshare(path, group, pathPattern)
+          - getShareableUsers()
+          - getShareableGroups()
+          - createShareLink(paths, permissions, expiresInDays)
+          - getShareLinks(path)
+          - revokeShareLink(keyId)
+
+          All proxy through /api/v1/shares/{relationship_id}/...
+
+          Also implement:
+          - previewActions(entry) — include Share button if _hasPermission('y')
+          - selectionActions(tab) — include Share button
+          - _bindSelectionBarExtra(selectionBar, tab) — bind share click
+      - id: client-shim-flashbutton
+        description: |
+          In aeordb-client/static/components/aeor-file-view-shared.js,
+          add flashButton to the re-export list from ../shared/utils.js.
+
+  - name: "Phase 4: Connections UI - Share Domain Field"
+    tasks:
+      - id: connections-ui-share-domain
+        description: |
+          In aeor-connections.js:
+          - Add "Share Domain (optional)" field to _renderAddForm()
+          - Include share_base_url in _submitForm() POST body
+          - Show share_base_url in connection details/preview if set
+
+          Update CreateConnectionRequest submission to include the new field.
+
+  - name: "Phase 5: Build & Test"
+    tasks:
+      - id: cargo-build
+        description: |
+          Run `cargo build` to verify Rust compiles and rsync pulls
+          updated web-components into static/shared/.
+      - id: cargo-test
+        description: |
+          Run `cargo test` to verify all existing tests still pass.

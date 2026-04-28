@@ -39,10 +39,11 @@ impl TestContext {
     let response = self.client
       .post(format!("{}/api/v1/connections", self.base_url))
       .json(&CreateConnectionRequest {
-        name:      "Test Remote".to_string(),
-        url:       "http://localhost:3000".to_string(),
-        auth_type: AuthType::None,
-        api_key:   None,
+        name:           "Test Remote".to_string(),
+        url:            "http://localhost:3000".to_string(),
+        auth_type:      AuthType::None,
+        api_key:        None,
+        share_base_url: None,
       })
       .send().await.expect("create connection failed");
 

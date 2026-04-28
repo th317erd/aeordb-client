@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, broadcast};
 
@@ -13,6 +13,7 @@ use crate::api::routes::connections;
 use crate::api::routes::events;
 use crate::api::routes::files;
 use crate::api::routes::settings;
+use crate::api::routes::shares;
 use crate::api::routes::status::get_status;
 use crate::api::routes::sync;
 use crate::api::routes::system;
@@ -78,6 +79,12 @@ pub fn build_router(state: AppState) -> Router {
     .route("/files/{relationship_id}/{*path}", get(files::serve_file).put(files::upload_file).delete(files::delete_file))
     .route("/files/{relationship_id}/open", post(files::open_locally))
     .route("/files/{relationship_id}/rename", post(files::rename_file))
+    .route("/shares/{relationship_id}", get(shares::get_shares).post(shares::share).delete(shares::unshare))
+    .route("/shares/{relationship_id}/users", get(shares::get_shareable_users))
+    .route("/shares/{relationship_id}/groups", get(shares::get_shareable_groups))
+    .route("/shares/{relationship_id}/link", post(shares::create_share_link))
+    .route("/shares/{relationship_id}/links", get(shares::get_share_links))
+    .route("/shares/{relationship_id}/links/{key_id}", delete(shares::revoke_share_link))
     .route("/settings", get(settings::get_settings).patch(settings::update_settings))
     .route("/open-folder", post(system::open_folder))
     .route("/pick-directory", post(system::pick_directory))

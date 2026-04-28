@@ -94,6 +94,10 @@ class AeorConnections extends HTMLElement {
           <label>API Key (optional)</label>
           <input type="text" id="form-api-key" placeholder="aeor_...">
         </div>
+        <div class="form-row">
+          <label>Share Domain (optional)</label>
+          <input type="text" id="form-share-url" placeholder="Defaults to connection URL">
+        </div>
         <div class="form-actions">
           <button class="primary" id="form-submit">Create</button>
           <button class="secondary" id="form-cancel">Cancel</button>
@@ -241,9 +245,10 @@ class AeorConnections extends HTMLElement {
   }
 
   async _submitForm() {
-    const name   = this.querySelector('#form-name').value;
-    const url    = this.querySelector('#form-url').value;
-    const apiKey = this.querySelector('#form-api-key').value;
+    const name     = this.querySelector('#form-name').value;
+    const url      = this.querySelector('#form-url').value;
+    const apiKey   = this.querySelector('#form-api-key').value;
+    const shareUrl = this.querySelector('#form-share-url').value;
 
     if (!name || !url)
       return;
@@ -255,8 +260,9 @@ class AeorConnections extends HTMLElement {
         body:    JSON.stringify({
           name,
           url,
-          auth_type: (apiKey) ? 'api_key' : 'none',
-          api_key:   (apiKey) ? apiKey : null,
+          auth_type:      (apiKey) ? 'api_key' : 'none',
+          api_key:        (apiKey) ? apiKey : null,
+          share_base_url: (shareUrl) ? shareUrl : null,
         }),
       });
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);

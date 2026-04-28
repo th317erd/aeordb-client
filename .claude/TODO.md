@@ -1,24 +1,23 @@
-# TODO — File Browser Multi-Selection
+# Share Support Implementation — COMPLETE
 
-## Phase 1: Selection State + Visual — DONE
-- [x] `selectedEntries` (Set) and `lastSelectedIndex` on tab objects
-- [x] Plain click = single select + preview (dirs still navigate)
-- [x] Ctrl/Meta+Click = toggle selection
-- [x] Shift+Click = range select from anchor
-- [x] `.selected` CSS class with accent highlight
-- [x] Selection bar shows count + Clear + Delete Selected buttons
-- [x] Ctrl+A selects all, Escape clears
-- [x] Selection persists across pagination (name-based Set)
-- [x] Selection cleared on directory navigation
+## Phase 1: Rust Models & Remote Client
+- [x] Add share_base_url to RemoteConnection + request types
+- [x] Add effective_permissions to RemoteEntry + BrowseEntry
+- [x] Add 8 share methods to RemoteClient
 
-## Phase 2: Bulk Actions — DONE
-- [x] Bulk delete via selection bar or context menu
-- [x] Bulk move: drag multiple selected onto a folder
-- [x] Multi-entry drag data (`application/x-aeordb-entries`)
-- [x] `file-drag-start` event includes all selected paths/entries
+## Phase 2: Rust API Routes
+- [x] Create api/routes/shares.rs with 8 proxy handlers
+- [x] Wire routes in server.rs + api/routes.rs
 
-## Phase 3: Integration — DONE
-- [x] Plain click still previews single files
-- [x] Ctrl/Shift clicks select without previewing
-- [x] Context menu: bulk menu when right-clicking selected entry in multi-select
-- [x] Context menu: selects entry first when right-clicking unselected
+## Phase 3: Web Components - Client File Browser Share Methods
+- [x] Implement share abstract methods in aeor-file-browser.js (web-components)
+- [x] Add previewActions/selectionActions/bindSelectionBarExtra overrides
+- [x] Re-export flashButton in client shim
+
+## Phase 4: Connections UI - Share Domain Field
+- [x] Add Share Domain field to connection add form
+- [x] Include share_base_url in form submission
+
+## Phase 5: Build & Test
+- [x] cargo build (clean, only pre-existing dead_code warning)
+- [x] cargo test (160 tests passing)

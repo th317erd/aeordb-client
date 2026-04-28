@@ -46,6 +46,16 @@
 
 ## Test Count: 160 tests passing
 
+## Share Support (2026-04-28)
+- Share proxy routes: `/api/v1/shares/{relationship_id}/...` (8 endpoints)
+- `RemoteClient` has 8 share methods (get_shares, share, unshare, get_shareable_users, get_shareable_groups, create_share_link, get_share_links, revoke_share_link)
+- `RemoteConnection.share_base_url` — optional override for share link URLs (defaults to connection URL)
+- `RemoteConnection.effective_share_url()` — resolves share_base_url or falls back to url
+- `BrowseEntry.effective_permissions` — passthrough from remote server
+- `RemoteEntry.effective_permissions` — passthrough from remote server
+- Client file browser implements all share abstract methods from base class
+- `flashButton` re-exported in client shim (`aeor-file-view-shared.js`)
+
 ## GitHub
 - **Repo**: `git@github.com:th317erd/aeordb-client.git`
 - **User**: `th317erd`
