@@ -1,6 +1,7 @@
 'use strict';
 
 import { escapeHtml, escapeAttr, formatSize, bindResizeHandle, formatRelativeTime, showConfirm } from './aeor-file-view-shared.js';
+import { showRemoteFolderPicker } from './aeor-remote-folder-picker.js';
 
 class AeorSync extends HTMLElement {
   constructor() {
@@ -106,7 +107,10 @@ class AeorSync extends HTMLElement {
         </div>
         <div class="form-row">
           <label>Remote Path</label>
-          <input type="text" id="form-remote-path" placeholder="/docs/">
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="form-remote-path" placeholder="/docs/" style="flex: 1;">
+            <button class="secondary small" type="button" id="browse-remote-path">Browse</button>
+          </div>
         </div>
         <div class="form-row">
           <label>Local Path</label>
@@ -148,7 +152,10 @@ class AeorSync extends HTMLElement {
         </div>
         <div class="form-row">
           <label>Remote Path</label>
-          <input type="text" id="form-remote-path" value="${escapeAttr(relationship.remote_path)}">
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="form-remote-path" value="${escapeAttr(relationship.remote_path)}" style="flex: 1;">
+            <button class="secondary small" type="button" id="browse-remote-path">Browse</button>
+          </div>
         </div>
         <div class="form-row">
           <label>Local Path</label>
@@ -252,6 +259,36 @@ class AeorSync extends HTMLElement {
           }
         } catch (error) {
           console.error('Directory picker failed:', error);
+        }
+      });
+    }
+
+    const browseRemoteButton = this.querySelector('#browse-remote-path');
+    if (browseRemoteButton) {
+      browseRemoteButton.addEventListener('click', async () => {
+        // Get the selected connection to find its URL and API key
+        const connectionSelect = this.querySelector('#form-connection');
+        const connectionId = connectionSelect
+          ? connectionSelect.value
+          : (this._editingId
+            ? this._relationships.find((r) => r.id === this._editingId)?.remote_connection_id
+            : null);
+
+        if (!connectionId) {
+          window.aeorToast('Please select a connection first', 'warning');
+          return;
+        }
+
+        const connection = this._connections.find((c) => c.id === connectionId);
+        if (!connection) {
+          window.aeorToast('Connection not found', 'error');
+          return;
+        }
+
+        const path = await showRemoteFolderPicker(connection.url, connection.api_key);
+        if (path) {
+          const input = this.querySelector('#form-remote-path');
+          if (input) input.value = path;
         }
       });
     }

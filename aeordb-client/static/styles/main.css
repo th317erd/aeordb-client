@@ -1445,3 +1445,32 @@ aeor-conflicts {
 .toast-dismiss:hover {
   color: var(--text-primary);
 }
+
+/* ==========================================================================
+   Remote Folder Picker
+   ========================================================================== */
+
+.folder-picker-list {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+}
+
+.folder-picker-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--bg-tertiary);
+  transition: background-color 0.1s;
+}
+
+.folder-picker-item:last-child {
+  border-bottom: none;
+}
+
+.folder-picker-item:hover {
+  background-color: var(--bg-tertiary);
+}
