@@ -1,29 +1,31 @@
 'use strict';
 
-import { elements } from '../aeor/elements.js';
+import { showToast } from '../aeor/components/aeor-toast.js';
 
-const { div, span, button } = elements;
-
+/**
+ * <aeor-toasts> — SSE-driven toast notification bridge.
+ *
+ * Connects to the client's SSE event stream, debounces sync activity
+ * events over a 2-second window, groups by relationship, and shows
+ * summarized toasts via the shared showToast() function.
+ *
+ * Also exposes window.aeorToast for programmatic use by other components.
+ */
 class AeorToasts extends HTMLElement {
   constructor() {
     super();
-    this._counter = 0;
     this._eventSource = null;
-    this._pendingEvents = [];  // debounce buffer
+    this._pendingEvents = [];
     this._debounceTimer = null;
-    this._lastErrors = {};     // per-relationship error dedup: name → message
+    this._lastErrors = {};
   }
 
   connectedCallback() {
-    this.textContent = '';
-    this.appendChild(div.class('toast-container')().build(document));
-
-    // Expose global toast function
+    // Expose global toast function using the shared toast system
     window.aeorToast = (message, type = 'info', duration = 6000) => {
-      this._addToast(message, type, duration);
+      showToast(message, type, duration);
     };
 
-    // Connect to SSE for real-time sync events
     this._connectSSE();
   }
 
@@ -35,35 +37,6 @@ class AeorToasts extends HTMLElement {
     if (this._debounceTimer) {
       clearTimeout(this._debounceTimer);
     }
-  }
-
-  _addToast(message, type, duration) {
-    this._counter++;
-
-    const container = this.querySelector('.toast-container');
-    if (!container) return;
-
-    const toast = div.class(`toast toast-${type}`)(
-      span.class('toast-message')(message),
-      button.class('toast-dismiss')
-        .onClick(() => this._removeToast(toast))('\u2715'),
-    ).build(document);
-
-    toast.dataset.id = this._counter;
-    container.appendChild(toast);
-
-    requestAnimationFrame(() => toast.classList.add('toast-visible'));
-
-    if (duration > 0) {
-      setTimeout(() => this._removeToast(toast), duration);
-    }
-  }
-
-  _removeToast(toast) {
-    if (!toast || !toast.parentNode) return;
-    toast.classList.remove('toast-visible');
-    toast.classList.add('toast-exit');
-    setTimeout(() => toast.remove(), 300);
   }
 
   _connectSSE() {
@@ -83,17 +56,13 @@ class AeorToasts extends HTMLElement {
     };
   }
 
-  // Collect events over a 2-second window, then show summarized toasts
   _bufferEvent(event) {
     this._pendingEvents.push(event);
 
-    if (this._debounceTimer) {
+    if (this._debounceTimer)
       clearTimeout(this._debounceTimer);
-    }
 
-    this._debounceTimer = setTimeout(() => {
-      this._flushEvents();
-    }, 2000);
+    this._debounceTimer = setTimeout(() => this._flushEvents(), 2000);
   }
 
   _flushEvents() {
@@ -134,10 +103,9 @@ class AeorToasts extends HTMLElement {
         const errorMsg = errors[0];
         if (this._lastErrors[name] !== errorMsg) {
           this._lastErrors[name] = errorMsg;
-          window.aeorToast(`${name}: ${errorMsg}`, 'error', 10000);
+          showToast(`${name}: ${errorMsg}`, 'error', 10000);
         }
       } else {
-        // Clear last error for this relationship on success
         delete this._lastErrors[name];
       }
 
@@ -148,12 +116,13 @@ class AeorToasts extends HTMLElement {
       if (totalSynced > 0) parts.push(`${totalSynced} synced`);
 
       if (parts.length > 0) {
-        window.aeorToast(`${name}: ${parts.join(', ')}`, 'success');
+        showToast(`${name}: ${parts.join(', ')}`, 'success');
       }
     }
   }
 }
 
-customElements.define('aeor-toasts', AeorToasts);
+if (!customElements.get('aeor-toasts'))
+  customElements.define('aeor-toasts', AeorToasts);
 
 export { AeorToasts };
