@@ -1,5 +1,9 @@
 'use strict';
 
+import { elements } from '../aeor/elements.js';
+
+const { div, span, button } = elements;
+
 class AeorToasts extends HTMLElement {
   constructor() {
     super();
@@ -11,7 +15,8 @@ class AeorToasts extends HTMLElement {
   }
 
   connectedCallback() {
-    this.innerHTML = '<div class="toast-container"></div>';
+    this.textContent = '';
+    this.appendChild(div.class('toast-container')().build(document));
 
     // Expose global toast function
     window.aeorToast = (message, type = 'info', duration = 6000) => {
@@ -38,23 +43,13 @@ class AeorToasts extends HTMLElement {
     const container = this.querySelector('.toast-container');
     if (!container) return;
 
-    const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
+    const toast = div.class(`toast toast-${type}`)(
+      span.class('toast-message')(message),
+      button.class('toast-dismiss')
+        .onClick(() => this._removeToast(toast))('\u2715'),
+    ).build(document);
+
     toast.dataset.id = this._counter;
-
-    const messageSpan = document.createElement('span');
-    messageSpan.className = 'toast-message';
-    messageSpan.textContent = message;
-    toast.appendChild(messageSpan);
-
-    const dismissButton = document.createElement('button');
-    dismissButton.className = 'toast-dismiss';
-    dismissButton.textContent = '\u2715';
-    dismissButton.addEventListener('click', () => {
-      this._removeToast(toast);
-    });
-    toast.appendChild(dismissButton);
-
     container.appendChild(toast);
 
     requestAnimationFrame(() => toast.classList.add('toast-visible'));

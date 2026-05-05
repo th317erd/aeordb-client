@@ -1,12 +1,44 @@
 'use strict';
 
 import { escapeHtml, openFolder, directionLabel, formatUptime } from './aeor-file-view-shared.js';
+import { ReactiveState } from '../aeor/reactive-state.js';
+import { elements } from '../aeor/elements.js';
+
+const { div, span, button, h1, h2 } = elements;
 
 class AeorDashboard extends HTMLElement {
+  constructor() {
+    super();
+
+    this._state = new ReactiveState({
+      connectionsCount: '...',
+      connectionsClass: 'card-value',
+      syncCount: '...',
+      syncClass: 'card-value',
+      conflictsCount: '...',
+      conflictsClass: 'card-value',
+      statusValue: '...',
+      statusClass: 'card-value success',
+      version: '-',
+      uptime: '-',
+      clientId: '-',
+      clientName: '-',
+      configDir: '-',
+      dataDir: '-',
+    });
+
+    this._isConnected = false;
+    this._timeoutIds = [];
+    this._syncCardsContainer = null;
+
+    this._handleOpenConfigDir = this._handleOpenConfigDir.bind(this);
+    this._handleOpenDataDir = this._handleOpenDataDir.bind(this);
+    this._triggerSync = this._triggerSync.bind(this);
+  }
+
   connectedCallback() {
     this._isConnected = true;
-    this._timeoutIds = [];
-    this.render();
+    this._buildDOM();
     this._fetchData();
   }
 
@@ -22,69 +54,84 @@ class AeorDashboard extends HTMLElement {
     }
   }
 
-  render() {
-    this.innerHTML = `
-      <h1>Dashboard</h1>
+  _buildDOM() {
+    this.textContent = '';
 
-      <div class="cards">
-        <div class="card">
-          <div class="card-label">Connections</div>
-          <div class="card-value" id="connections-count"><span class="loading">...</span></div>
-        </div>
-        <div class="card">
-          <div class="card-label">Sync Relationships</div>
-          <div class="card-value" id="sync-count"><span class="loading">...</span></div>
-        </div>
-        <div class="card">
-          <div class="card-label">Conflicts</div>
-          <div class="card-value" id="conflicts-count"><span class="loading">...</span></div>
-        </div>
-        <div class="card">
-          <div class="card-label">Status</div>
-          <div class="card-value success" id="status-value"><span class="loading">...</span></div>
-        </div>
-      </div>
+    let root = div.context(this)(
+      h1('Dashboard'),
 
-      <div id="sync-cards"></div>
+      div.class('cards')(
+        div.class('card')(
+          div.class('card-label')('Connections'),
+          div.class.bindState((s) => s.connectionsClass, ['connectionsClass'])
+            .textContent.bindState((s) => String(s.connectionsCount), ['connectionsCount'])(),
+        ),
+        div.class('card')(
+          div.class('card-label')('Sync Relationships'),
+          div.class.bindState((s) => s.syncClass, ['syncClass'])
+            .textContent.bindState((s) => String(s.syncCount), ['syncCount'])(),
+        ),
+        div.class('card')(
+          div.class('card-label')('Conflicts'),
+          div.class.bindState((s) => s.conflictsClass, ['conflictsClass'])
+            .textContent.bindState((s) => String(s.conflictsCount), ['conflictsCount'])(),
+        ),
+        div.class('card')(
+          div.class('card-label')('Status'),
+          div.class.bindState((s) => s.statusClass, ['statusClass'])
+            .textContent.bindState((s) => s.statusValue, ['statusValue'])(),
+        ),
+      ),
 
-      <div class="info-section">
-        <h2>System Info</h2>
-        <div class="info-row">
-          <span class="info-label">Version</span>
-          <span class="info-value mono" id="version">-</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Uptime</span>
-          <span class="info-value mono" id="uptime">-</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Client ID</span>
-          <span class="info-value mono" id="client-id">-</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Client Name</span>
-          <span class="info-value mono" id="client-name">-</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Config Directory</span>
-          <span class="info-value mono" id="config-dir">-</span>
-          <button class="secondary small" id="open-config-dir" style="margin-left: 8px;">Open</button>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Data Directory</span>
-          <span class="info-value mono" id="data-dir">-</span>
-          <button class="secondary small" id="open-data-dir" style="margin-left: 8px;">Open</button>
-        </div>
-      </div>
-    `;
+      div.id('sync-cards')(),
 
-    this.querySelector('#open-config-dir').addEventListener('click', () => {
-      openFolder(this.querySelector('#config-dir').textContent);
-    });
+      div.class('info-section')(
+        h2('System Info'),
+        div.class('info-row')(
+          span.class('info-label')('Version'),
+          span.class('info-value mono')
+            .textContent.bindState((s) => s.version, ['version'])(),
+        ),
+        div.class('info-row')(
+          span.class('info-label')('Uptime'),
+          span.class('info-value mono')
+            .textContent.bindState((s) => s.uptime, ['uptime'])(),
+        ),
+        div.class('info-row')(
+          span.class('info-label')('Client ID'),
+          span.class('info-value mono')
+            .textContent.bindState((s) => s.clientId, ['clientId'])(),
+        ),
+        div.class('info-row')(
+          span.class('info-label')('Client Name'),
+          span.class('info-value mono')
+            .textContent.bindState((s) => s.clientName, ['clientName'])(),
+        ),
+        div.class('info-row')(
+          span.class('info-label')('Config Directory'),
+          span.class('info-value mono')
+            .textContent.bindState((s) => s.configDir, ['configDir'])(),
+          button.class('secondary small ml-sm').onClick(this._handleOpenConfigDir)('Open'),
+        ),
+        div.class('info-row')(
+          span.class('info-label')('Data Directory'),
+          span.class('info-value mono')
+            .textContent.bindState((s) => s.dataDir, ['dataDir'])(),
+          button.class('secondary small ml-sm').onClick(this._handleOpenDataDir)('Open'),
+        ),
+      ),
+    ).build(document);
 
-    this.querySelector('#open-data-dir').addEventListener('click', () => {
-      openFolder(this.querySelector('#data-dir').textContent);
-    });
+    this.appendChild(root);
+    this._syncCardsContainer = this.querySelector('#sync-cards');
+  }
+
+  _handleOpenConfigDir() {
+    openFolder(this._state.configDir);
+  }
+
+  _handleOpenDataDir() {
+    openFolder(this._state.dataDir);
   }
 
   async _fetchData() {
@@ -109,67 +156,71 @@ class AeorDashboard extends HTMLElement {
       const conflicts    = await conflictsResponse.json();
       const runnerStatus = await runnerResponse.json();
 
-      this._update('#connections-count', connections.length);
-      this._update('#sync-count', sync.length);
-      this._update('#conflicts-count', conflicts.length, (conflicts.length > 0) ? 'card-value warning' : 'card-value');
-      this._update('#status-value', status.status, 'card-value success');
-      this._update('#version', status.version);
-      this._update('#uptime', formatUptime(status.uptime));
-      this._update('#client-id', status.client_id || '-');
-      this._update('#client-name', status.client_name || '-');
-      this._update('#config-dir', status.config_dir || '-');
-      this._update('#data-dir', status.data_dir || '-');
+      this._state.connectionsCount = connections.length;
+      this._state.syncCount = sync.length;
+      this._state.conflictsCount = conflicts.length;
+      this._state.conflictsClass = (conflicts.length > 0) ? 'card-value warning' : 'card-value';
+      this._state.statusValue = status.status;
+      this._state.statusClass = 'card-value success';
+      this._state.version = status.version;
+      this._state.uptime = formatUptime(status.uptime);
+      this._state.clientId = status.client_id || '-';
+      this._state.clientName = status.client_name || '-';
+      this._state.configDir = status.config_dir || '-';
+      this._state.dataDir = status.data_dir || '-';
 
       this._renderSyncCards(sync, runnerStatus);
     } catch (error) {
-      this._update('#status-value', 'error', 'card-value error');
+      this._state.statusValue = 'error';
+      this._state.statusClass = 'card-value error';
     }
   }
 
   _renderSyncCards(relationships, runnerStatus) {
-    const container = this.querySelector('#sync-cards');
+    const container = this._syncCardsContainer;
     if (!container) return;
 
     if (relationships.length === 0) {
-      container.innerHTML = '';
+      container.textContent = '';
       return;
     }
 
-    const cards = relationships.map((rel) => {
+    // Direct DOM manipulation for complex list (per implementation guide)
+    container.textContent = '';
+
+    const heading = h2('Sync Status').build(document);
+    container.appendChild(heading);
+
+    const grid = div.class('sync-status-grid')().build(document);
+
+    for (const rel of relationships) {
       const runner  = runnerStatus.find((r) => r.relationship_id === rel.id);
       const running = runner && runner.running;
       const dotClass = running ? 'synced' : (rel.enabled ? 'pending' : 'not-synced');
       const statusText = running ? 'Running' : (rel.enabled ? 'Stopped' : 'Disabled');
 
-      return `
-        <div class="sync-status-card">
-          <div class="sync-status-header">
-            <div class="sync-status-name">
-              <span class="sync-badge ${dotClass}"></span>
-              ${escapeHtml(rel.name)}
-            </div>
-            <div class="sync-status-actions">
-              <button class="secondary small sync-now-btn" data-id="${rel.id}">Sync Now</button>
-            </div>
-          </div>
-          <div class="sync-status-details">
-            <span class="sync-status-detail">${directionLabel(rel.direction)}</span>
-            <span class="sync-status-detail">${escapeHtml(rel.remote_path)}</span>
-            <span class="sync-status-detail sync-status-state ${running ? 'success' : ''}">${statusText}</span>
-          </div>
-        </div>
-      `;
-    }).join('');
+      const card = div.class('sync-status-card')(
+        div.class('sync-status-header')(
+          div.class('sync-status-name')(
+            span.class('sync-badge ' + dotClass)(),
+            escapeHtml(rel.name),
+          ),
+          div.class('sync-status-actions')(
+            button.class('secondary small sync-now-btn')
+              .onClick((e) => this._triggerSync(e.currentTarget, rel.id))('Sync Now'),
+          ),
+        ),
+        div.class('sync-status-details')(
+          span.class('sync-status-detail')(directionLabel(rel.direction)),
+          span.class('sync-status-detail')(escapeHtml(rel.remote_path)),
+          span.class('sync-status-detail sync-status-state' + (running ? ' success' : ''))(statusText),
+        ),
+      ).build(document);
 
-    container.innerHTML = `
-      <h2>Sync Status</h2>
-      <div class="sync-status-grid">${cards}</div>
-    `;
+      grid.appendChild(card);
+    }
 
-    // Bind sync-now buttons
-    container.querySelectorAll('.sync-now-btn').forEach((btn) => {
-      btn.addEventListener('click', () => this._triggerSync(btn, btn.dataset.id));
-    });
+    container.appendChild(grid);
   }
 
   async _triggerSync(btn, id) {
@@ -184,7 +235,6 @@ class AeorDashboard extends HTMLElement {
       const pull     = result.pull || {};
       const push     = result.push || {};
 
-      // Show result briefly in the button
       const pulled = pull.files_pulled || 0;
       const pushed = push.files_pushed || 0;
       btn.textContent = `\u2713 ${pulled} pulled, ${pushed} pushed`;
@@ -209,17 +259,6 @@ class AeorDashboard extends HTMLElement {
       }, 3000));
     }
   }
-
-  _update(selector, value, className) {
-    const element = this.querySelector(selector);
-    if (!element)
-      return;
-
-    element.textContent = value;
-    if (className)
-      element.className = className;
-  }
-
 }
 
 customElements.define('aeor-dashboard', AeorDashboard);

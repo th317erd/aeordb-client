@@ -1,7 +1,9 @@
 'use strict';
 
-import { escapeHtml } from './aeor-file-view-shared.js';
+import { elements } from '../aeor/elements.js';
 import '../aeor/components/aeor-modal.js';
+
+const { div, span, button } = elements;
 
 /**
  * Remote folder picker dialog.
@@ -21,10 +23,10 @@ export async function showRemoteFolderPicker(connectionUrl, apiKey) {
     let loading = false;
     let resolved = false;
 
-    const modal = document.createElement('aeor-modal');
+    let modal = document.createElement('aeor-modal');
     modal.title = 'Select Remote Folder';
 
-    const finish = (result) => {
+    let finish = (result) => {
       if (resolved) return;
       resolved = true;
       modal.remove();
@@ -54,18 +56,18 @@ export async function showRemoteFolderPicker(connectionUrl, apiKey) {
       render();
 
       try {
-        const cleanPath = path.replace(/\/+$/, '') || '';
-        const url = `${connectionUrl}/files${cleanPath}/?limit=500`;
+        let cleanPath = path.replace(/\/+$/, '') || '';
+        let url = `${connectionUrl}/files${cleanPath}/?limit=500`;
 
-        const headers = {};
-        const jwt = await getJwt();
+        let headers = {};
+        let jwt = await getJwt();
         if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
         else if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
-        const response = await fetch(url, { headers });
+        let response = await fetch(url, { headers });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-        const data = await response.json();
+        let data = await response.json();
         entries = (data.items || []).filter((e) => e.entry_type === 3); // directories only
       } catch (error) {
         entries = [];
@@ -76,86 +78,68 @@ export async function showRemoteFolderPicker(connectionUrl, apiKey) {
       render();
     }
 
-    function renderBreadcrumbs() {
-      const segments = currentPath.split('/').filter((s) => s.length > 0);
-      let html = '<span class="folder-picker-crumb" data-path="/">/</span>';
+    function buildBreadcrumbs() {
+      let segments = currentPath.split('/').filter((s) => s.length > 0);
+      let crumbs = [
+        span.class('folder-picker-crumb')
+          .onClick(() => { currentPath = '/'; fetchListing(currentPath); })('/'),
+      ];
+
       let accumulated = '/';
-      for (const segment of segments) {
+      for (let segment of segments) {
         accumulated += segment + '/';
-        html += ` <span style="color:var(--text-muted)">/</span> <span class="folder-picker-crumb" data-path="${escapeHtml(accumulated)}">${escapeHtml(segment)}</span>`;
+        let crumbPath = accumulated;
+        crumbs.push(
+          span.class('folder-picker-separator')(' / '),
+          span.class('folder-picker-crumb')
+            .onClick(() => { currentPath = crumbPath; fetchListing(currentPath); })(segment),
+        );
       }
-      return html;
+
+      return div.class('folder-picker-breadcrumbs')(...crumbs).build(document);
+    }
+
+    function buildFolderList() {
+      if (loading) {
+        return div.class('folder-picker-status')('Loading...').build(document);
+      }
+
+      if (entries.length === 0) {
+        return div.class('folder-picker-status')('No subfolders').build(document);
+      }
+
+      let items = entries.map((entry) => {
+        return div.class('folder-picker-item')
+          .onClick(() => {
+            currentPath = currentPath.replace(/\/+$/, '') + '/' + entry.name + '/';
+            fetchListing(currentPath);
+          })(
+            span.class('folder-picker-icon')('\uD83D\uDCC1'),
+            entry.name,
+          );
+      });
+
+      return div.class('folder-picker-list')(...items).build(document);
+    }
+
+    function buildFooter() {
+      return div.class('folder-picker-footer')(
+        div.class('folder-picker-current-path')(currentPath),
+        div.class('folder-picker-actions')(
+          button.class('secondary').onClick(() => finish(null))('Cancel'),
+          button.class('primary').onClick(() => finish(currentPath))('Select This Folder'),
+        ),
+      ).build(document);
     }
 
     function render() {
-      let content = `
-        <div style="margin-bottom: 12px; font-size: 0.9rem; color: var(--text-secondary);">
-          ${renderBreadcrumbs()}
-        </div>
-      `;
+      let body = modal.querySelector('.aeor-modal__body');
+      if (!body) return;
 
-      if (loading) {
-        content += '<div style="color: var(--text-muted); padding: 20px 0;">Loading...</div>';
-      } else if (entries.length === 0) {
-        content += '<div style="color: var(--text-muted); padding: 20px 0;">No subfolders</div>';
-      } else {
-        content += '<div class="folder-picker-list">';
-        for (const entry of entries) {
-          content += `
-            <div class="folder-picker-item" data-name="${escapeHtml(entry.name)}">
-              <span style="margin-right: 8px;">\uD83D\uDCC1</span>${escapeHtml(entry.name)}
-            </div>
-          `;
-        }
-        content += '</div>';
-      }
-
-      content += `
-        <div style="display: flex; gap: 8px; justify-content: space-between; align-items: center; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border, #30363d);">
-          <div style="font-family: var(--font-mono, monospace); font-size: 0.85rem; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-            ${escapeHtml(currentPath)}
-          </div>
-          <div style="display: flex; gap: 8px; flex-shrink: 0;">
-            <button class="secondary folder-picker-cancel">Cancel</button>
-            <button class="primary folder-picker-select">Select This Folder</button>
-          </div>
-        </div>
-      `;
-
-      modal.innerHTML = content;
-      bindEvents();
-    }
-
-    function bindEvents() {
-      // Breadcrumb clicks
-      modal.querySelectorAll('.folder-picker-crumb').forEach((el) => {
-        el.style.cursor = 'pointer';
-        el.style.color = 'var(--accent, #f97316)';
-        el.addEventListener('click', () => {
-          currentPath = el.dataset.path;
-          fetchListing(currentPath);
-        });
-      });
-
-      // Folder clicks
-      modal.querySelectorAll('.folder-picker-item').forEach((el) => {
-        el.addEventListener('click', () => {
-          currentPath = currentPath.replace(/\/+$/, '') + '/' + el.dataset.name + '/';
-          fetchListing(currentPath);
-        });
-      });
-
-      // Select button
-      const selectBtn = modal.querySelector('.folder-picker-select');
-      if (selectBtn) {
-        selectBtn.addEventListener('click', () => finish(currentPath));
-      }
-
-      // Cancel button
-      const cancelBtn = modal.querySelector('.folder-picker-cancel');
-      if (cancelBtn) {
-        cancelBtn.addEventListener('click', () => finish(null));
-      }
+      body.textContent = '';
+      body.appendChild(buildBreadcrumbs());
+      body.appendChild(buildFolderList());
+      body.appendChild(buildFooter());
     }
 
     document.body.appendChild(modal);

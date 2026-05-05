@@ -1,21 +1,36 @@
 'use strict';
 
-import { escapeHtml, escapeAttr, formatSize, bindResizeHandle, formatRelativeTime, showConfirm } from './aeor-file-view-shared.js';
+import { escapeHtml, formatSize, bindResizeHandle, formatRelativeTime, showConfirm } from './aeor-file-view-shared.js';
 import { showRemoteFolderPicker } from './aeor-remote-folder-picker.js';
+import { ReactiveState } from '../aeor/reactive-state.js';
+import { elements } from '../aeor/elements.js';
+
+const { div, h1, h2, h3, label, input, select, option, button, table, thead, tbody, tr, th, td, span, a } = elements;
 
 class AeorSync extends HTMLElement {
   constructor() {
     super();
-    this._relationships = [];
-    this._connections   = [];
-    this._showAddForm   = false;
-    this._editingId     = null;
-    this._selectedId    = null;
-    this._activity      = [];
+
+    this._state = new ReactiveState({
+      relationships: [],
+      connections:   [],
+      showAddForm:   false,
+      editingId:     null,
+      selectedId:    null,
+      activity:      [],
+    });
+
+    this._onAddToggle       = this._onAddToggle.bind(this);
+    this._onGoConnections   = this._onGoConnections.bind(this);
+    this._onFormSubmit      = this._onFormSubmit.bind(this);
+    this._onFormCancel      = this._onFormCancel.bind(this);
+    this._onBrowseLocal     = this._onBrowseLocal.bind(this);
+    this._onBrowseRemote    = this._onBrowseRemote.bind(this);
+    this._onActivityClose   = this._onActivityClose.bind(this);
   }
 
   connectedCallback() {
-    this.render();
+    this._buildDOM();
     this._fetchData();
   }
 
@@ -23,377 +38,320 @@ class AeorSync extends HTMLElement {
     this._fetchData();
   }
 
-  render() {
-    const hasConnections = this._connections.length > 0;
-    const canAdd         = hasConnections;
+  _buildDOM() {
+    this.textContent = '';
 
-    this.innerHTML = `
-      <div class="page-header">
-        <h1>Sync Relationships</h1>
-        <button id="add-btn" class="${(this._showAddForm || this._editingId) ? 'secondary' : 'primary'}" ${(!canAdd && !this._showAddForm && !this._editingId) ? 'disabled' : ''}>${(this._showAddForm || this._editingId) ? 'Cancel' : 'Add Sync'}</button>
-      </div>
+    let element = div.context(this)(
+      // Page header
+      div.class('page-header')(
+        h1('Sync Relationships'),
+        button.id('add-btn')
+          .class.bindState(
+            (s) => (s.showAddForm || s.editingId) ? 'secondary' : 'primary',
+            ['showAddForm', 'editingId'],
+          )
+          .disabled.bindState(
+            (s) => s.connections.length === 0 && !s.showAddForm && !s.editingId,
+            ['connections', 'showAddForm', 'editingId'],
+          )
+          .textContent.bindState(
+            (s) => (s.showAddForm || s.editingId) ? 'Cancel' : 'Add Sync',
+            ['showAddForm', 'editingId'],
+          )
+          .onClick(this._onAddToggle)(),
+      ),
 
-      ${(this._showAddForm) ? this._renderAddForm() : ''}
-      ${(this._editingId) ? this._renderEditForm() : ''}
+      // Form container — rebuilt dynamically
+      div.id('form-container')(),
 
-      <div class="sync-list">
-        ${(this._relationships.length === 0)
-          ? (hasConnections)
-            ? '<div class="empty-state">No sync relationships configured.</div>'
-            : '<div class="empty-state">You must first add a <a href="#" id="go-connections">Connection</a> before you can set up a sync.</div>'
-          : this._renderTable()
-        }
-      </div>
+      // Table / empty state container — rebuilt dynamically
+      div.class('sync-list').id('table-container')(),
 
-      <div class="sync-activity-panel" style="display:none">
-        <div class="preview-resize-handle"></div>
-        <div class="preview-header">
-          <h3 class="preview-title"></h3>
-          <div class="preview-actions">
-            <button class="secondary small activity-close">\u2715</button>
-          </div>
-        </div>
-        <div class="activity-feed"></div>
-      </div>
-    `;
+      // Activity panel
+      div.class('sync-activity-panel').id('activity-panel')
+        .hidden.bindState(
+          (s) => !s.selectedId,
+          ['selectedId'],
+        )(
+        div.class('preview-resize-handle')(),
+        div.class('preview-header')(
+          h3.class('preview-title').id('activity-title')(),
+          div.class('preview-actions')(
+            button.class('secondary small').onClick(this._onActivityClose)('\u2715'),
+          ),
+        ),
+        div.class('activity-feed').id('activity-feed')(),
+      ),
+    ).build(document);
 
-    const addButton = this.querySelector('#add-btn');
-    if (addButton && (canAdd || this._showAddForm || this._editingId)) {
-      addButton.addEventListener('click', () => {
-        this._showAddForm = !this._showAddForm && !this._editingId;
-        this._editingId   = null;
-        this.render();
-      });
-    }
+    this.appendChild(element);
 
-    const goConnectionsLink = this.querySelector('#go-connections');
-    if (goConnectionsLink) {
-      goConnectionsLink.addEventListener('click', (event) => {
-        event.preventDefault();
-        this.dispatchEvent(new CustomEvent('navigate', {
-          detail:  { page: 'connections', autoAdd: true },
-          bubbles: true,
-        }));
-      });
-    }
-
-    if (this._showAddForm || this._editingId)
-      this._bindFormEvents();
-
-    this._bindTableEvents();
-    this._bindActivityEvents();
-
-    // Restore selection
-    if (this._selectedId) {
-      this._fetchActivity(this._selectedId);
-    }
-  }
-
-  _renderAddForm() {
-    const connectionOptions = this._connections.map((connection) =>
-      `<option value="${escapeAttr(connection.id)}">${escapeHtml(connection.name)} (${escapeHtml(connection.url)})</option>`
-    ).join('');
-
-    return `
-      <div class="form-panel">
-        <h2>New Sync Relationship</h2>
-        <div class="form-row">
-          <label>Name</label>
-          <input type="text" id="form-name" placeholder="My Documents">
-        </div>
-        <div class="form-row">
-          <label>Connection</label>
-          <select id="form-connection">${connectionOptions}</select>
-        </div>
-        <div class="form-row">
-          <label>Remote Path</label>
-          <div style="display: flex; gap: 8px;">
-            <input type="text" id="form-remote-path" placeholder="/docs/" style="flex: 1;">
-            <button class="secondary small" type="button" id="browse-remote-path">Browse</button>
-          </div>
-        </div>
-        <div class="form-row">
-          <label>Local Path</label>
-          <div style="display: flex; gap: 8px;">
-            <input type="text" id="form-local-path" placeholder="/home/user/Documents" style="flex: 1;">
-            <button class="secondary small" type="button" id="browse-local-path">Browse</button>
-          </div>
-        </div>
-        <div class="form-row">
-          <label>Direction</label>
-          <select id="form-direction">
-            <option value="pull_only">Pull Only</option>
-            <option value="push_only">Push Only</option>
-            <option value="bidirectional">Bidirectional</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>Filter (optional, comma-separated globs)</label>
-          <input type="text" id="form-filter" placeholder="*.pdf, !*.tmp">
-        </div>
-        <div class="form-actions">
-          <button class="primary" id="form-submit">Create</button>
-          <button class="secondary" id="form-cancel">Cancel</button>
-        </div>
-      </div>
-    `;
-  }
-
-  _renderEditForm() {
-    const relationship = this._relationships.find((r) => r.id === this._editingId);
-    if (!relationship) return '';
-
-    return `
-      <div class="form-panel">
-        <h2>Edit Sync Relationship</h2>
-        <div class="form-row">
-          <label>Name</label>
-          <input type="text" id="form-name" value="${escapeAttr(relationship.name || '')}">
-        </div>
-        <div class="form-row">
-          <label>Remote Path</label>
-          <div style="display: flex; gap: 8px;">
-            <input type="text" id="form-remote-path" value="${escapeAttr(relationship.remote_path)}" style="flex: 1;">
-            <button class="secondary small" type="button" id="browse-remote-path">Browse</button>
-          </div>
-        </div>
-        <div class="form-row">
-          <label>Local Path</label>
-          <div style="display: flex; gap: 8px;">
-            <input type="text" id="form-local-path" value="${escapeAttr(relationship.local_path)}" style="flex: 1;">
-            <button class="secondary small" type="button" id="browse-local-path">Browse</button>
-          </div>
-        </div>
-        <div class="form-row">
-          <label>Direction</label>
-          <select id="form-direction">
-            <option value="pull_only" ${(relationship.direction === 'pull_only') ? 'selected' : ''}>Pull Only</option>
-            <option value="push_only" ${(relationship.direction === 'push_only') ? 'selected' : ''}>Push Only</option>
-            <option value="bidirectional" ${(relationship.direction === 'bidirectional') ? 'selected' : ''}>Bidirectional</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>Filter (optional, comma-separated globs)</label>
-          <input type="text" id="form-filter" value="${escapeAttr(relationship.filter || '')}">
-        </div>
-        <div class="form-row">
-          <label>Delete Propagation</label>
-          <label class="checkbox-row">
-            <input type="checkbox" class="checkbox-large" id="form-delete-local-to-remote" ${(relationship.delete_propagation && relationship.delete_propagation.local_to_remote) ? 'checked' : ''}>
-            When a file is deleted locally, also delete it on the remote
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" class="checkbox-large" id="form-delete-remote-to-local" ${(relationship.delete_propagation && relationship.delete_propagation.remote_to_local) ? 'checked' : ''}>
-            When a file is deleted on the remote, also delete it locally
-          </label>
-        </div>
-        <div class="form-actions">
-          <button class="primary" id="form-submit">Save Changes</button>
-          <button class="secondary" id="form-cancel">Cancel</button>
-        </div>
-      </div>
-    `;
-  }
-
-  _renderTable() {
-    const rows = this._relationships.map((relationship) => {
-      const isSelected = (relationship.id === this._selectedId);
-      return `
-        <tr class="sync-row ${isSelected ? 'selected' : ''}" data-id="${relationship.id}">
-          <td class="mono muted">${escapeHtml(relationship.id.substring(0, 8))}...</td>
-          <td>${escapeHtml(relationship.name)}</td>
-          <td>${escapeHtml(relationship.remote_path)}</td>
-          <td>${escapeHtml(relationship.direction)}</td>
-          <td><span class="badge ${(relationship.enabled) ? 'success' : 'warning'}" style="min-width: 72px; text-align: center; display: inline-block;">${(relationship.enabled) ? 'enabled' : 'disabled'}</span></td>
-          <td class="actions">
-            <button class="success small trigger-btn" data-id="${relationship.id}">Sync</button>
-            <button class="secondary small edit-btn" data-id="${relationship.id}">Edit</button>
-            <button class="secondary small toggle-btn" data-id="${relationship.id}" data-enabled="${relationship.enabled}" style="min-width: 70px;">${(relationship.enabled) ? 'Pause' : 'Resume'}</button>
-            <button class="danger small delete-btn" data-id="${relationship.id}">Delete</button>
-          </td>
-        </tr>
-      `;
-    }).join('');
-
-    return `
-      <table>
-        <thead>
-          <tr><th>ID</th><th>Name</th><th>Remote</th><th>Direction</th><th>Status</th><th>Actions</th></tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    `;
-  }
-
-  _bindFormEvents() {
-    const submitButton = this.querySelector('#form-submit');
-    const cancelButton = this.querySelector('#form-cancel');
-
-    if (submitButton) {
-      submitButton.addEventListener('click', () => {
-        if (this._editingId)
-          this._submitEdit();
-        else
-          this._submitForm();
-      });
-    }
-
-    if (cancelButton) {
-      cancelButton.addEventListener('click', () => {
-        this._showAddForm = false;
-        this._editingId   = null;
-        this.render();
-      });
-    }
-
-    const browseButton = this.querySelector('#browse-local-path');
-    if (browseButton) {
-      browseButton.addEventListener('click', async () => {
-        try {
-          const response = await fetch('/api/v1/pick-directory', { method: 'POST' });
-          if (!response.ok) throw new Error(`Request failed: ${response.status}`);
-          const result   = await response.json();
-          if (result.path) {
-            const input = this.querySelector('#form-local-path');
-            if (input) input.value = result.path;
-          }
-        } catch (error) {
-          console.error('Directory picker failed:', error);
-        }
-      });
-    }
-
-    const browseRemoteButton = this.querySelector('#browse-remote-path');
-    if (browseRemoteButton) {
-      browseRemoteButton.addEventListener('click', async () => {
-        // Get the selected connection to find its URL and API key
-        const connectionSelect = this.querySelector('#form-connection');
-        const connectionId = connectionSelect
-          ? connectionSelect.value
-          : (this._editingId
-            ? this._relationships.find((r) => r.id === this._editingId)?.remote_connection_id
-            : null);
-
-        if (!connectionId) {
-          window.aeorToast('Please select a connection first', 'warning');
-          return;
-        }
-
-        const connection = this._connections.find((c) => c.id === connectionId);
-        if (!connection) {
-          window.aeorToast('Connection not found', 'error');
-          return;
-        }
-
-        const path = await showRemoteFolderPicker(connection.url, connection.api_key);
-        if (path) {
-          const input = this.querySelector('#form-remote-path');
-          if (input) input.value = path;
-        }
-      });
-    }
-  }
-
-  _bindTableEvents() {
-    // Row click — select to show activity
-    this.querySelectorAll('.sync-row').forEach((row) => {
-      row.addEventListener('click', (event) => {
-        if (event.target.closest('button')) return;
-        const id = row.dataset.id;
-        if (this._selectedId === id) {
-          this._selectedId = null;
-          this._hideActivity();
-          row.classList.remove('selected');
-        } else {
-          const prev = this.querySelector('.sync-row.selected');
-          if (prev) prev.classList.remove('selected');
-          this._selectedId = id;
-          row.classList.add('selected');
-          this._fetchActivity(id);
-        }
-      });
-    });
-
-    this.querySelectorAll('.trigger-btn').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        this._triggerSync(button.dataset.id);
-      });
-    });
-    this.querySelectorAll('.edit-btn').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        this._editingId   = button.dataset.id;
-        this._showAddForm = false;
-        this.render();
-      });
-    });
-    this.querySelectorAll('.toggle-btn').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        this._toggleSync(button.dataset.id, button.dataset.enabled === 'true');
-      });
-    });
-    this.querySelectorAll('.delete-btn').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        this._deleteSync(button.dataset.id);
-      });
-    });
-  }
-
-  _bindActivityEvents() {
-    const closeBtn = this.querySelector('.activity-close');
-    if (closeBtn) {
-      closeBtn.addEventListener('click', () => {
-        this._selectedId = null;
-        this._hideActivity();
-        const prev = this.querySelector('.sync-row.selected');
-        if (prev) prev.classList.remove('selected');
-      });
-    }
-
-    const resizeHandle = this.querySelector('.sync-activity-panel .preview-resize-handle');
-    const panel = this.querySelector('.sync-activity-panel');
+    // Bind resize handle
+    const resizeHandle = this.querySelector('.preview-resize-handle');
+    const panel = this.querySelector('#activity-panel');
     if (resizeHandle && panel) {
       bindResizeHandle(resizeHandle, panel);
     }
+
+    // Listen for state changes that require DOM rebuilds
+    this._state.on('showAddForm', () => this._rebuildFormContainer());
+    this._state.on('editingId', () => this._rebuildFormContainer());
+    this._state.on('relationships', () => this._rebuildTableContainer());
+    this._state.on('connections', () => {
+      this._rebuildTableContainer();
+      this._rebuildFormContainer();
+    });
+    this._state.on('selectedId', () => this._rebuildTableContainer());
+    this._state.on('activity', () => this._rebuildActivityFeed());
   }
 
-  async _fetchActivity(id) {
-    const relationship = this._relationships.find((r) => r.id === id);
-    if (!relationship) return;
+  // ---------------------------------------------------------------------------
+  // Form container — add or edit form, rebuilt on state change
+  // ---------------------------------------------------------------------------
 
-    const panel = this.querySelector('.sync-activity-panel');
-    if (!panel) return;
+  _rebuildFormContainer() {
+    const container = this.querySelector('#form-container');
+    if (!container) return;
+    container.textContent = '';
 
-    panel.querySelector('.preview-title').textContent = `${relationship.name} — Activity`;
-    panel.style.display = '';
-
-    const feed = panel.querySelector('.activity-feed');
-    feed.innerHTML = '<div class="loading">Loading activity...</div>';
-
-    try {
-      const response = await fetch(`/api/v1/sync/${id}/activity`);
-      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
-      this._activity = await response.json();
-      this._renderActivityFeed(feed);
-    } catch (error) {
-      feed.innerHTML = '<div class="empty-state">Failed to load activity.</div>';
+    const s = this._state;
+    if (s.showAddForm) {
+      container.appendChild(this._buildAddForm());
+    } else if (s.editingId) {
+      const form = this._buildEditForm();
+      if (form) container.appendChild(form);
     }
   }
 
-  _renderActivityFeed(container) {
-    if (this._activity.length === 0) {
-      container.innerHTML = '<div class="empty-state">No sync activity recorded yet.</div>';
+  _buildAddForm() {
+    const connectionOptions = this._state.connections.map((c) =>
+      option.value(c.id)(`${c.name} (${c.url})`)
+    );
+
+    return div.class('form-panel').context(this)(
+      h2('New Sync Relationship'),
+      div.class('form-row')(
+        label('Name'),
+        input.type('text').id('form-name').placeholder('My Documents')(),
+      ),
+      div.class('form-row')(
+        label('Connection'),
+        select.id('form-connection')(...connectionOptions),
+      ),
+      div.class('form-row')(
+        label('Remote Path'),
+        div.class('dir-row')(
+          input.type('text').id('form-remote-path').class('flex-fill').placeholder('/docs/')(),
+          button.class('secondary small').onClick(this._onBrowseRemote)('Browse'),
+        ),
+      ),
+      div.class('form-row')(
+        label('Local Path'),
+        div.class('dir-row')(
+          input.type('text').id('form-local-path').class('flex-fill').placeholder('/home/user/Documents')(),
+          button.class('secondary small').onClick(this._onBrowseLocal)('Browse'),
+        ),
+      ),
+      div.class('form-row')(
+        label('Direction'),
+        select.id('form-direction')(
+          option.value('pull_only')('Pull Only'),
+          option.value('push_only')('Push Only'),
+          option.value('bidirectional')('Bidirectional'),
+        ),
+      ),
+      div.class('form-row')(
+        label('Filter (optional, comma-separated globs)'),
+        input.type('text').id('form-filter').placeholder('*.pdf, !*.tmp')(),
+      ),
+      div.class('form-actions')(
+        button.class('primary').onClick(this._onFormSubmit)('Create'),
+        button.class('secondary').onClick(this._onFormCancel)('Cancel'),
+      ),
+    ).build(document);
+  }
+
+  _buildEditForm() {
+    const relationship = this._state.relationships.find((r) => r.id === this._state.editingId);
+    if (!relationship) return null;
+
+    const directionValues = ['pull_only', 'push_only', 'bidirectional'];
+    const directionLabels = ['Pull Only', 'Push Only', 'Bidirectional'];
+    const directionOptions = directionValues.map((val, i) => {
+      if (relationship.direction === val)
+        return option.value(val).selected('selected')(directionLabels[i]);
+      return option.value(val)(directionLabels[i]);
+    });
+
+    const el = div.class('form-panel').context(this)(
+      h2('Edit Sync Relationship'),
+      div.class('form-row')(
+        label('Name'),
+        input.type('text').id('form-name')(),
+      ),
+      div.class('form-row')(
+        label('Remote Path'),
+        div.class('dir-row')(
+          input.type('text').id('form-remote-path').class('flex-fill')(),
+          button.class('secondary small').onClick(this._onBrowseRemote)('Browse'),
+        ),
+      ),
+      div.class('form-row')(
+        label('Local Path'),
+        div.class('dir-row')(
+          input.type('text').id('form-local-path').class('flex-fill')(),
+          button.class('secondary small').onClick(this._onBrowseLocal)('Browse'),
+        ),
+      ),
+      div.class('form-row')(
+        label('Direction'),
+        select.id('form-direction')(...directionOptions),
+      ),
+      div.class('form-row')(
+        label('Filter (optional, comma-separated globs)'),
+        input.type('text').id('form-filter')(),
+      ),
+      div.class('form-row')(
+        label('Delete Propagation'),
+        label.class('checkbox-row')(
+          input.type('checkbox').class('checkbox-large').id('form-delete-local-to-remote')(),
+          'When a file is deleted locally, also delete it on the remote',
+        ),
+        label.class('checkbox-row')(
+          input.type('checkbox').class('checkbox-large').id('form-delete-remote-to-local')(),
+          'When a file is deleted on the remote, also delete it locally',
+        ),
+      ),
+      div.class('form-actions')(
+        button.class('primary').onClick(this._onFormSubmit)('Save Changes'),
+        button.class('secondary').onClick(this._onFormCancel)('Cancel'),
+      ),
+    ).build(document);
+
+    // Populate values after build
+    el.querySelector('#form-name').value = relationship.name || '';
+    el.querySelector('#form-remote-path').value = relationship.remote_path;
+    el.querySelector('#form-local-path').value = relationship.local_path;
+    el.querySelector('#form-filter').value = relationship.filter || '';
+
+    const delLocalToRemote = el.querySelector('#form-delete-local-to-remote');
+    if (delLocalToRemote) delLocalToRemote.checked = !!(relationship.delete_propagation && relationship.delete_propagation.local_to_remote);
+
+    const delRemoteToLocal = el.querySelector('#form-delete-remote-to-local');
+    if (delRemoteToLocal) delRemoteToLocal.checked = !!(relationship.delete_propagation && relationship.delete_propagation.remote_to_local);
+
+    return el;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Table container — relationship rows or empty state
+  // ---------------------------------------------------------------------------
+
+  _rebuildTableContainer() {
+    const container = this.querySelector('#table-container');
+    if (!container) return;
+    container.textContent = '';
+
+    const s = this._state;
+    if (s.relationships.length === 0) {
+      if (s.connections.length > 0) {
+        container.appendChild(
+          div.class('empty-state')('No sync relationships configured.').build(document)
+        );
+      } else {
+        const emptyEl = div.class('empty-state').context(this)(
+          'You must first add a ',
+          a.href('#').onClick(this._onGoConnections)('Connection'),
+          ' before you can set up a sync.',
+        ).build(document);
+        container.appendChild(emptyEl);
+      }
       return;
     }
 
-    const items = this._activity.map((event) => {
+    const rows = s.relationships.map((rel) => {
+      const isSelected = (rel.id === s.selectedId);
+
+      const row = tr.class(isSelected ? 'sync-row selected' : 'sync-row')(
+        td.class('mono muted')(`${rel.id.substring(0, 8)}...`),
+        td(escapeHtml(rel.name)),
+        td(escapeHtml(rel.remote_path)),
+        td(escapeHtml(rel.direction)),
+        td(
+          span.class(rel.enabled ? 'badge badge-fixed success' : 'badge badge-fixed warning')(
+            rel.enabled ? 'enabled' : 'disabled',
+          ),
+        ),
+        td.class('actions')(
+          button.class('success small')('Sync'),
+          button.class('secondary small')('Edit'),
+          button.class('secondary small btn-toggle')(rel.enabled ? 'Pause' : 'Resume'),
+          button.class('danger small')('Delete'),
+        ),
+      ).build(document);
+
+      // Store relationship id on the row
+      row.dataset.id = rel.id;
+
+      // Row click — select to show activity
+      row.addEventListener('click', (event) => {
+        if (event.target.closest('button')) return;
+        if (this._state.selectedId === rel.id) {
+          this._state.selectedId = null;
+        } else {
+          this._state.selectedId = rel.id;
+          this._fetchActivity(rel.id);
+        }
+      });
+
+      // Button events
+      const buttons = row.querySelectorAll('button');
+      buttons[0].addEventListener('click', (e) => { e.stopPropagation(); this._triggerSync(rel.id); });
+      buttons[1].addEventListener('click', (e) => { e.stopPropagation(); this._state.editingId = rel.id; this._state.showAddForm = false; });
+      buttons[2].addEventListener('click', (e) => { e.stopPropagation(); this._toggleSync(rel.id, rel.enabled); });
+      buttons[3].addEventListener('click', (e) => { e.stopPropagation(); this._deleteSync(rel.id); });
+
+      return row;
+    });
+
+    const tbl = table(
+      thead(
+        tr(
+          th('ID'), th('Name'), th('Remote'), th('Direction'), th('Status'), th('Actions'),
+        ),
+      ),
+      tbody(),
+    ).build(document);
+
+    const tbodyEl = tbl.querySelector('tbody');
+    for (const row of rows) {
+      tbodyEl.appendChild(row);
+    }
+
+    container.appendChild(tbl);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Activity feed — rebuilt when activity state changes
+  // ---------------------------------------------------------------------------
+
+  _rebuildActivityFeed() {
+    const feed = this.querySelector('#activity-feed');
+    if (!feed) return;
+    feed.textContent = '';
+
+    const activity = this._state.activity;
+    if (activity.length === 0) {
+      feed.appendChild(
+        div.class('empty-state')('No sync activity recorded yet.').build(document)
+      );
+      return;
+    }
+
+    for (const event of activity) {
       const time = formatRelativeTime(event.timestamp);
       const icon = this._eventIcon(event.event_type);
       const hasErrors = event.errors && event.errors.length > 0;
-      const errorClass = hasErrors ? ' activity-item-error' : '';
 
       let detail = escapeHtml(event.summary);
       if (event.files_affected > 0) {
@@ -406,40 +364,121 @@ class AeorSync extends HTMLElement {
         detail += ` \u00B7 ${event.duration_ms}ms`;
       }
 
-      let errorHtml = '';
+      const bodyChildren = [
+        div.class('activity-summary')(),
+      ];
+
       if (hasErrors) {
-        errorHtml = `<div class="activity-errors">${event.errors.map((e) => `<div class="activity-error">${escapeHtml(e)}</div>`).join('')}</div>`;
+        const errorDivs = event.errors.map((e) =>
+          div.class('activity-error')(escapeHtml(e))
+        );
+        bodyChildren.push(div.class('activity-errors')(...errorDivs));
       }
 
-      return `
-        <div class="activity-item${errorClass}">
-          <div class="activity-icon">${icon}</div>
-          <div class="activity-body">
-            <div class="activity-summary">${detail}</div>
-            ${errorHtml}
-          </div>
-          <div class="activity-time">${time}</div>
-        </div>
-      `;
-    }).join('');
+      const item = div.class(hasErrors ? 'activity-item activity-item-error' : 'activity-item')(
+        div.class('activity-icon')(icon),
+        div.class('activity-body')(...bodyChildren),
+        div.class('activity-time')(time),
+      ).build(document);
 
-    container.innerHTML = items;
+      // Set innerHTML for summary since detail may contain escaped HTML entities
+      item.querySelector('.activity-summary').innerHTML = detail;
+
+      feed.appendChild(item);
+    }
   }
 
-  _hideActivity() {
-    const panel = this.querySelector('.sync-activity-panel');
-    if (panel) panel.style.display = 'none';
+  // ---------------------------------------------------------------------------
+  // Event handlers
+  // ---------------------------------------------------------------------------
+
+  _onAddToggle() {
+    const s = this._state;
+    s.showAddForm = !s.showAddForm && !s.editingId;
+    s.editingId   = null;
   }
+
+  _onGoConnections(event) {
+    event.preventDefault();
+    this.dispatchEvent(new CustomEvent('navigate', {
+      detail:  { page: 'connections', autoAdd: true },
+      bubbles: true,
+    }));
+  }
+
+  _onFormSubmit() {
+    if (this._state.editingId)
+      this._submitEdit();
+    else
+      this._submitForm();
+  }
+
+  _onFormCancel() {
+    this._state.showAddForm = false;
+    this._state.editingId   = null;
+  }
+
+  async _onBrowseLocal() {
+    try {
+      const response = await fetch('/api/v1/pick-directory', { method: 'POST' });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+      const result = await response.json();
+      if (result.path) {
+        const input = this.querySelector('#form-local-path');
+        if (input) input.value = result.path;
+      }
+    } catch (error) {
+      console.error('Directory picker failed:', error);
+    }
+  }
+
+  async _onBrowseRemote() {
+    const connectionSelect = this.querySelector('#form-connection');
+    const connectionId = connectionSelect
+      ? connectionSelect.value
+      : (this._state.editingId
+        ? this._state.relationships.find((r) => r.id === this._state.editingId)?.remote_connection_id
+        : null);
+
+    if (!connectionId) {
+      window.aeorToast('Please select a connection first', 'warning');
+      return;
+    }
+
+    const connection = this._state.connections.find((c) => c.id === connectionId);
+    if (!connection) {
+      window.aeorToast('Connection not found', 'error');
+      return;
+    }
+
+    const path = await showRemoteFolderPicker(connection.url, connection.api_key);
+    if (path) {
+      const input = this.querySelector('#form-remote-path');
+      if (input) input.value = path;
+    }
+  }
+
+  _onActivityClose() {
+    this._state.selectedId = null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
 
   _eventIcon(type) {
     switch (type) {
-      case 'pull':      return '\u2B07';  // down arrow
-      case 'push':      return '\u2B06';  // up arrow
-      case 'full_sync': return '\u21C4';  // bidirectional arrow
-      case 'error':     return '\u26A0';  // warning
-      default:          return '\u2022';  // bullet
+      case 'pull':      return '\u2B07';
+      case 'push':      return '\u2B06';
+      case 'full_sync': return '\u21C4';
+      case 'error':     return '\u26A0';
+      default:          return '\u2022';
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // API methods
+  // ---------------------------------------------------------------------------
 
   async _fetchData() {
     try {
@@ -451,11 +490,34 @@ class AeorSync extends HTMLElement {
       if (!syncResponse.ok) throw new Error(`Sync request failed: ${syncResponse.status}`);
       if (!connectionsResponse.ok) throw new Error(`Connections request failed: ${connectionsResponse.status}`);
 
-      this._relationships = await syncResponse.json();
-      this._connections   = await connectionsResponse.json();
-      this.render();
+      const [relationships, connections] = await Promise.all([
+        syncResponse.json(),
+        connectionsResponse.json(),
+      ]);
+
+      this._state.relationships = relationships;
+      this._state.connections   = connections;
     } catch (error) {
       console.error('Failed to fetch data:', error);
+    }
+  }
+
+  async _fetchActivity(id) {
+    const relationship = this._state.relationships.find((r) => r.id === id);
+    if (!relationship) return;
+
+    const titleEl = this.querySelector('#activity-title');
+    if (titleEl) titleEl.textContent = `${relationship.name} \u2014 Activity`;
+
+    const feed = this.querySelector('#activity-feed');
+    if (feed) feed.innerHTML = '<div class="loading">Loading activity...</div>';
+
+    try {
+      const response = await fetch(`/api/v1/sync/${id}/activity`);
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+      this._state.activity = await response.json();
+    } catch (error) {
+      if (feed) feed.innerHTML = '<div class="empty-state">Failed to load activity.</div>';
     }
   }
 
@@ -484,7 +546,7 @@ class AeorSync extends HTMLElement {
         }),
       });
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);
-      this._showAddForm = false;
+      this._state.showAddForm = false;
       await this._fetchData();
     } catch (error) {
       window.aeorToast(`Failed to create sync: ${error.message}`, 'error');
@@ -502,7 +564,7 @@ class AeorSync extends HTMLElement {
     const remoteToLocal = this.querySelector('#form-delete-remote-to-local')?.checked || false;
 
     try {
-      const response = await fetch(`/api/v1/sync/${this._editingId}`, {
+      const response = await fetch(`/api/v1/sync/${this._state.editingId}`, {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
@@ -518,7 +580,7 @@ class AeorSync extends HTMLElement {
         }),
       });
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);
-      this._editingId = null;
+      this._state.editingId = null;
       await this._fetchData();
     } catch (error) {
       window.aeorToast(`Failed to update sync: ${error.message}`, 'error');
@@ -533,8 +595,7 @@ class AeorSync extends HTMLElement {
       const pull     = result.pull || {};
       const push     = result.push || {};
       window.aeorToast(`Sync complete: ${pull.files_pulled || 0} pulled, ${push.files_pushed || 0} pushed`, 'success');
-      // Refresh activity if this relationship is selected
-      if (this._selectedId === id) {
+      if (this._state.selectedId === id) {
         this._fetchActivity(id);
       }
     } catch (error) {
@@ -560,9 +621,8 @@ class AeorSync extends HTMLElement {
     try {
       const response = await fetch(`/api/v1/sync/${id}`, { method: 'DELETE' });
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);
-      if (this._selectedId === id) {
-        this._selectedId = null;
-        this._hideActivity();
+      if (this._state.selectedId === id) {
+        this._state.selectedId = null;
       }
       await this._fetchData();
     } catch (error) {

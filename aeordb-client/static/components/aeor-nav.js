@@ -1,100 +1,124 @@
 'use strict';
 
+import { ReactiveState } from '../aeor/reactive-state.js';
+import { elements } from '../aeor/elements.js';
+
+const { div, nav, span } = elements;
+
+const NAV_ITEMS = [
+  { page: 'dashboard',   icon: '\u25A0', iconClass: 'nav-icon-accent',     label: 'Dashboard' },
+  { page: 'connections', icon: '\u21C4', iconClass: 'nav-icon-connection', label: 'Connections' },
+  { page: 'sync',        icon: '\u21BB', iconClass: 'nav-icon-success',    label: 'Sync' },
+  { page: 'files',       icon: '\uD83D\uDCC1', iconClass: 'nav-icon-files', label: 'Files' },
+  { page: 'conflicts',   icon: '\u26A0', iconClass: 'nav-icon-warning',    label: 'Conflicts' },
+  { page: 'settings',    icon: '\u2699', iconClass: 'nav-icon-muted',      label: 'Settings' },
+];
+
 class AeorNav extends HTMLElement {
+  constructor() {
+    super();
+
+    this._state = new ReactiveState({
+      active:  'dashboard',
+      version: '0.1.0',
+    });
+
+    this._cachedVersion = null;
+    this._handleNavClick = this._handleNavClick.bind(this);
+  }
+
   static get observedAttributes() {
     return ['active'];
   }
 
-  constructor() {
-    super();
-    this._cachedVersion = null;
+  get active() {
+    return this._state.active;
+  }
+
+  set active(value) {
+    this._state.active = value || 'dashboard';
+  }
+
+  attributeChangedCallback(name, _oldValue, newValue) {
+    if (name === 'active')
+      this._state.active = newValue || 'dashboard';
   }
 
   connectedCallback() {
     this._isConnected = true;
-    this.render();
+    this._state.active = this.getAttribute('active') || 'dashboard';
+    this._buildDOM();
+    this._fetchVersion();
   }
 
   disconnectedCallback() {
     this._isConnected = false;
   }
 
-  attributeChangedCallback() {
-    this.render();
+  _buildDOM() {
+    this.textContent = '';
+
+    let element = div.context(this)(
+      div.class('nav-logo')(
+        'Aeor',
+        span('DB'),
+        ' Client',
+      ),
+      nav.class('nav-items')(
+        ...NAV_ITEMS.map((item) =>
+          div.class.bindState(
+            (state) => (state.active === item.page) ? 'nav-item active' : 'nav-item',
+            ['active'],
+          ).data('page', item.page)
+            .onClick(this._handleNavClick)(
+              span.class(`nav-icon ${item.iconClass}`)(item.icon),
+              item.label,
+            ),
+        ),
+      ),
+      div.class('nav-version')
+        .textContent.bindState(
+          (state) => `v${state.version}`,
+          ['version'],
+        )(),
+    ).build(document);
+
+    this.appendChild(element);
   }
 
-  get active() {
-    return this.getAttribute('active') || 'dashboard';
-  }
+  _handleNavClick(event) {
+    let navItem = event.target.closest('.nav-item');
+    if (!navItem)
+      return;
 
-  render() {
-    const active = this.active;
-
-    this.innerHTML = `
-      <div class="nav-logo">Aeor<span>DB</span> Client</div>
-
-      <nav class="nav-items">
-        <div class="nav-item ${(active === 'dashboard') ? 'active' : ''}" data-page="dashboard">
-          <span class="nav-icon" style="color: var(--accent)">&#9632;</span>
-          Dashboard
-        </div>
-        <div class="nav-item ${(active === 'connections') ? 'active' : ''}" data-page="connections">
-          <span class="nav-icon" style="color: #58a6ff">&#8644;</span>
-          Connections
-        </div>
-        <div class="nav-item ${(active === 'sync') ? 'active' : ''}" data-page="sync">
-          <span class="nav-icon" style="color: var(--success)">&#8635;</span>
-          Sync
-        </div>
-        <div class="nav-item ${(active === 'files') ? 'active' : ''}" data-page="files">
-          <span class="nav-icon" style="color: #a78bfa">&#128193;</span>
-          Files
-        </div>
-        <div class="nav-item ${(active === 'conflicts') ? 'active' : ''}" data-page="conflicts">
-          <span class="nav-icon" style="color: var(--warning)">&#9888;</span>
-          Conflicts
-        </div>
-        <div class="nav-item ${(active === 'settings') ? 'active' : ''}" data-page="settings">
-          <span class="nav-icon" style="color: var(--text-secondary)">&#9881;</span>
-          Settings
-        </div>
-      </nav>
-
-      <div class="nav-version">v${this._version || '0.1.0'}</div>
-    `;
-
-    this.querySelectorAll('.nav-item').forEach((item) => {
-      item.addEventListener('click', () => {
-        this.dispatchEvent(new CustomEvent('navigate', {
-          detail:  { page: item.dataset.page },
-          bubbles: true,
-        }));
-      });
-    });
-
-    this._fetchVersion();
+    this.dispatchEvent(new CustomEvent('navigate', {
+      detail:  { page: navItem.dataset.page },
+      bubbles: true,
+    }));
   }
 
   async _fetchVersion() {
-    if (this._cachedVersion) return;
+    if (this._cachedVersion)
+      return;
 
     try {
-      const response = await fetch('/api/v1/status');
-      if (!response.ok) return;
+      let response = await fetch('/api/v1/status');
+      if (!response.ok)
+        return;
 
-      const data           = await response.json();
-      if (!this._isConnected) return;
-      this._version        = data.version;
-      this._cachedVersion  = data.version;
-      const versionElement = this.querySelector('.nav-version');
-      if (versionElement)
-        versionElement.textContent = `v${data.version}`;
+      let data = await response.json();
+      if (!this._isConnected)
+        return;
+
+      this._cachedVersion = data.version;
+      this._state.version = data.version;
     } catch (error) {
-      // Non-critical
+      // Non-critical — version display is best-effort
     }
   }
 }
 
-customElements.define('aeor-nav', AeorNav);
+if (!customElements.get('aeor-nav'))
+  customElements.define('aeor-nav', AeorNav);
 
 export { AeorNav };

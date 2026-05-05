@@ -1,13 +1,19 @@
 'use strict';
 
-import { AeorNav } from './aeor-nav.js';
-import { AeorDashboard } from './aeor-dashboard.js';
-import { AeorConnections } from './aeor-connections.js';
-import { AeorSync } from './aeor-sync.js';
-import { AeorConflicts } from './aeor-conflicts.js';
-import { AeorFileBrowser } from './aeor-file-browser.js';
-import { AeorSettings } from './aeor-settings.js';
-import { AeorToasts } from './aeor-toasts.js';
+import { ReactiveState } from '../aeor/reactive-state.js';
+import { elements } from '../aeor/elements.js';
+
+// Side-effect imports — register custom elements
+import './aeor-nav.js';
+import './aeor-dashboard.js';
+import './aeor-connections.js';
+import './aeor-sync.js';
+import './aeor-conflicts.js';
+import './aeor-file-browser.js';
+import './aeor-settings.js';
+import './aeor-toasts.js';
+
+const { div } = elements;
 
 const PAGES = ['dashboard', 'connections', 'sync', 'files', 'conflicts', 'settings'];
 
@@ -23,9 +29,17 @@ const PAGE_TAGS = {
 class AeorApp extends HTMLElement {
   constructor() {
     super();
-    this._currentPage = 'dashboard';
+
+    this._state = new ReactiveState({
+      currentPage: 'dashboard',
+    });
+
     this._pageOptions = {};
     this._rendered = false;
+
+    // Bind methods used as event handlers or callbacks
+    this._handleNavigate = this._handleNavigate.bind(this);
+    this._handleFileDragStart = this._handleFileDragStart.bind(this);
   }
 
   connectedCallback() {
@@ -37,100 +51,116 @@ class AeorApp extends HTMLElement {
       this._rendered = true;
     }
 
-    this._showPage(this._currentPage);
+    this._showPage(this._state.currentPage);
   }
 
   // Build the full DOM once — all pages created, only one visible.
   _buildDOM() {
-    // Create shell
-    const pagesHTML = PAGES.map((page) => {
-      const tag = PAGE_TAGS[page];
-      const hidden = (page !== this._currentPage) ? 'style="display:none"' : '';
-      return `<${tag} data-page="${page}" ${hidden}></${tag}>`;
-    }).join('\n        ');
+    this.textContent = '';
 
-    this.innerHTML = `
-      <aeor-nav active="${this._currentPage}"></aeor-nav>
-      <div class="app-content">
-        ${pagesHTML}
-      </div>
-      <aeor-toasts></aeor-toasts>
-    `;
+    // Create page elements via the element builder
+    let pageElements = PAGES.map((page) => {
+      let tag = PAGE_TAGS[page];
+      return elements[tag].dataPage(page)();
+    });
 
-    // Listen on the root element — events bubble up from nav and all pages.
+    let shell = div.context(this)(
+      elements['aeor-nav'].active(this._state.currentPage)(),
+      div.class('app-content')(...pageElements),
+      elements['aeor-toasts'](),
+    ).build(document);
+
+    this.appendChild(shell);
+
+    // Store page element references for fast toggling
+    this._pageElements = {};
+    for (let page of PAGES) {
+      this._pageElements[page] = this.querySelector(`[data-page="${page}"]`);
+    }
+
+    // Set initial visibility
+    this._showPage(this._state.currentPage);
+
+    // Listen on `this` (the root element) — events bubble up from nav and all pages.
     // This survives child re-renders (e.g., aeor-nav rebuilding its DOM).
-    this.addEventListener('navigate', (event) => {
-      this._navigateTo(event.detail.page, event.detail);
-    });
+    this.addEventListener('navigate', this._handleNavigate);
+    this.addEventListener('file-drag-start', this._handleFileDragStart);
 
-    this.addEventListener('file-drag-start', (event) => {
-      this._handleFileDragStart(event.detail);
+    // React to page changes
+    this._state.on('currentPage', (_changedKeys, state) => {
+      this._showPage(state.currentPage);
     });
+  }
+
+  _handleNavigate(event) {
+    this._navigateTo(event.detail.page, event.detail);
   }
 
   _navigateTo(page, options = {}) {
     if (!PAGES.includes(page)) return;
 
-    this._currentPage = page;
+    this._state.currentPage = page;
     this._pageOptions = options;
+
+    // Show page synchronously — reactive listener fires on microtask,
+    // but autoAdd below needs the page visible immediately.
     this._showPage(page);
 
     // Handle page-specific options
     if (page === 'connections' && options.autoAdd) {
-      const el = this.querySelector('aeor-connections');
+      let el = this.querySelector('aeor-connections');
       if (el) el.openAddForm();
       this._pageOptions = {};
     }
   }
 
   _showPage(activePage) {
-    // Toggle page visibility — select only direct children of .app-content
-    const content = this.querySelector('.app-content');
-    if (!content) return;
+    for (let page of PAGES) {
+      let el = this._pageElements && this._pageElements[page];
+      if (!el) continue;
 
-    for (const child of content.children) {
-      if (!child.dataset.page) continue;
-      const isActive = (child.dataset.page === activePage);
-      child.style.display = isActive ? '' : 'none';
+      let isActive = (page === activePage);
+      el.style.display = isActive ? '' : 'none';
 
       // Notify the page it became visible so it can refresh stale data
-      if (isActive && typeof child.refresh === 'function') {
-        child.refresh();
+      if (isActive && typeof el.refresh === 'function') {
+        el.refresh();
       }
     }
 
     // Update nav active state
-    const nav = this.querySelector('aeor-nav');
+    let nav = this.querySelector('aeor-nav');
     if (nav) {
       nav.setAttribute('active', activePage);
     }
   }
 
-  _handleFileDragStart(detail) {
-    const { event, adapter, paths } = detail;
+  _handleFileDragStart(event) {
+    let detail = event.detail;
+    let { event: dragEvent, adapter, paths } = detail;
 
-    const relId = adapter && adapter.relationshipId;
-    const relationship = relId && this._relationshipCache && this._relationshipCache[relId];
+    let relId = adapter && adapter.relationshipId;
+    let relationship = relId && this._relationshipCache && this._relationshipCache[relId];
     if (!relationship || !relationship.local_path) return;
 
-    const localBase = relationship.local_path.replace(/\/$/, '');
-    const localUris = (paths || []).map((p) => {
-      const relativePath = p.replace(/^\//, '');
+    let localBase = relationship.local_path.replace(/\/$/, '');
+    let localUris = (paths || []).map((p) => {
+      let relativePath = p.replace(/^\//, '');
       return `file://${encodeURI(`${localBase}/${relativePath}`)}`;
     });
 
     if (localUris.length > 0) {
-      event.dataTransfer.setData('text/uri-list', localUris.join('\r\n'));
+      dragEvent.dataTransfer.setData('text/uri-list', localUris.join('\r\n'));
     }
   }
 
   async _cacheRelationships() {
     try {
-      const response = await fetch('/api/v1/sync');
+      let response = await fetch('/api/v1/sync');
       if (!response.ok) return;
-      const relationships = await response.json();
+      let relationships = await response.json();
       this._relationshipCache = {};
-      for (const rel of relationships) {
+      for (let rel of relationships) {
         this._relationshipCache[rel.id] = rel;
       }
     } catch (error) {

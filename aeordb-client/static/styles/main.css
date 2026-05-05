@@ -162,6 +162,13 @@ aeor-nav {
   font-size: 14px;
 }
 
+.nav-icon-accent     { color: var(--accent); }
+.nav-icon-connection { color: #58a6ff; }
+.nav-icon-success    { color: var(--success); }
+.nav-icon-files      { color: #a78bfa; }
+.nav-icon-warning    { color: var(--warning); }
+.nav-icon-muted      { color: var(--text-secondary); }
+
 .nav-version {
   padding: 12px 16px;
   font-size: 11px;
@@ -345,6 +352,25 @@ select {
   display: flex;
   gap: 8px;
   margin-top: 16px;
+}
+
+.dir-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.flex-fill {
+  flex: 1;
+}
+
+.dir-path {
+  flex: 1;
+  padding: 8px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 .checkbox-row {
@@ -550,6 +576,11 @@ td {
 .badge.warning { background-color: rgba(210, 153, 34, 0.15); color: var(--warning); }
 .badge.error   { background-color: rgba(248, 81, 73, 0.15); color: var(--error); }
 .badge.info    { background-color: rgba(249, 115, 22, 0.15); color: var(--accent); }
+
+.badge-fixed {
+  min-width: 72px;
+  text-align: center;
+}
 
 /* ==========================================================================
    Empty States
@@ -1166,6 +1197,19 @@ aeor-connections {
   overflow: hidden;
 }
 
+.connection-preview[hidden] {
+  display: none;
+}
+
+h3.preview-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+
 .preview-dashboard-container {
   flex: 1;
   overflow: auto;
@@ -1205,6 +1249,10 @@ aeor-sync {
 .sync-row.selected {
   background-color: var(--bg-tertiary);
   border-left: 3px solid var(--accent);
+}
+
+.btn-toggle {
+  min-width: 70px;
 }
 
 .sync-activity-panel {
@@ -1363,6 +1411,28 @@ aeor-conflicts {
   padding: 4px 0;
 }
 
+.conflict-path-name {
+  font-weight: 500;
+}
+
+.conflict-type-label {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.conflict-winner-label {
+  color: var(--success);
+  font-weight: 500;
+}
+
+.conflict-loser-label {
+  color: var(--text-secondary);
+}
+
+.conflict-size-label {
+  font-size: 12px;
+}
+
 .conflict-info {
   display: flex;
   gap: 8px;
@@ -1473,4 +1543,58 @@ aeor-conflicts {
 
 .folder-picker-item:hover {
   background-color: var(--bg-tertiary);
+}
+
+.folder-picker-breadcrumbs {
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.folder-picker-crumb {
+  cursor: pointer;
+  color: var(--accent, #f97316);
+}
+
+.folder-picker-separator {
+  color: var(--text-muted);
+}
+
+.folder-picker-icon {
+  margin-right: 8px;
+}
+
+.folder-picker-status {
+  color: var(--text-muted);
+  padding: 20px 0;
+}
+
+.folder-picker-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, #30363d);
+}
+
+.folder-picker-current-path {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-picker-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Utility: inline button offset (e.g. "Open" buttons next to directory paths) */
+.ml-sm {
+  margin-left: 8px;
 }
