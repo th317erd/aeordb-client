@@ -1,9 +1,10 @@
 'use strict';
 
-// Re-export everything from the shared web components library.
+// Re-export everything from the shared web components libraries.
 // This file exists so that local component imports (`./aeor-file-view-shared.js`)
 // continue to work without changing every import path.
 
+// Generic utilities from aeor-web-components
 export {
   escapeHtml,
   escapeAttr,
@@ -12,8 +13,9 @@ export {
   formatDate,
   formatUptime,
   flashButton,
-} from '../shared/utils.js';
+} from '../aeor/utils.js';
 
+// DB-specific file view helpers from aeordb-web-components
 export {
   fileIcon,
   ENTRY_TYPE_FILE,
@@ -31,8 +33,8 @@ export {
   isTextFile,
 } from '../shared/components/aeor-file-view-shared.js';
 
-// Ensure the modal component is registered
-import '../shared/components/aeor-modal.js';
+// Ensure the modal component is registered (from aeor-web-components)
+import '../aeor/components/aeor-modal.js';
 
 /**
  * Show a styled confirmation dialog using <aeor-modal>.

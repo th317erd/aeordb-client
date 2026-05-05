@@ -1,7 +1,7 @@
 'use strict';
 
 import { escapeHtml } from './aeor-file-view-shared.js';
-import '../shared/components/aeor-modal.js';
+import '../aeor/components/aeor-modal.js';
 
 /**
  * Remote folder picker dialog.
