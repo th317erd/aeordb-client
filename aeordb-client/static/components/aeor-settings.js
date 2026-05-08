@@ -65,16 +65,14 @@ class AeorSettings extends HTMLElement {
       )(),
 
       // Loading state
-      div.class.bindState(
-        (state) => !state.loaded ? 'empty-state' : 'empty-state hidden',
-        ['loaded'],
-      )('Loading settings...'),
+      div.class('empty-state')
+        .hidden.bindState((state) => state.loaded, ['loaded'])(
+          'Loading settings...',
+        ),
 
       // Form — hidden until loaded
-      div.class.bindState(
-        (state) => state.loaded ? 'settings-form' : 'settings-form hidden',
-        ['loaded'],
-      )(
+      div.class('settings-form')
+        .hidden.bindState((state) => !state.loaded, ['loaded'])(
         // General panel
         div.class('form-panel')(
           h2('General'),
