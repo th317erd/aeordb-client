@@ -3,6 +3,7 @@
 import { openFolder } from './aeor-file-view-shared.js';
 import { ReactiveState } from '../aeor/reactive-state.js';
 import { elements } from '../aeor/elements.js';
+import '../aeor/components/aeor-confirm-button.js';
 
 const { div, h1, h2, label, input, button, code } = elements;
 
@@ -21,15 +22,11 @@ class AeorSettings extends HTMLElement {
 
       // UI state
       loaded: false,
-      saving: false,
-      saved: false,
-      dirty: false,
       error: null,
       hostname: '',
     });
 
     this._onSave = this._onSave.bind(this);
-    this._markDirty = this._markDirty.bind(this);
     this._openConfigDir = this._openConfigDir.bind(this);
     this._openDataDir = this._openDataDir.bind(this);
   }
@@ -82,26 +79,22 @@ class AeorSettings extends HTMLElement {
               .placeholder.bindState(
                 (state) => state.hostname || 'my-machine',
                 ['hostname'],
-              )
-              .onInput(this._markDirty)(),
+              )(),
           ),
           div.class('form-row')(
             label.for('setting-sync-interval')('Sync Interval (seconds)'),
             input.type('number').id('setting-sync-interval')
-              .min('10').max('3600')
-              .onInput(this._markDirty)(),
+              .min('10').max('3600')(),
           ),
           div.class('form-row')(
             label.class('checkbox-row')(
-              input.type('checkbox').class('checkbox-large').id('setting-auto-start')
-                .onChange(this._markDirty)(),
+              input.type('checkbox').class('checkbox-large').id('setting-auto-start')(),
               'Auto-start sync on launch',
             ),
           ),
           div.class('form-row')(
             label.class('checkbox-row')(
-              input.type('checkbox').class('checkbox-large').id('setting-auto-start-system')
-                .onChange(this._markDirty)(),
+              input.type('checkbox').class('checkbox-large').id('setting-auto-start-system')(),
               'Start when system starts',
             ),
           ),
@@ -138,32 +131,20 @@ class AeorSettings extends HTMLElement {
 
         // Save button
         div.class('form-actions')(
-          button.id('save-settings')
-            .class.bindState(
-              (state) => {
-                if (state.saved && !state.dirty) return 'success';
-                return 'primary';
-              },
-              ['saved', 'dirty'],
-            )
-            .disabled.bindState(
-              (state) => state.saving || (state.saved && !state.dirty),
-              ['saving', 'saved', 'dirty'],
-            )
-            .textContent.bindState(
-              (state) => {
-                if (state.saving) return 'Saving...';
-                if (state.saved && !state.dirty) return '\u2713 Saved!';
-                return 'Save';
-              },
-              ['saving', 'saved', 'dirty'],
-            )
-            .onClick(this._onSave)(),
+          elements['aeor-confirm-button']
+            .class('confirm-button-new')
+            .label('Save')
+            .confirmedText('Saved!')
+            .duration('0')
+            .id('save-settings')(),
         ),
       ),
     ).build(document);
 
     this.appendChild(element);
+
+    this.querySelector('#save-settings')
+      .addEventListener('confirm', () => this._onSave());
   }
 
   _populateInputs() {
@@ -180,13 +161,6 @@ class AeorSettings extends HTMLElement {
 
     const autoStartSystemInput = this.querySelector('#setting-auto-start-system');
     if (autoStartSystemInput) autoStartSystemInput.checked = s.auto_start_system;
-  }
-
-  _markDirty() {
-    if (!this._state.dirty) {
-      this._state.dirty = true;
-      this._state.saved = false;
-    }
   }
 
   _openConfigDir() {
@@ -235,8 +209,6 @@ class AeorSettings extends HTMLElement {
   }
 
   async _onSave() {
-    if (this._state.saving) return;
-
     // Read input values from DOM
     const clientNameInput = this.querySelector('#setting-client-name');
     const syncIntervalInput = this.querySelector('#setting-sync-interval');
@@ -249,13 +221,9 @@ class AeorSettings extends HTMLElement {
     const autoStartSystem = autoStartSystemInput?.checked ?? false;
 
     if (isNaN(syncInterval) || syncInterval < 10 || syncInterval > 3600) {
-      this._state.error = 'Sync interval must be between 10 and 3600 seconds.';
+      window.aeorToast?.('Sync interval must be between 10 and 3600 seconds.', 'error');
       return;
     }
-
-    this._state.saving = true;
-    this._state.saved = false;
-    this._state.error = null;
 
     try {
       const response = await fetch('/api/v1/settings', {
@@ -271,8 +239,7 @@ class AeorSettings extends HTMLElement {
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        this._state.error = body.error || `Failed to save settings (${response.status})`;
-        this._state.saving = false;
+        window.aeorToast?.(body.error || `Failed to save settings (${response.status})`, 'error');
         return;
       }
 
@@ -283,15 +250,11 @@ class AeorSettings extends HTMLElement {
       this._state.auto_start_system = settings.auto_start_system;
       this._state.config_dir = settings.config_dir;
       this._state.data_dir = settings.data_dir;
-      this._state.saving = false;
-      this._state.saved = true;
-      this._state.dirty = false;
 
       // Re-populate inputs with server-returned values
       this._populateInputs();
     } catch (error) {
-      this._state.saving = false;
-      this._state.error = `Failed to save settings: ${error.message}`;
+      window.aeorToast?.(`Failed to save settings: ${error.message}`, 'error');
     }
   }
 }

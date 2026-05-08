@@ -1,8 +1,9 @@
 'use strict';
 
-import { bindResizeHandle, showConfirm } from './aeor-file-view-shared.js';
+import { bindResizeHandle } from './aeor-file-view-shared.js';
 import { ReactiveState } from '../aeor/reactive-state.js';
 import { elements } from '../aeor/elements.js';
+import '../aeor/components/aeor-confirm-button.js';
 import { AeorDashboard } from '../shared/components/aeor-dashboard.js';
 
 // Register the shared dashboard under a distinct tag name so it does not
@@ -28,7 +29,7 @@ class AeorConnections extends HTMLElement {
     this._closePreview = this._closePreview.bind(this);
     this._onRowClick = this._onRowClick.bind(this);
     this._onTestClick = this._onTestClick.bind(this);
-    this._onDeleteClick = this._onDeleteClick.bind(this);
+    this._onConfirmDelete = this._onConfirmDelete.bind(this);
   }
 
   connectedCallback() {
@@ -175,11 +176,18 @@ class AeorConnections extends HTMLElement {
             button.class('secondary small test-btn')
               .dataId(connection.id)
               .onClick(this._onTestClick)('Test'),
-            button.class('danger small delete-btn')
-              .dataId(connection.id)
-              .onClick(this._onDeleteClick)('Delete'),
+            elements['aeor-confirm-button']
+              .class('confirm-button-danger')
+              .label('Delete')
+              .confirmedText('Deleted!')
+              .duration('1000')
+              .dataId(connection.id)(),
           ),
         ).build(document);
+
+      let confirmBtn = row.querySelector('aeor-confirm-button');
+      if (confirmBtn)
+        confirmBtn.addEventListener('confirm', this._onConfirmDelete);
 
       tbodyEl.appendChild(row);
     }
@@ -247,7 +255,7 @@ class AeorConnections extends HTMLElement {
     this._testConnection(id);
   }
 
-  _onDeleteClick(event) {
+  _onConfirmDelete(event) {
     event.stopPropagation();
     let id = event.target.closest('[data-id]').dataset.id;
     this._deleteConnection(id);
@@ -306,9 +314,6 @@ class AeorConnections extends HTMLElement {
   }
 
   async _deleteConnection(id) {
-    let confirmed = await showConfirm('Delete Connection', 'Are you sure you want to delete this connection?', { confirmText: 'Delete', danger: true });
-    if (!confirmed) return;
-
     try {
       let response = await fetch(`/api/v1/connections/${id}`, { method: 'DELETE' });
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);

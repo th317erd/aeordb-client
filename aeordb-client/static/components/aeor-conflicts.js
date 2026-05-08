@@ -2,7 +2,8 @@
 
 import { ReactiveState } from '../aeor/reactive-state.js';
 import { elements } from '../aeor/elements.js';
-import { formatSize, bindResizeHandle, showConfirm } from './aeor-file-view-shared.js';
+import { formatSize, bindResizeHandle } from './aeor-file-view-shared.js';
+import '../aeor/components/aeor-confirm-button.js';
 
 const { div, span, button, table, thead, tbody, tr, th, td, h1, h3 } = elements;
 
@@ -48,15 +49,16 @@ class AeorConflicts extends HTMLElement {
     let element = div.context(this)(
       div.class('page-header')(
         h1('Conflicts'),
-        button.class('success small')
+        elements['aeor-confirm-button']
+          .class('confirm-button-new')
+          .label('Accept All Winners')
+          .confirmedText('Done!')
+          .duration('1000')
           .id('dismiss-all')
           .hidden.bindState(
             (state) => state.conflicts.length <= 1,
             ['conflicts'],
-          )
-          .onClick(this._handleDismissAll)(
-            'Accept All Winners',
-          ),
+          )(),
       ),
       div.class('conflicts-list')(),
       div.class('conflict-preview')
@@ -93,6 +95,11 @@ class AeorConflicts extends HTMLElement {
     let panel = this.querySelector('.conflict-preview');
     if (resizeHandle && panel)
       bindResizeHandle(resizeHandle, panel);
+
+    // Wire dismiss-all confirm button
+    let dismissAll = this.querySelector('#dismiss-all');
+    if (dismissAll)
+      dismissAll.addEventListener('confirm', () => this._handleDismissAll());
   }
 
   _rebuildTable() {
@@ -279,14 +286,6 @@ class AeorConflicts extends HTMLElement {
   }
 
   async _handleDismissAll() {
-    let conflicts = this._state.conflicts;
-    let confirmed = await showConfirm(
-      'Accept All Winners',
-      `Accept all ${conflicts.length} auto-winner(s)? Losing versions remain in version history.`,
-      { confirmText: 'Accept All' },
-    );
-    if (!confirmed) return;
-
     try {
       let response = await fetch('/api/v1/conflicts/dismiss-all', { method: 'POST' });
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);

@@ -1,9 +1,10 @@
 'use strict';
 
-import { escapeHtml, formatSize, bindResizeHandle, formatRelativeTime, showConfirm } from './aeor-file-view-shared.js';
+import { escapeHtml, formatSize, bindResizeHandle, formatRelativeTime } from './aeor-file-view-shared.js';
 import { showRemoteFolderPicker } from './aeor-remote-folder-picker.js';
 import { ReactiveState } from '../aeor/reactive-state.js';
 import { elements } from '../aeor/elements.js';
+import '../aeor/components/aeor-confirm-button.js';
 
 const { div, h1, h2, h3, label, input, select, option, button, table, thead, tbody, tr, th, td, span, a } = elements;
 
@@ -286,7 +287,12 @@ class AeorSync extends HTMLElement {
           button.class('success small')('Sync'),
           button.class('secondary small')('Edit'),
           button.class('secondary small btn-toggle')(rel.enabled ? 'Pause' : 'Resume'),
-          button.class('danger small')('Delete'),
+          elements['aeor-confirm-button']
+            .class('confirm-button-danger')
+            .label('Delete')
+            .confirmedText('Deleted!')
+            .duration('1000')
+            .dataId(rel.id)(),
         ),
       ).build(document);
 
@@ -295,7 +301,7 @@ class AeorSync extends HTMLElement {
 
       // Row click — select to show activity
       row.addEventListener('click', (event) => {
-        if (event.target.closest('button')) return;
+        if (event.target.closest('button') || event.target.closest('aeor-confirm-button')) return;
         if (this._state.selectedId === rel.id) {
           this._state.selectedId = null;
         } else {
@@ -309,7 +315,12 @@ class AeorSync extends HTMLElement {
       buttons[0].addEventListener('click', (e) => { e.stopPropagation(); this._triggerSync(rel.id); });
       buttons[1].addEventListener('click', (e) => { e.stopPropagation(); this._state.editingId = rel.id; this._state.showAddForm = false; });
       buttons[2].addEventListener('click', (e) => { e.stopPropagation(); this._toggleSync(rel.id, rel.enabled); });
-      buttons[3].addEventListener('click', (e) => { e.stopPropagation(); this._deleteSync(rel.id); });
+
+      // Confirm-button fires 'confirm' after hold completes — delete directly
+      const confirmBtn = row.querySelector('aeor-confirm-button');
+      if (confirmBtn) {
+        confirmBtn.addEventListener('confirm', (e) => { e.stopPropagation(); this._deleteSync(rel.id); });
+      }
 
       return row;
     });
@@ -615,9 +626,6 @@ class AeorSync extends HTMLElement {
   }
 
   async _deleteSync(id) {
-    const confirmed = await showConfirm('Delete Sync Relationship', 'Are you sure you want to delete this sync relationship?', { confirmText: 'Delete', danger: true });
-    if (!confirmed) return;
-
     try {
       const response = await fetch(`/api/v1/sync/${id}`, { method: 'DELETE' });
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);
