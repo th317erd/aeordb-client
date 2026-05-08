@@ -1267,6 +1267,10 @@ aeor-sync {
   overflow: hidden;
 }
 
+.sync-activity-panel[hidden] {
+  display: none;
+}
+
 .activity-feed {
   flex: 1;
   overflow-y: auto;
@@ -1362,6 +1366,10 @@ aeor-conflicts {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.conflict-preview[hidden] {
+  display: none;
 }
 
 .conflict-detail {
