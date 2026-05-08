@@ -58,24 +58,27 @@ class AeorApp extends HTMLElement {
   _buildDOM() {
     this.textContent = '';
 
-    // Create page elements via the element builder
+    // Build children individually — aeor-app itself is the flex container,
+    // so children must be direct descendants (no wrapper div).
     let pageElements = PAGES.map((page) => {
       let tag = PAGE_TAGS[page];
       return elements[tag].dataPage(page)();
     });
 
-    let shell = div.context(this)(
-      elements['aeor-nav'].active(this._state.currentPage)(),
-      div.class('app-content')(...pageElements),
-      elements['aeor-toasts'](),
-    ).build(document);
+    let navEl = elements['aeor-nav'].active(this._state.currentPage)().build(document);
+    let contentEl = div.class('app-content')(...pageElements).build(document);
+    let toastsEl = elements['aeor-toasts']().build(document);
 
-    this.appendChild(shell);
+    this.appendChild(navEl);
+    this.appendChild(contentEl);
+    this.appendChild(toastsEl);
 
     // Store page element references for fast toggling
+    // Scope to .app-content to avoid matching nav items which also have data-page
+    let content = this.querySelector('.app-content');
     this._pageElements = {};
     for (let page of PAGES) {
-      this._pageElements[page] = this.querySelector(`[data-page="${page}"]`);
+      this._pageElements[page] = content.querySelector(`[data-page="${page}"]`);
     }
 
     // Set initial visibility

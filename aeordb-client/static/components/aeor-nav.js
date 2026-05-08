@@ -69,7 +69,7 @@ class AeorNav extends HTMLElement {
           div.class.bindState(
             (state) => (state.active === item.page) ? 'nav-item active' : 'nav-item',
             ['active'],
-          ).data('page', item.page)
+          ).dataPage(item.page)
             .onClick(this._handleNavClick)(
               span.class(`nav-icon ${item.iconClass}`)(item.icon),
               item.label,

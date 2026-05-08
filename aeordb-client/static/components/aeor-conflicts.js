@@ -131,7 +131,7 @@ class AeorConflicts extends HTMLElement {
           let isSelected = (conflict.path === selectedPath);
 
           return tr.class(isSelected ? 'conflict-row selected' : 'conflict-row')
-            .data('path', conflict.path)
+            .dataPath(conflict.path)
             .onClick(this._handleRowClick)(
               td()(
                 div.class('conflict-path-name')(conflict.path),
@@ -150,13 +150,13 @@ class AeorConflicts extends HTMLElement {
               td.class('muted')(new Date(conflict.created_at).toLocaleString()),
               td.class('actions')(
                 button.class('success small dismiss-btn')
-                  .data('path', conflict.path)
+                  .dataPath(conflict.path)
                   .onClick(this._handleDismiss)(
                     'Accept',
                   ),
                 button.class('primary small resolve-btn')
-                  .data('path', conflict.path)
-                  .data('pick', 'loser')
+                  .dataPath(conflict.path)
+                  .dataPick('loser')
                   .onClick(this._handleResolve)(
                     'Pick Loser',
                   ),
