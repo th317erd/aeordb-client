@@ -381,7 +381,8 @@ async fn fetch_remote_diff(
   since_root_hash: Option<&str>,
   http_client: &reqwest::Client,
 ) -> Result<RemoteSyncDiffResponse> {
-  let url = format!("{}/sync/diff", connection.url);
+  let base = connection.base_url();
+  let url = format!("{}/sync/diff", base);
 
   let body = serde_json::json!({
     "since_root_hash": since_root_hash,
@@ -393,7 +394,7 @@ async fn fetch_remote_diff(
   if connection.auth_type == AuthType::ApiKey {
     if let Some(ref api_key) = connection.api_key {
       // Try to exchange the API key for a JWT first
-      let token_url = format!("{}/auth/token", connection.url);
+      let token_url = format!("{}/auth/token", base);
       let token = http_client
         .post(&token_url)
         .json(&serde_json::json!({ "api_key": api_key }))

@@ -75,7 +75,7 @@ impl RemoteClient {
 
     Self {
       http_client: http_client.clone(),
-      base_url:    connection.url.clone(),
+      base_url:    connection.base_url(),
       api_key,
       jwt_token:   std::sync::Mutex::new(None),
     }

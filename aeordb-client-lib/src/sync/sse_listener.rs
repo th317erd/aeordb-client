@@ -88,7 +88,7 @@ async fn connect_and_listen(
 ) -> Result<()> {
   let mut url = format!(
     "{}/system/events?events=entries_created,entries_deleted",
-    connection.url,
+    connection.base_url(),
   );
 
   // If we have a single path prefix, use the server-side filter
