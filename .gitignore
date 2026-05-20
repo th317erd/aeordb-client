@@ -14,9 +14,6 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 
-# Shared web components (copied from ../aeordb-web-components by build.rs)
-aeordb-client/static/shared/
-
 # AeorDB local state
 *.aeordb
 *.aeordb.kv
@@ -27,3 +24,6 @@ auth.json
 # Environment
 .env
 .env.*
+
+# Claude Code tooling (per-developer MCP config)
+.mcp.json

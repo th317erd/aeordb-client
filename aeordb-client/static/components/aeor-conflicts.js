@@ -4,8 +4,9 @@ import { ReactiveState } from '../aeor/reactive-state.js';
 import { elements } from '../aeor/elements.js';
 import { formatSize, bindResizeHandle } from './aeor-file-view-shared.js';
 import '../aeor/components/aeor-confirm-button.js';
+import '../aeor/components/aeor-info-box.js';
 
-const { div, span, button, table, thead, tbody, tr, th, td, h1, h3 } = elements;
+const { div, span, button, table, thead, tbody, tr, th, td, h1, h3, strong } = elements;
 
 class AeorConflicts extends HTMLElement {
   constructor() {
@@ -60,6 +61,14 @@ class AeorConflicts extends HTMLElement {
             ['conflicts'],
           )(),
       ),
+
+      // Page guide
+      elements['aeor-info-box'].compact('')(
+        'A conflict appears when the same file changed on both the remote database and your local machine between syncs. For each entry, choose which version to keep — the ',
+        strong('winner'),
+        ' replaces the other side. The loser can be saved as a renamed copy if you want to hang onto it.',
+      ),
+
       div.class('conflicts-list')(),
       div.class('conflict-preview')
         .hidden.bindState(

@@ -229,7 +229,7 @@ class AeorDashboard extends HTMLElement {
     btn.disabled = true;
 
     try {
-      const response = await fetch(`/api/v1/sync/${id}/trigger`, { method: 'POST' });
+      const response = await fetch(`/api/v1/sync/${id}/force-resync`, { method: 'POST' });
       if (!response.ok) throw new Error(`Sync trigger failed: ${response.status}`);
       const result   = await response.json();
       const pull     = result.pull || {};

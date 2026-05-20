@@ -8,6 +8,16 @@ use rust_embed::Embed;
 
 #[derive(Embed)]
 #[folder = "static/"]
+#[include = "index.html"]
+#[include = "**/*.js"]
+#[include = "**/*.mjs"]
+#[include = "**/*.css"]
+#[include = "**/*.svg"]
+#[include = "**/*.png"]
+#[include = "**/*.ico"]
+#[include = "**/*.woff"]
+#[include = "**/*.woff2"]
+#[include = "**/*.ttf"]
 struct StaticAssets;
 
 pub fn static_routes() -> Router {
@@ -17,36 +27,48 @@ pub fn static_routes() -> Router {
 }
 
 async fn serve_index() -> impl IntoResponse {
-  match StaticAssets::get("index.html") {
-    Some(content) => Response::builder()
+  if let Some(bytes) = read_asset("index.html").await {
+    return Response::builder()
       .status(StatusCode::OK)
       .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-      .body(Body::from(content.data.to_vec()))
-      .unwrap(),
-    None => Response::builder()
-      .status(StatusCode::NOT_FOUND)
-      .body(Body::from("index.html not found"))
-      .unwrap(),
+      .body(Body::from(bytes))
+      .unwrap();
   }
+  Response::builder()
+    .status(StatusCode::NOT_FOUND)
+    .body(Body::from("index.html not found"))
+    .unwrap()
 }
 
 async fn serve_static(Path(path): Path<String>) -> impl IntoResponse {
-  match StaticAssets::get(&path) {
-    Some(content) => {
-      let mime = mime_from_path(&path);
-
-      Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, mime)
-        .header(header::CACHE_CONTROL, "no-cache")
-        .body(Body::from(content.data.to_vec()))
-        .unwrap()
-    }
-    None => Response::builder()
-      .status(StatusCode::NOT_FOUND)
-      .body(Body::from("not found"))
-      .unwrap(),
+  if let Some(bytes) = read_asset(&path).await {
+    return Response::builder()
+      .status(StatusCode::OK)
+      .header(header::CONTENT_TYPE, mime_from_path(&path))
+      .header(header::CACHE_CONTROL, "no-cache")
+      .body(Body::from(bytes))
+      .unwrap();
   }
+  Response::builder()
+    .status(StatusCode::NOT_FOUND)
+    .body(Body::from("not found"))
+    .unwrap()
+}
+
+// Debug builds read from disk so edits to symlinked source repos (static/aeor,
+// static/shared) go live without rebuild. rust-embed's debug-mode runtime
+// rejects files inside symlinked subdirectories because the canonical path
+// escapes its canonical folder root. Release uses the compiled-in embed.
+#[cfg(debug_assertions)]
+async fn read_asset(path: &str) -> Option<Vec<u8>> {
+  const DEV_STATIC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/static");
+  let full = std::path::Path::new(DEV_STATIC_DIR).join(path);
+  tokio::fs::read(&full).await.ok()
+}
+
+#[cfg(not(debug_assertions))]
+async fn read_asset(path: &str) -> Option<Vec<u8>> {
+  StaticAssets::get(path).map(|f| f.data.to_vec())
 }
 
 fn mime_from_path(path: &str) -> &'static str {

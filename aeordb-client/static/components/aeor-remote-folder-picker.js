@@ -8,15 +8,16 @@ const { div, span, button } = elements;
 /**
  * Remote folder picker dialog.
  *
- * Opens a modal that browses a remote aeordb server's directory tree,
- * showing only folders. The user navigates by clicking folders and
- * selects the current path.
+ * Browses a remote aeordb server's directory tree via the local client's
+ * proxy endpoint (`/api/v1/connections/{id}/browse?path=...`). Proxying
+ * server-side avoids the engine's CORS preflight failure and keeps the
+ * api-key/JWT handling in Rust where it belongs.
  *
  * Usage:
- *   const path = await showRemoteFolderPicker(connectionUrl, apiKey);
- *   // path is e.g. "/docs/archive/" or null if cancelled
+ *   const path = await showRemoteFolderPicker(connectionId);
+ *   // path is e.g. "/Pictures/Family/Harlo/" or null if cancelled
  */
-export async function showRemoteFolderPicker(connectionUrl, apiKey) {
+export async function showRemoteFolderPicker(connectionId) {
   return new Promise((resolve) => {
     let currentPath = '/';
     let entries = [];
@@ -35,43 +36,20 @@ export async function showRemoteFolderPicker(connectionUrl, apiKey) {
 
     modal.addEventListener('close', () => finish(null));
 
-    async function getJwt() {
-      if (!apiKey) return null;
-      try {
-        const response = await fetch(`${connectionUrl}/auth/token`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ api_key: apiKey }),
-        });
-        if (!response.ok) return null;
-        const data = await response.json();
-        return data.token || null;
-      } catch (e) {
-        return null;
-      }
-    }
-
     async function fetchListing(path) {
       loading = true;
       render();
 
       try {
-        let cleanPath = path.replace(/\/+$/, '') || '';
-        let url = `${connectionUrl}/files${cleanPath}/?limit=500`;
-
-        let headers = {};
-        let jwt = await getJwt();
-        if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
-        else if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-
-        let response = await fetch(url, { headers });
+        const url = `/api/v1/connections/${encodeURIComponent(connectionId)}/browse?path=${encodeURIComponent(path)}`;
+        const response = await fetch(url);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-        let data = await response.json();
-        entries = (data.items || []).filter((e) => e.entry_type === 3); // directories only
+        const data = await response.json();
+        entries = data.entries || [];
       } catch (error) {
         entries = [];
         console.error('Failed to list remote directory:', error);
+        window.aeorToast?.(`Failed to load remote folder: ${error.message}`, 'error');
       }
 
       loading = false;
@@ -111,10 +89,10 @@ export async function showRemoteFolderPicker(connectionUrl, apiKey) {
       let items = entries.map((entry) => {
         return div.class('folder-picker-item')
           .onClick(() => {
-            currentPath = currentPath.replace(/\/+$/, '') + '/' + entry.name + '/';
+            currentPath = entry.full_path.replace(/\/+$/, '') + '/';
             fetchListing(currentPath);
           })(
-            span.class('folder-picker-icon')('\uD83D\uDCC1'),
+            span.class('folder-picker-icon')('📁'),
             entry.name,
           );
       });

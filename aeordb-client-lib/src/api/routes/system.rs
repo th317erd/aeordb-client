@@ -76,7 +76,11 @@ pub async fn shutdown(
   tracing::info!("shutdown requested via API");
 
   if let Some(ref shutdown_signal) = state.shutdown_signal {
-    shutdown_signal.notify_one();
+    // notify_waiters wakes ALL pending .notified() futures so both the
+    // HTTP server (graceful axum::serve shutdown) and the Tauri-exit
+    // bridge in main.rs receive the signal. notify_one would wake only
+    // one — leaving the other half of the process alive.
+    shutdown_signal.notify_waiters();
   }
 
   (StatusCode::OK, Json(serde_json::json!({

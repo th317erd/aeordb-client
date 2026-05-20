@@ -3,7 +3,9 @@
 import { ReactiveState } from '../aeor/reactive-state.js';
 import { elements } from '../aeor/elements.js';
 
-const { div, nav, span } = elements;
+const { div, nav, span, a, svg, path } = elements;
+
+const LOGO_PATH = 'M 22.999629,0 0,34.99993 H 7.1680371 L 22.999629,10.921296 h 5.16e-4 L 26.235608,6.00015 h 2.764173 v 28.99978 h 3.235976 2.764174 V 0 h -6.00015 z m 0,21.843111 -8.650634,13.156819 h 8.650634 z';
 
 const NAV_ITEMS = [
   { page: 'dashboard',   icon: '\u25A0', iconClass: 'nav-icon-accent',     label: 'Dashboard' },
@@ -60,9 +62,17 @@ class AeorNav extends HTMLElement {
 
     let element = div.context(this)(
       div.class('nav-logo')(
-        'Aeor',
-        span('DB'),
-        ' Client',
+        svg.class('nav-logo-icon')
+          .width('20')
+          .height('20')
+          .viewBox('0 0 35 35')(
+            path.fill('var(--accent)').d(LOGO_PATH)(),
+          ),
+        div.class('nav-logo-text')(
+          'Aeor',
+          span('DB'),
+          ' Client',
+        ),
       ),
       nav.class('nav-items')(
         ...NAV_ITEMS.map((item) =>
@@ -76,11 +86,33 @@ class AeorNav extends HTMLElement {
             ),
         ),
       ),
-      div.class('nav-version')
-        .textContent.bindState(
+      div.class('nav-version')(
+        span.textContent.bindState(
           (state) => `v${state.version}`,
           ['version'],
         )(),
+        ' · ',
+        a.class('nav-version-link')
+          .href('https://aeordb.com')
+          .target('_blank')
+          .rel('noopener noreferrer')
+          .onClick((event) => {
+            // Tauri's webview can't navigate to external URLs (no
+            // browser-tab context to spawn into), so target=_blank
+            // no-ops. Route through the open_external_url Tauri
+            // command which shells out to xdg-open / open / cmd-start
+            // depending on platform. Plain-browser previews fall
+            // through to the anchor's default navigation, preserving
+            // middle-click / cmd-click.
+            const invoke = window.__TAURI_INTERNALS__?.invoke
+                        || window.__TAURI__?.core?.invoke;
+            if (invoke) {
+              event.preventDefault();
+              invoke('open_external_url', { url: 'https://aeordb.com' })
+                .catch((error) => console.warn('open_external_url failed:', error));
+            }
+          })('aeordb.com'),
+      ),
     ).build(document);
 
     this.appendChild(element);

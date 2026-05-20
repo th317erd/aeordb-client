@@ -289,6 +289,7 @@ fn main() -> anyhow::Result<()> {
       // Wire up the API-triggered shutdown signal
       let api_shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
       state.shutdown_signal = Some(api_shutdown.clone());
+      let api_shutdown_for_tauri = api_shutdown.clone();
 
       let sync_runner   = state.sync_runner.clone();
       let sync_runner_shutdown = sync_runner.clone();
@@ -299,6 +300,7 @@ fn main() -> anyhow::Result<()> {
 
       // Create the tokio runtime manually -- Tauri must own the main thread
       let runtime = tokio::runtime::Runtime::new()?;
+      let runtime_handle = runtime.handle().clone();
 
       // Start continuous sync for all enabled relationships
       runtime.spawn(async move {
@@ -359,11 +361,30 @@ fn main() -> anyhow::Result<()> {
 
         tauri::Builder::default()
           .plugin(tauri_plugin_shell::init())
+          .invoke_handler(tauri::generate_handler![open_external_url])
           .setup(move |app| {
             use tauri::Manager;
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
             use tauri::tray::TrayIconBuilder;
             use tauri::image::Image;
+
+            // Bridge OS signals (SIGTERM/SIGINT) and the /api/v1/shutdown
+            // request into Tauri's event loop. Without this, the HTTP
+            // server shuts down but Tauri's main thread keeps the
+            // process alive — dev-watch then can't restart cleanly.
+            let exit_handle = app.handle().clone();
+            let api_shutdown_for_exit = api_shutdown_for_tauri.clone();
+            runtime_handle.spawn(async move {
+              tokio::select! {
+                _ = shutdown_signal() => {
+                  tracing::info!("OS signal received — exiting Tauri");
+                }
+                _ = api_shutdown_for_exit.notified() => {
+                  tracing::info!("API shutdown received — exiting Tauri");
+                }
+              }
+              exit_handle.exit(0);
+            });
 
             // --- Create the main window ---
             let parsed_url: tauri::Url = url.parse().expect("valid localhost URL");
@@ -575,4 +596,32 @@ async fn shutdown_signal() {
     _ = ctrl_c => { tracing::info!("received CTRL+C, shutting down..."); }
     _ = terminate => { tracing::info!("received SIGTERM, shutting down..."); }
   }
+}
+
+/// Tauri command — shell-open an http(s) URL in the user's default browser.
+/// Required because Tauri's webview can't navigate to external URLs on its
+/// own (no browser-tab context to spawn into), so footer links etc. would
+/// no-op in the desktop app. Plain-browser previews fall through to the
+/// anchor's default navigation; the JS only routes through here when
+/// `window.__TAURI_INTERNALS__` is present.
+///
+/// The http/https allowlist is deliberate: we don't need a general-purpose
+/// URL launcher and the narrow gate forecloses any future code path from
+/// shell-opening unexpected URIs (file://, javascript:, etc).
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+  if !(url.starts_with("https://") || url.starts_with("http://")) {
+    return Err(format!("only http(s) URLs are allowed; got: {}", url));
+  }
+  let result = if cfg!(target_os = "linux") {
+    std::process::Command::new("xdg-open").arg(&url).spawn()
+  } else if cfg!(target_os = "macos") {
+    std::process::Command::new("open").arg(&url).spawn()
+  } else if cfg!(target_os = "windows") {
+    // `start` is a cmd builtin — must go via cmd.exe.
+    std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn()
+  } else {
+    return Err("unsupported platform".to_string());
+  };
+  result.map(|_| ()).map_err(|error| format!("spawn failed: {}", error))
 }

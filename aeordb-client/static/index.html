@@ -6,9 +6,18 @@
   <title>AeorDB Client</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/aeor/styles/tokens.css">
+  <link rel="stylesheet" href="/static/aeor/styles/globals.css">
+  <!-- DB-shared styles loaded BEFORE universal so the canonical universal
+       button/heading rules override the duplicated generic styles in the
+       DB-shared file. DB-shared also carries 190+ file-browser styles
+       (extracted from inline). -->
+  <link rel="stylesheet" href="/static/shared/styles/components.css">
+  <link rel="stylesheet" href="/static/shared/components/aeor-snapshot-card.css">
+  <link rel="stylesheet" href="/static/shared/components/aeor-dashboard.css">
   <link rel="stylesheet" href="/static/aeor/styles/components.css">
   <link rel="stylesheet" href="/static/aeor/components/aeor-modal.css">
   <link rel="stylesheet" href="/static/aeor/components/aeor-confirm-button.css">
+  <link rel="stylesheet" href="/static/aeor/components/aeor-checkbox.css">
   <link rel="stylesheet" href="/static/aeor/components/aeor-info-box.css">
   <link rel="stylesheet" href="/static/aeor/components/aeor-confirm-dialog.css">
   <link rel="stylesheet" href="/static/aeor/components/aeor-toast.css">

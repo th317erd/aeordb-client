@@ -94,7 +94,28 @@ pub async fn trigger_sync(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ClientError> {
+  run_sync(state, id, false).await
+}
+
+/// Force-resync: clear the local sync state (checkpoint + per-file metadata)
+/// before running the sync. Needed when the remote's permission view changes
+/// for this user without the root_hash moving — the engine's diff with the
+/// stored checkpoint would otherwise return empty, leaving the client
+/// stuck reporting "0 pulled, 0 skipped, 0 failed" indefinitely.
+pub async fn force_resync(
+  State(state): State<AppState>,
+  Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ClientError> {
+  run_sync(state, id, true).await
+}
+
+async fn run_sync(
+  state: AppState,
+  id: String,
+  force: bool,
+) -> Result<Json<serde_json::Value>, ClientError> {
   use crate::connections::ConnectionManager;
+  use crate::sync::metadata::SyncMetadataStore;
   use crate::sync::replication::sync_relationship;
 
   // Load relationship and connection.
@@ -105,6 +126,13 @@ pub async fn trigger_sync(
   let connection_manager = ConnectionManager::new(&state.config_store);
   let connection = connection_manager.get(&relationship.remote_connection_id).await?
     .ok_or_else(|| ClientError::NotFound("connection not found".to_string()))?;
+
+  if force {
+    let metadata_store = SyncMetadataStore::new(&state.state_store);
+    metadata_store.clear_relationship_state(&id)
+      .map_err(|error| ClientError::Server(format!("failed to clear sync state: {}", error)))?;
+    tracing::info!("force-resync: cleared sync state for '{}'", relationship.name);
+  }
 
   // Run the sync (push and/or pull based on direction).
   let result = sync_relationship(&state.state_store, &connection, &relationship, &state.http_client)

@@ -5,8 +5,11 @@ import { showRemoteFolderPicker } from './aeor-remote-folder-picker.js';
 import { ReactiveState } from '../aeor/reactive-state.js';
 import { elements } from '../aeor/elements.js';
 import '../aeor/components/aeor-confirm-button.js';
+import '../aeor/components/aeor-checkbox.js';
+import '../aeor/components/aeor-info-box.js';
 
-const { div, h1, h2, h3, label, input, select, option, button, table, thead, tbody, tr, th, td, span, a } = elements;
+const { div, h1, h2, h3, label, input, select, option, button, table, thead, tbody, tr, th, td, span, a, strong } = elements;
+const aeorCheckbox = elements['aeor-checkbox'];
 
 class AeorSync extends HTMLElement {
   constructor() {
@@ -60,6 +63,17 @@ class AeorSync extends HTMLElement {
             ['showAddForm', 'editingId'],
           )
           .onClick(this._onAddToggle)(),
+      ),
+
+      // Page guide
+      elements['aeor-info-box'].compact('')(
+        'A sync relationship pairs a folder on a connected database with a folder on this machine and keeps them in step. Pick a direction — ',
+        strong('pull'),
+        ' to download from the remote, ',
+        strong('push'),
+        ' to upload from local, or ',
+        strong('bidirectional'),
+        ' for both. Add a connection on the Connections page first if you haven’t already.',
       ),
 
       // Form container — rebuilt dynamically
@@ -214,12 +228,10 @@ class AeorSync extends HTMLElement {
       ),
       div.class('form-row')(
         label('Delete Propagation'),
-        label.class('checkbox-row')(
-          input.type('checkbox').class('checkbox-large').id('form-delete-local-to-remote')(),
+        aeorCheckbox.id('form-delete-local-to-remote')(
           'When a file is deleted locally, also delete it on the remote',
         ),
-        label.class('checkbox-row')(
-          input.type('checkbox').class('checkbox-large').id('form-delete-remote-to-local')(),
+        aeorCheckbox.id('form-delete-remote-to-local')(
           'When a file is deleted on the remote, also delete it locally',
         ),
       ),
@@ -462,7 +474,7 @@ class AeorSync extends HTMLElement {
       return;
     }
 
-    const path = await showRemoteFolderPicker(connection.url, connection.api_key);
+    const path = await showRemoteFolderPicker(connection.id);
     if (path) {
       const input = this.querySelector('#form-remote-path');
       if (input) input.value = path;

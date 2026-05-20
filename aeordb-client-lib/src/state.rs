@@ -206,7 +206,7 @@ impl StateStore {
     let data = serde_json::to_vec_pretty(value)?;
 
     self.ops()
-      .store_file(&ctx, path, &data, Some("application/json"))
+      .store_file_buffered(&ctx, path, &data, Some("application/json"))
       .map_err(|error| ClientError::Server(
         format!("failed to store {} in state database: {}", path, error),
       ))?;
@@ -221,7 +221,7 @@ impl StateStore {
       return Ok(None);
     }
 
-    match self.ops().read_file(path) {
+    match self.ops().read_file_buffered(path) {
       Ok(data) => {
         match serde_json::from_slice(&data) {
           Ok(value) => Ok(Some(value)),

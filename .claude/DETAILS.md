@@ -37,12 +37,14 @@
 - `connections.rs` — connection CRUD (ConfigStore)
 - `sync/relationships.rs` — relationship CRUD (ConfigStore)
 
-## Shared Components
-- `aeordb-web-components/` is the shared library (separate repo)
-- `build.rs` rsyncs it into `static/shared/` on each build
-- Local `aeor-file-view-shared.js` is a thin re-export shim to shared
-- Shared utils: `escapeHtml`, `escapeAttr`, `formatBytes`, `formatDate`, `formatUptime`, etc.
-- Shared file helpers: `fileIcon`, `ENTRY_TYPE_*`, `bindResizeHandle`, `openFolder`, etc.
+## Shared Components (TWO repos)
+- `aeor-web-components/` — generic components (modal, confirm-button, info-box, toast, utils)
+  - `build.rs` rsyncs into `static/aeor/`
+  - Includes: ReactiveState, element builder, query engine, showConfirm()
+- `aeordb-web-components/` — DB-specific components (file browser, dashboard, crudlify, previews)
+  - `build.rs` rsyncs into `static/shared/`
+- Local `aeor-file-view-shared.js` is a thin re-export shim (utils from aeor/, DB helpers from shared/)
+- All client components use element builder + ReactiveState patterns (no innerHTML)
 
 ## Test Count: 160 tests passing
 

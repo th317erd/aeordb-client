@@ -4,12 +4,25 @@ import { bindResizeHandle } from './aeor-file-view-shared.js';
 import { ReactiveState } from '../aeor/reactive-state.js';
 import { elements } from '../aeor/elements.js';
 import '../aeor/components/aeor-confirm-button.js';
+import '../aeor/components/aeor-info-box.js';
 import { AeorDashboard } from '../shared/components/aeor-dashboard.js';
 
 // Register the shared dashboard under a distinct tag name so it does not
 // conflict with the client's own <aeor-dashboard> component.
+//
+// The remote variant disables SSE: it talks to the engine through the
+// local /proxy route, which buffers the entire upstream body before
+// responding (axum's reqwest::Response::bytes()). SSE streams never end,
+// so EventSource would hang. The base class already falls back to 15s
+// polling when SSE fails, so we just trigger that path directly.
 if (!customElements.get('aeor-remote-dashboard'))
-  customElements.define('aeor-remote-dashboard', class extends AeorDashboard {});
+  customElements.define('aeor-remote-dashboard', class extends AeorDashboard {
+    connectSSE() {
+      if (!this._interval) {
+        this._interval = setInterval(() => this.fetchStats(), 15000);
+      }
+    }
+  });
 
 const { div, h1, h2, h3, label, input, button, table, thead, tbody, tr, th, td } = elements;
 
@@ -62,6 +75,13 @@ class AeorConnections extends HTMLElement {
             ['showAddForm'],
           )
           .onClick(this._toggleAddForm)(),
+      ),
+
+      // Page guide
+      elements['aeor-info-box'].compact('')(
+        'Connections are pointers to remote AeorDB instances. Add one here, then head to the ',
+        elements.strong('Sync'),
+        ' page to choose which folders to mirror between that database and your local machine.',
       ),
 
       // Add form panel — hidden until toggled
@@ -139,6 +159,13 @@ class AeorConnections extends HTMLElement {
     ).build(document);
 
     this.appendChild(element);
+
+    // Clear the `.invalid` marker as soon as the user starts correcting
+    // a field, so the red ring disappears the instant the input registers.
+    for (const id of ['form-name', 'form-url', 'form-api-key', 'form-share-url']) {
+      const field = this.querySelector('#' + id);
+      if (field) field.addEventListener('input', () => field.classList.remove('invalid'));
+    }
 
     // Bind resize handle
     let resizeHandle = this.querySelector('.preview-resize-handle');
@@ -223,7 +250,11 @@ class AeorConnections extends HTMLElement {
       dashboard.className = 'connection-dashboard';
       container.appendChild(dashboard);
     }
-    dashboard.setAttribute('base-url', connection.url);
+    // Point the dashboard at the local proxy instead of the remote URL —
+    // direct cross-origin fetches to the engine fail CORS preflight from
+    // the Tauri webview. The proxy attaches the connection's JWT and
+    // forwards to ${connection.url}/${path}.
+    dashboard.setAttribute('base-url', `/api/v1/connections/${connection.id}/proxy`);
   }
 
   _toggleAddForm() {
@@ -272,15 +303,34 @@ class AeorConnections extends HTMLElement {
   }
 
   async _submitForm() {
-    let name     = this.querySelector('#form-name').value;
-    let url      = this.querySelector('#form-url').value;
-    let apiKey   = this.querySelector('#form-api-key').value;
-    let shareUrl = this.querySelector('#form-share-url').value;
+    const nameEl     = this.querySelector('#form-name');
+    const urlEl      = this.querySelector('#form-url');
+    const apiKeyEl   = this.querySelector('#form-api-key');
+    const shareUrlEl = this.querySelector('#form-share-url');
 
-    if (!name || !url) return;
+    if (!nameEl || !urlEl) return;
+
+    const name     = nameEl.value.trim();
+    const url      = urlEl.value.trim();
+    const apiKey   = apiKeyEl ? apiKeyEl.value : '';
+    const shareUrl = shareUrlEl ? shareUrlEl.value : '';
+
+    // Validation: visibly mark empty required fields + tell the user
+    // what's missing. The .invalid class is cleared on `input` (wired
+    // when the form is built) so the marker disappears as soon as the
+    // user starts typing.
+    const missing = [];
+    if (!name) { nameEl.classList.add('invalid'); missing.push('Name'); }
+    if (!url)  { urlEl.classList.add('invalid'); missing.push('URL'); }
+    if (missing.length) {
+      const which = missing.length === 1 ? missing[0] : missing.join(' and ');
+      window.aeorToast?.(`${which} ${missing.length === 1 ? 'is' : 'are'} required.`, 'error');
+      (missing[0] === 'Name' ? nameEl : urlEl).focus();
+      return;
+    }
 
     try {
-      let response = await fetch('/api/v1/connections', {
+      const response = await fetch('/api/v1/connections', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
@@ -295,7 +345,9 @@ class AeorConnections extends HTMLElement {
       this._state.showAddForm = false;
       await this._fetchConnections();
     } catch (error) {
-      window.aeorToast(`Failed to create connection: ${error.message}`, 'error');
+      // Optional chain: if aeor-toasts hasn't connected yet, don't throw a
+      // secondary error that swallows the original one silently.
+      window.aeorToast?.(`Failed to create connection: ${error.message}`, 'error');
     }
   }
 

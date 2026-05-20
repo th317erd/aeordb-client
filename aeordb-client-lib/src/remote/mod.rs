@@ -82,7 +82,7 @@ impl RemoteClient {
   }
 
   /// Get the auth header, exchanging API key for JWT if needed.
-  async fn auth_header(&self) -> Option<String> {
+  pub async fn auth_header(&self) -> Option<String> {
     let api_key = self.api_key.as_ref()?;
 
     // Check for cached JWT

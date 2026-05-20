@@ -127,6 +127,30 @@ impl<'a> SyncMetadataStore<'a> {
     self.state.store_json(&key, checkpoint)
   }
 
+  /// Clear all sync state for a relationship so the next pull starts from
+  /// scratch: deletes the per-file metadata directory AND the checkpoint.
+  /// Used by force-resync when share permissions or the remote tree change
+  /// in a way the engine's root_hash doesn't reflect — without this the
+  /// client thinks it's caught up and pulls return 0/0/0 indefinitely.
+  pub fn clear_relationship_state(&self, relationship_id: &str) -> Result<()> {
+    let checkpoint_key = format!("{}{}.json", SYNC_META_PATH, relationship_id);
+    if self.state.exists(&checkpoint_key)? {
+      self.state.delete(&checkpoint_key)?;
+    }
+
+    let files_dir = format!("{}{}/", SYNC_FILES_PATH, relationship_id);
+    if self.state.exists(&files_dir)? {
+      let entries = self.state.list_directory(&files_dir)?;
+      for entry in entries {
+        if entry == ".keep" { continue; }
+        let path = format!("{}{}", files_dir, entry);
+        self.state.delete(&path)?;
+      }
+    }
+
+    Ok(())
+  }
+
   /// Compute the storage key for a file's sync metadata.
   /// Uses a blake3 hash of the remote path to avoid filesystem-unfriendly
   /// characters in the key.

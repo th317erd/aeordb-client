@@ -282,9 +282,29 @@ pub async fn push_sync(
       }
       Err(error) => {
         let message = format!("failed to upload {}: {}", remote_path, error);
+        let is_forbidden = message.contains("403 Forbidden");
         tracing::warn!("{}", message);
         errors.push(message);
         files_failed += 1;
+
+        // 403 means the user lacks write permission on this remote path
+        // (typical when the share grants read-only access). Retrying every
+        // sync cycle spams the activity log. Record metadata with the
+        // current local hash/mtime so the fast/hash skip paths catch it
+        // next cycle — we'll only re-attempt if the local file actually
+        // changes (in which case the user presumably means to push).
+        if is_forbidden {
+          let now_ms = chrono::Utc::now().timestamp_millis();
+          let suppressed_meta = FileSyncMeta {
+            path:           remote_path.clone(),
+            content_hash:   content_hash.clone(),
+            size:           file_size,
+            modified_at:    mtime,
+            sync_status:    SyncStatus::Synced,
+            last_synced_at: now_ms,
+          };
+          let _ = metadata_store.set_file_meta(&relationship.id, &suppressed_meta);
+        }
       }
     }
   }

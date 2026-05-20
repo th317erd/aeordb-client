@@ -3,9 +3,14 @@
 import { openFolder } from './aeor-file-view-shared.js';
 import { ReactiveState } from '../aeor/reactive-state.js';
 import { elements } from '../aeor/elements.js';
-import '../aeor/components/aeor-confirm-button.js';
+import '../aeor/components/aeor-checkbox.js';
 
 const { div, h1, h2, label, input, button, code } = elements;
+const aeorCheckbox = elements['aeor-checkbox'];
+
+// Debounce window for the auto-save on settings inputs. 1s lets the
+// user pause mid-thought without firing a PATCH on every keystroke.
+const SAVE_DEBOUNCE_MS = 1000;
 
 class AeorSettings extends HTMLElement {
   constructor() {
@@ -26,9 +31,10 @@ class AeorSettings extends HTMLElement {
       hostname: '',
     });
 
-    this._onSave = this._onSave.bind(this);
+    this._scheduleSave = this._scheduleSave.bind(this);
     this._openConfigDir = this._openConfigDir.bind(this);
     this._openDataDir = this._openDataDir.bind(this);
+    this._saveTimer = null;
   }
 
   connectedCallback() {
@@ -37,7 +43,10 @@ class AeorSettings extends HTMLElement {
   }
 
   disconnectedCallback() {
-    // No timers to clean up — reactive state handles everything.
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+    }
   }
 
   refresh() {
@@ -87,16 +96,10 @@ class AeorSettings extends HTMLElement {
               .min('10').max('3600')(),
           ),
           div.class('form-row')(
-            label.class('checkbox-row')(
-              input.type('checkbox').class('checkbox-large').id('setting-auto-start')(),
-              'Auto-start sync on launch',
-            ),
+            aeorCheckbox.id('setting-auto-start')('Auto-start sync on launch'),
           ),
           div.class('form-row')(
-            label.class('checkbox-row')(
-              input.type('checkbox').class('checkbox-large').id('setting-auto-start-system')(),
-              'Start when system starts',
-            ),
+            aeorCheckbox.id('setting-auto-start-system')('Start when system starts'),
           ),
         ),
 
@@ -129,22 +132,26 @@ class AeorSettings extends HTMLElement {
           ),
         ),
 
-        // Save button
-        div.class('form-actions')(
-          elements['aeor-confirm-button']
-            .class('confirm-button-new')
-            .label('Save')
-            .confirmedText('Saved!')
-            .duration('0')
-            .id('save-settings')(),
-        ),
       ),
     ).build(document);
 
     this.appendChild(element);
 
-    this.querySelector('#save-settings')
-      .addEventListener('confirm', () => this._onSave());
+    // Auto-save on debounce: any input change schedules a PATCH after
+    // SAVE_DEBOUNCE_MS of inactivity. No explicit Save button — the
+    // standard for our clients now.
+    const watchedIds = [
+      'setting-client-name',
+      'setting-sync-interval',
+      'setting-auto-start',
+      'setting-auto-start-system',
+    ];
+    for (const id of watchedIds) {
+      const el = this.querySelector('#' + id);
+      if (!el) continue;
+      el.addEventListener('input', this._scheduleSave);
+      el.addEventListener('change', this._scheduleSave);
+    }
   }
 
   _populateInputs() {
@@ -208,7 +215,15 @@ class AeorSettings extends HTMLElement {
     }
   }
 
-  async _onSave() {
+  _scheduleSave() {
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      this._save();
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  async _save() {
     // Read input values from DOM
     const clientNameInput = this.querySelector('#setting-client-name');
     const syncIntervalInput = this.querySelector('#setting-sync-interval');
@@ -221,7 +236,17 @@ class AeorSettings extends HTMLElement {
     const autoStartSystem = autoStartSystemInput?.checked ?? false;
 
     if (isNaN(syncInterval) || syncInterval < 10 || syncInterval > 3600) {
-      window.aeorToast?.('Sync interval must be between 10 and 3600 seconds.', 'error');
+      // Mark the field as invalid; toast on transition so we don't
+      // re-spam while the user is still typing. Don't PATCH.
+      if (syncIntervalInput && !syncIntervalInput.classList.contains('invalid')) {
+        syncIntervalInput.classList.add('invalid');
+        window.aeorToast?.('Sync interval must be between 10 and 3600 seconds.', 'error');
+        // Clear the invalid mark as soon as the user types again.
+        syncIntervalInput.addEventListener('input', function clearOnce() {
+          syncIntervalInput.classList.remove('invalid');
+          syncIntervalInput.removeEventListener('input', clearOnce);
+        });
+      }
       return;
     }
 
@@ -251,8 +276,10 @@ class AeorSettings extends HTMLElement {
       this._state.config_dir = settings.config_dir;
       this._state.data_dir = settings.data_dir;
 
-      // Re-populate inputs with server-returned values
-      this._populateInputs();
+      // Don't re-populate inputs on success — the user may have continued
+      // typing during the PATCH and we'd clobber their in-flight edits.
+      // The reactive state is the source of truth for code that reads it;
+      // the DOM mirrors whatever the user has typed.
     } catch (error) {
       window.aeorToast?.(`Failed to save settings: ${error.message}`, 'error');
     }
