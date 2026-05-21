@@ -213,18 +213,6 @@ class AeorDashboard extends HTMLElement {
       // run for minutes — we manage label/disabled imperatively for
       // the lifetime of the fetch instead.
       const isInFlight = this._inFlightSyncs.has(rel.id);
-      // Note: cannot chain `.disabled(null)` to clear it — the static
-      // builder path serializes via `'' + value`, so `null` becomes
-      // the literal string "null" (HTML5 boolean attr is presence-based,
-      // so "null" reads as disabled). Build the chain without .disabled,
-      // then flip the host attribute imperatively after build only when
-      // we actually want it.
-      let forceSyncBtn = elements['aeor-confirm-button']
-        .class('confirm-button-new force-sync-btn')
-        .label(isInFlight ? 'Syncing...' : 'Force Sync')
-        .duration('1000')
-        .dataId(rel.id)
-        .onConfirm((event) => this._triggerSync(event.currentTarget, rel.id))();
 
       const card = div.class('sync-status-card')(
         div.class('sync-status-header')(
@@ -232,7 +220,15 @@ class AeorDashboard extends HTMLElement {
             span.class('sync-badge ' + dotClass)(),
             escapeHtml(rel.name),
           ),
-          div.class('sync-status-actions')(forceSyncBtn),
+          div.class('sync-status-actions')(
+            elements['aeor-confirm-button']
+              .class('confirm-button-new force-sync-btn')
+              .label(isInFlight ? 'Syncing...' : 'Force Sync')
+              .duration('1000')
+              .disabled(isInFlight)
+              .dataId(rel.id)
+              .onConfirm((event) => this._triggerSync(event.currentTarget, rel.id))(),
+          ),
         ),
         div.class('sync-status-details')(
           span.class('sync-status-detail')(directionLabel(rel.direction)),
@@ -240,11 +236,6 @@ class AeorDashboard extends HTMLElement {
           span.class('sync-status-detail sync-status-state' + (running ? ' success' : ''))(statusText),
         ),
       ).build(document);
-
-      if (isInFlight) {
-        const btnEl = card.querySelector('aeor-confirm-button.force-sync-btn');
-        if (btnEl) btnEl.disabled = true;
-      }
 
       grid.appendChild(card);
     }

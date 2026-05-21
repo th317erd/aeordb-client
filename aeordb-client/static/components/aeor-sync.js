@@ -24,6 +24,14 @@ class AeorSync extends HTMLElement {
       activity:      [],
     });
 
+    // In-flight /trigger sync IDs. Same rehydration concern as the
+    // dashboard's _inFlightSyncs: _renderTable wipes & rebuilds the
+    // row grid on every refresh(), which would orphan an in-flight
+    // Sync button and hand the user a fresh enabled one they could
+    // double-click. Tracked here so the row render path can re-seed
+    // the "Syncing..." + disabled state.
+    this._inFlightTriggers = new Set();
+
     this._onAddToggle       = this._onAddToggle.bind(this);
     this._onGoConnections   = this._onGoConnections.bind(this);
     this._onFormSubmit      = this._onFormSubmit.bind(this);
@@ -284,7 +292,14 @@ class AeorSync extends HTMLElement {
 
     const rows = s.relationships.map((rel) => {
       const isSelected = (rel.id === s.selectedId);
+      const isInFlight = this._inFlightTriggers.has(rel.id);
 
+      // Hold-to-confirm Sync button — same pattern as the dashboard's
+      // Force Sync. Note this hits /trigger (delta sync), NOT the
+      // dashboard's destructive /force-resync, so the protection
+      // here is for the time cost (potentially multi-minute on a
+      // big relationship) rather than for destructiveness. Theme
+      // matches the dashboard so the affordance reads consistently.
       const row = tr.class(isSelected ? 'sync-row selected' : 'sync-row')(
         td.class('mono muted')(`${rel.id.substring(0, 8)}...`),
         td(escapeHtml(rel.name)),
@@ -296,11 +311,16 @@ class AeorSync extends HTMLElement {
           ),
         ),
         td.class('actions')(
-          button.class('success small')('Sync'),
-          button.class('secondary small')('Edit'),
+          elements['aeor-confirm-button']
+            .class('confirm-button-new sync-trigger-btn')
+            .label(isInFlight ? 'Syncing...' : 'Sync')
+            .duration('1000')
+            .disabled(isInFlight)
+            .dataId(rel.id)(),
+          button.class('secondary small edit-btn')('Edit'),
           button.class('secondary small btn-toggle')(rel.enabled ? 'Pause' : 'Resume'),
           elements['aeor-confirm-button']
-            .class('confirm-button-danger')
+            .class('confirm-button-danger sync-delete-btn')
             .label('Delete')
             .confirmedText('Deleted!')
             .duration('1000')
@@ -308,10 +328,11 @@ class AeorSync extends HTMLElement {
         ),
       ).build(document);
 
-      // Store relationship id on the row
       row.dataset.id = rel.id;
 
-      // Row click — select to show activity
+      // Row click — select to show activity. Skip when the click
+      // started on any of the action affordances so they don't
+      // double-fire.
       row.addEventListener('click', (event) => {
         if (event.target.closest('button') || event.target.closest('aeor-confirm-button')) return;
         if (this._state.selectedId === rel.id) {
@@ -322,16 +343,41 @@ class AeorSync extends HTMLElement {
         }
       });
 
-      // Button events
-      const buttons = row.querySelectorAll('button');
-      buttons[0].addEventListener('click', (e) => { e.stopPropagation(); this._triggerSync(rel.id); });
-      buttons[1].addEventListener('click', (e) => { e.stopPropagation(); this._state.editingId = rel.id; this._state.showAddForm = false; });
-      buttons[2].addEventListener('click', (e) => { e.stopPropagation(); this._toggleSync(rel.id, rel.enabled); });
+      // Select buttons by their distinct class rather than indexed
+      // querySelectorAll('button') — the Sync action is now an
+      // aeor-confirm-button (custom element, not a <button>), so the
+      // old buttons[0] / buttons[1] / buttons[2] indexing would
+      // silently re-bind to the wrong elements.
+      const editBtn   = row.querySelector('button.edit-btn');
+      const toggleBtn = row.querySelector('button.btn-toggle');
+      if (editBtn) {
+        editBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._state.editingId = rel.id;
+          this._state.showAddForm = false;
+        });
+      }
+      if (toggleBtn) {
+        toggleBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._toggleSync(rel.id, rel.enabled);
+        });
+      }
 
-      // Confirm-button fires 'confirm' after hold completes — delete directly
-      const confirmBtn = row.querySelector('aeor-confirm-button');
-      if (confirmBtn) {
-        confirmBtn.addEventListener('confirm', (e) => { e.stopPropagation(); this._deleteSync(rel.id); });
+      const syncBtn = row.querySelector('aeor-confirm-button.sync-trigger-btn');
+      if (syncBtn) {
+        syncBtn.addEventListener('confirm', (e) => {
+          e.stopPropagation();
+          this._triggerSync(e.currentTarget, rel.id);
+        });
+      }
+
+      const deleteBtn = row.querySelector('aeor-confirm-button.sync-delete-btn');
+      if (deleteBtn) {
+        deleteBtn.addEventListener('confirm', (e) => {
+          e.stopPropagation();
+          this._deleteSync(rel.id);
+        });
       }
 
       return row;
@@ -610,7 +656,19 @@ class AeorSync extends HTMLElement {
     }
   }
 
-  async _triggerSync(id) {
+  async _triggerSync(confirmBtn, id) {
+    // Same in-flight discipline as the dashboard's force-resync —
+    // re-renders during the trigger would otherwise hand the user
+    // a fresh enabled button mid-sync. The Set is the source of
+    // truth; the button reference may go stale on re-render.
+    if (this._inFlightTriggers.has(id)) return;
+    this._inFlightTriggers.add(id);
+
+    if (confirmBtn && confirmBtn.isConnected) {
+      confirmBtn.label    = 'Syncing...';
+      confirmBtn.disabled = true;
+    }
+
     try {
       const response = await fetch(`/api/v1/sync/${id}/trigger`, { method: 'POST' });
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);
@@ -623,6 +681,16 @@ class AeorSync extends HTMLElement {
       }
     } catch (error) {
       window.aeorToast(`Sync failed: ${error.message}`, 'error', 10000);
+    } finally {
+      this._inFlightTriggers.delete(id);
+      // Re-query rather than trust the closed-over reference; the
+      // row may have been rebuilt mid-sync. The detached old button
+      // is harmless if it's already gone.
+      const liveBtn = this.querySelector(`aeor-confirm-button.sync-trigger-btn[data-id="${id}"]`);
+      if (liveBtn) {
+        liveBtn.label    = 'Sync';
+        liveBtn.disabled = false;
+      }
     }
   }
 
