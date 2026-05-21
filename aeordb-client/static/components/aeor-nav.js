@@ -3,9 +3,27 @@
 import { ReactiveState } from '../aeor/reactive-state.js';
 import { elements } from '../aeor/elements.js';
 
-const { div, nav, span, a, svg, path } = elements;
+const { div, nav, span, a, svg, path, circle, line } = elements;
 
 const LOGO_PATH = 'M 22.999629,0 0,34.99993 H 7.1680371 L 22.999629,10.921296 h 5.16e-4 L 26.235608,6.00015 h 2.764173 v 28.99978 h 3.235976 2.764174 V 0 h -6.00015 z m 0,21.843111 -8.650634,13.156819 h 8.650634 z';
+
+// (i)-in-a-circle \u2014 same Feather-style geometry as aeor-info-box's
+// icon. `currentColor` so it tracks the nav-item's text color (active
+// vs idle) instead of hard-coding a tint. Built as a factory so each
+// NAV_ITEMS map iteration gets a fresh builder.
+const aboutIcon = () =>
+  svg
+    .width('1em').height('1em')
+    .viewBox('0 0 24 24')
+    .fill('none')
+    .stroke('currentColor')
+    .strokeWidth('2')
+    .strokeLinecap('round')
+    .strokeLinejoin('round')(
+      circle.cx('12').cy('12').r('10')(),
+      line.x1('12').y1('16').x2('12').y2('12')(),
+      line.x1('12').y1('8').x2('12.01').y2('8')(),
+    );
 
 const NAV_ITEMS = [
   { page: 'dashboard',   icon: '\u25A0', iconClass: 'nav-icon-accent',     label: 'Dashboard' },
@@ -14,6 +32,7 @@ const NAV_ITEMS = [
   { page: 'files',       icon: '\uD83D\uDCC1', iconClass: 'nav-icon-files', label: 'Files' },
   { page: 'conflicts',   icon: '\u26A0', iconClass: 'nav-icon-warning',    label: 'Conflicts' },
   { page: 'settings',    icon: '\u2699', iconClass: 'nav-icon-muted',      label: 'Settings' },
+  { page: 'about',       icon: aboutIcon, iconClass: 'nav-icon-muted',     label: 'About' },
 ];
 
 class AeorNav extends HTMLElement {
@@ -81,7 +100,9 @@ class AeorNav extends HTMLElement {
             ['active'],
           ).dataPage(item.page)
             .onClick(this._handleNavClick)(
-              span.class(`nav-icon ${item.iconClass}`)(item.icon),
+              span.class(`nav-icon ${item.iconClass}`)(
+                (typeof item.icon === 'function') ? item.icon() : item.icon,
+              ),
               item.label,
             ),
         ),

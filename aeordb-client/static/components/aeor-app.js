@@ -11,11 +11,12 @@ import './aeor-sync.js';
 import './aeor-conflicts.js';
 import './aeor-file-browser.js';
 import './aeor-settings.js';
+import './aeor-about.js';
 import './aeor-toasts.js';
 
 const { div } = elements;
 
-const PAGES = ['dashboard', 'connections', 'sync', 'files', 'conflicts', 'settings'];
+const PAGES = ['dashboard', 'connections', 'sync', 'files', 'conflicts', 'settings', 'about'];
 
 const PAGE_TAGS = {
   dashboard:   'aeor-dashboard',
@@ -24,6 +25,7 @@ const PAGE_TAGS = {
   files:       'aeor-file-browser',
   conflicts:   'aeor-conflicts',
   settings:    'aeor-settings',
+  about:       'aeor-about',
 };
 
 class AeorApp extends HTMLElement {

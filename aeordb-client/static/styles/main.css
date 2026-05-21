@@ -1362,3 +1362,59 @@ aeor-conflicts {
 .ml-sm {
   margin-left: 8px;
 }
+
+/* ==========================================================================
+   About page
+   ========================================================================== */
+
+.about-page {
+  max-width: 36rem;
+  padding-bottom: 2rem;
+}
+
+.about-section {
+  margin-bottom: 1.75rem;
+}
+
+.about-section h2 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.about-section--hero h2 {
+  font-size: 1.25rem;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text-primary);
+}
+
+.about-section p {
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.about-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.about-link {
+  color: var(--accent, #f97316);
+  text-decoration: none;
+}
+
+.about-link:hover,
+.about-link:focus-visible {
+  text-decoration: underline;
+}
+
+.about-link-sep {
+  color: var(--text-muted, #8b949e);
+  user-select: none;
+}
