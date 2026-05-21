@@ -3,6 +3,7 @@
 import { escapeHtml, openFolder, directionLabel, formatUptime } from './aeor-file-view-shared.js';
 import { ReactiveState } from '../aeor/reactive-state.js';
 import { elements } from '../aeor/elements.js';
+import '../aeor/components/aeor-confirm-button.js';
 
 const { div, span, button, h1, h2 } = elements;
 
@@ -30,6 +31,12 @@ class AeorDashboard extends HTMLElement {
     this._isConnected = false;
     this._timeoutIds = [];
     this._syncCardsContainer = null;
+    // In-flight force-resync IDs. The dashboard re-renders the whole
+    // sync-card grid on every refresh() (nav-away → nav-back), which
+    // would orphan the "Syncing..." button and give the user a fresh
+    // enabled "Force Sync" they could spam mid-sync. Tracking the IDs
+    // here lets _renderSyncCards rehydrate the disabled state.
+    this._inFlightSyncs = new Set();
 
     this._handleOpenConfigDir = this._handleOpenConfigDir.bind(this);
     this._handleOpenDataDir = this._handleOpenDataDir.bind(this);
@@ -199,16 +206,33 @@ class AeorDashboard extends HTMLElement {
       const dotClass = running ? 'synced' : (rel.enabled ? 'pending' : 'not-synced');
       const statusText = running ? 'Running' : (rel.enabled ? 'Stopped' : 'Disabled');
 
+      // Force-Sync hold-to-confirm. Matches Xenocept's confirm-button
+      // pattern (.onConfirm builder, event.currentTarget for the btn).
+      // Deliberately NO confirmedText: the post-confirm 5s auto-reset
+      // is hardcoded inside aeor-confirm-button and a force-resync can
+      // run for minutes — we manage label/disabled imperatively for
+      // the lifetime of the fetch instead.
+      const isInFlight = this._inFlightSyncs.has(rel.id);
+      // Note: cannot chain `.disabled(null)` to clear it — the static
+      // builder path serializes via `'' + value`, so `null` becomes
+      // the literal string "null" (HTML5 boolean attr is presence-based,
+      // so "null" reads as disabled). Build the chain without .disabled,
+      // then flip the host attribute imperatively after build only when
+      // we actually want it.
+      let forceSyncBtn = elements['aeor-confirm-button']
+        .class('confirm-button-new force-sync-btn')
+        .label(isInFlight ? 'Syncing...' : 'Force Sync')
+        .duration('1000')
+        .dataId(rel.id)
+        .onConfirm((event) => this._triggerSync(event.currentTarget, rel.id))();
+
       const card = div.class('sync-status-card')(
         div.class('sync-status-header')(
           div.class('sync-status-name')(
             span.class('sync-badge ' + dotClass)(),
             escapeHtml(rel.name),
           ),
-          div.class('sync-status-actions')(
-            button.class('secondary small sync-now-btn')
-              .onClick((e) => this._triggerSync(e.currentTarget, rel.id))('Sync Now'),
-          ),
+          div.class('sync-status-actions')(forceSyncBtn),
         ),
         div.class('sync-status-details')(
           span.class('sync-status-detail')(directionLabel(rel.direction)),
@@ -217,46 +241,61 @@ class AeorDashboard extends HTMLElement {
         ),
       ).build(document);
 
+      if (isInFlight) {
+        const btnEl = card.querySelector('aeor-confirm-button.force-sync-btn');
+        if (btnEl) btnEl.disabled = true;
+      }
+
       grid.appendChild(card);
     }
 
     container.appendChild(grid);
   }
 
-  async _triggerSync(btn, id) {
-    const originalText = btn.textContent;
-    btn.textContent = 'Syncing...';
-    btn.disabled = true;
+  async _triggerSync(confirmBtn, id) {
+    // Guard against double-fire \u2014 element-builder's onConfirm wires the
+    // 'confirm' event, but a re-rendered card could end up with a fresh
+    // button while the previous fetch is still in flight. The in-flight
+    // set is the source of truth.
+    if (this._inFlightSyncs.has(id)) return;
+    this._inFlightSyncs.add(id);
+
+    // The hold animation has already played. Use the host element's
+    // exposed `label` / `disabled` setters (defined in
+    // aeor-confirm-button.js) rather than poking attributes directly \u2014
+    // setters keep _state and the attribute in lockstep, which the
+    // reactive label binding depends on. Safe even after the post-
+    // confirm internal _reset fires 300ms later (it reads this.label
+    // and we'll have already set it to "Syncing...").
+    if (confirmBtn && confirmBtn.isConnected) {
+      confirmBtn.label    = 'Syncing...';
+      confirmBtn.disabled = true;
+    }
 
     try {
       const response = await fetch(`/api/v1/sync/${id}/force-resync`, { method: 'POST' });
       if (!response.ok) throw new Error(`Sync trigger failed: ${response.status}`);
-      const result   = await response.json();
-      const pull     = result.pull || {};
-      const push     = result.push || {};
+      const result = await response.json();
+      const pulled = (result.pull || {}).files_pulled || 0;
+      const pushed = (result.push || {}).files_pushed || 0;
 
-      const pulled = pull.files_pulled || 0;
-      const pushed = push.files_pushed || 0;
-      btn.textContent = `\u2713 ${pulled} pulled, ${pushed} pushed`;
-      btn.className = 'success small sync-now-btn';
-
-      this._timeoutIds.push(setTimeout(() => {
-        if (!this._isConnected) return;
-        btn.textContent = originalText;
-        btn.className = 'secondary small sync-now-btn';
-        btn.disabled = false;
-      }, 3000));
+      if (window.aeorToast)
+        window.aeorToast(`\u2713 Force sync complete \u2014 ${pulled} pulled, ${pushed} pushed`, 'success');
     } catch (error) {
+      if (window.aeorToast)
+        window.aeorToast(`Force sync failed: ${error.message || error}`, 'error', 10000);
+    } finally {
+      this._inFlightSyncs.delete(id);
       if (!this._isConnected) return;
-      btn.textContent = 'Failed';
-      btn.className = 'danger small sync-now-btn';
 
-      this._timeoutIds.push(setTimeout(() => {
-        if (!this._isConnected) return;
-        btn.textContent = originalText;
-        btn.className = 'secondary small sync-now-btn';
-        btn.disabled = false;
-      }, 3000));
+      // The card may have been replaced during refresh() while the
+      // fetch was running. Re-query by data-id rather than relying on
+      // the closed-over button reference, which could be detached.
+      const liveBtn = this.querySelector(`aeor-confirm-button.force-sync-btn[data-id="${id}"]`);
+      if (liveBtn) {
+        liveBtn.label    = 'Force Sync';
+        liveBtn.disabled = false;
+      }
     }
   }
 }
