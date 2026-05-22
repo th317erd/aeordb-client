@@ -1418,3 +1418,33 @@ aeor-conflicts {
   color: var(--text-muted, #8b949e);
   user-select: none;
 }
+
+/* ==========================================================================
+   Per-file sync status dot
+
+   Client-only affordance. Rendered by AeorFileBrowser.syncStatusIndicator()
+   into each file row's name cell (list view) and grid card name (grid
+   view). The portal subclass inherits the base's null default and
+   doesn't include this stylesheet, so the dot stays a desktop-only
+   thing exactly as it was before the file-browser refactor that
+   dropped it.
+   ========================================================================== */
+
+.aeor-sync-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  margin-left: 0.5rem;
+  flex-shrink: 0;
+  /* Bleed inward a hair so the dot doesn't sit too high relative to
+     the surrounding text — inline-block's default baseline puts it on
+     the text baseline, not the x-height center. */
+  vertical-align: 0.05em;
+  background: var(--text-muted, #8b949e);
+}
+
+.aeor-sync-dot--synced     { background: var(--success, #3fb950); }
+.aeor-sync-dot--pending    { background: var(--warning, #d29922); }
+.aeor-sync-dot--error      { background: var(--error, var(--danger, #f85149)); }
+.aeor-sync-dot--not-synced { background: var(--text-muted, #8b949e); }
