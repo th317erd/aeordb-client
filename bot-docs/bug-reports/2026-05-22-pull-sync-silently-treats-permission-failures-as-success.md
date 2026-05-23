@@ -138,3 +138,51 @@ Once you pull a binary built from that commit or later, `Family/Susan/` (and any
 ## Contact
 
 DB team can reach back through the usual channel. Happy to assist with the engine-side cooperation if you decide to pursue option 4 (diff signature). For the rest, no engine work needed — entirely client-side.
+
+---
+
+## ⚠️ RETRACTION — 2026-05-23
+
+**Status:** All four recommendations above are WRONG and should not be implemented. If any of them have already been merged, please revert.
+
+The author (DB team, via Claude) framed this report as "defense in depth against future server-side permission misconfigurations." That framing is itself broken — and three of the four concrete recommendations are information-disclosure leaks dressed up as defenses. Going through them with the corrected understanding:
+
+### The corrected principle
+
+The server is authoritative for permissions. The diff response to a given user **is** that user's reality. There is no "ground truth" outside the server for the client to cross-check against — and any attempt to cross-check forces the server to expose side channels.
+
+If the server has a bug, the fix is on the server. The client should remain a thin transport that displays whatever the server told it.
+
+### What's wrong with each recommendation
+
+**#1 — Per-relationship coverage check.** Direct information leak. Asking the server "how many files do you have under `/Pictures/Family/`?" and receiving a count higher than what the diff/listing actually returned tells the user "there are N files here you're not allowed to know about." A user could enumerate hidden directory structure by recursively querying counts at different prefixes. This is a confused-deputy disclosure regardless of whether the count is "only" shown in a log or warning.
+
+**#2 — "Empty diff with stale checkpoint" warning.** Smaller but same shape of leak. "The server's root advanced but you got no changes" tells the user "other people did things that don't involve you." In a multi-tenant deployment, User A can passively observe activity from Users B/C/D just by watching their own sync warnings. The log line is the disclosure vector.
+
+**#3 — Browse 403 UI banner.** The 403 itself, returned by the server, is the disclosure. The UI can only display what the server already exposed. The right answer is that the **server returns 404** for paths the user cannot see — and that's an engine concern, not a client concern. The UI shouldn't loudly amplify a leak the engine is already making; if anything, render the same as any other "not found" path.
+
+**#4 — Diff signature / grant-set checksum.** The most architecturally interesting and also the worst leak. A grant-set hash that changes between two diffs reveals "your permissions changed" — which lets the user infer "I lost access to something" (now they know hidden resources exist) or "I gained access to something" (now they're tracking grant deltas). This is exactly the kind of side channel that this whole report should have been preventing, not recommending.
+
+### Action items, if any of these were merged
+
+1. **Coverage check (#1):** revert. Delete any post-pull HEAD/count requests against the server. Restore "0 pulled, 0 failed" as a fully-truthful outcome.
+2. **Empty-diff warning (#2):** revert the log-level change. Empty diffs with checkpoint advancement remain at `info` — they ARE successful no-op syncs as far as this user is concerned.
+3. **Browse banner (#3):** if the UI now distinguishes 403 from "empty folder," consider rendering both the same way (or as a generic "not available" state). Don't broadcast denial. Better to file an engine-side bug requesting 404-not-403 for paths the user can't see.
+4. **Grant-set signature (#4):** if any wire-level grant-hash was added to `/sync/diff`, remove it before it ships to production.
+
+### What the right defense actually looks like
+
+If we want to defend against the *engine-side* class of bug that produced the Susan symptom, the defense lives on the **engine side**, not the client:
+
+- Property tests asserting `(listing entry's effective_permissions for user U) == (descend decision for user U at that path)` over generated ACL configurations.
+- Stronger code review on any function that evaluates permissions to make sure it normalizes the trailing-slash convention (the specific Susan bug).
+- Possibly: a single, blessed `evaluate_permission(user, path) -> Permissions` entry point that the listing builder AND the middleware AND the sync filter all call into, so a divergence between them is structurally impossible (this is what the original report asked for in its "Recommended engine-side investigation" section before being derailed by my well-meaning-but-wrong client-side proposals).
+
+These are all engine-side. The DB team will track them as followups.
+
+### Apology
+
+Sorry. The framing of this report was wrong from the start, and the recommendations were derived from that wrong frame. The client team correctly trusted the report enough to act on it — that was the right thing to do given the framing, and the author should have been more careful before recommending defensive checks that introduce side channels. Future reports from the DB team will be more careful about the trust boundary between server and client.
+
+— DB team
+
