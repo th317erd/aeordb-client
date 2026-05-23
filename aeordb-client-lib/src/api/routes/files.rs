@@ -202,7 +202,30 @@ pub async fn browse(
   for entry in listing.items {
     let entry_remote_path = format!("{}/{}", remote_path.trim_end_matches('/'), entry.name);
 
-    // Determine sync status
+    // Determine has_local FIRST so we can use it as a fallback when
+    // the metadata store has no entry for this file.
+    let local_file_path = Path::new(&relationship.local_path)
+      .join(relative_path)
+      .join(&entry.name);
+    let has_local = local_file_path.exists();
+
+    // Determine sync status. The metadata store is the source of truth
+    // when present — it carries pending/error states that aren't
+    // observable from the disk alone. When metadata is ABSENT, fall
+    // back to local presence: if the file exists on disk it was synced
+    // at some prior point and there's nothing pending against it; if
+    // it doesn't exist it really hasn't been synced.
+    //
+    // Why this fallback matters: `clear_relationship_state()` (force-
+    // resync) wipes the per-file metadata but deliberately leaves the
+    // local files in place. Without the fallback every browse after a
+    // force-resync reports "not_synced" for every file that's actually
+    // already on disk and correctly content-identical to the remote.
+    // The UI dot would then go gray for everything until the engine
+    // produced a fresh diff and re-pulled — which, in practice, can
+    // never happen if the engine returns an empty diff from a no-
+    // checkpoint baseline (a separate engine-side issue we've seen
+    // strand sync state indefinitely).
     let sync_status = match metadata_store.get_file_meta(relationship_id, &entry_remote_path) {
       Ok(Some(meta)) => match meta.sync_status {
         SyncStatus::Synced      => "synced".to_string(),
@@ -210,14 +233,8 @@ pub async fn browse(
         SyncStatus::PendingPull => "pending_pull".to_string(),
         SyncStatus::Error       => "error".to_string(),
       },
-      _ => "not_synced".to_string(),
+      _ => if has_local { "synced".to_string() } else { "not_synced".to_string() },
     };
-
-    // Determine has_local
-    let local_file_path = Path::new(&relationship.local_path)
-      .join(relative_path)
-      .join(&entry.name);
-    let has_local = local_file_path.exists();
 
     entries.push(BrowseEntry {
       name:         entry.name,
