@@ -11,14 +11,39 @@ pub struct OpenFolderRequest {
 }
 
 /// POST /api/v1/open-folder — open a directory in the native file explorer.
+///
+/// Guards (must mirror the absent-Tauri-command checks since this is now
+/// the single entry point for "open locally" affordances across the UI):
+///   - Path must be absolute. Relative paths would resolve against the
+///     binary's CWD, which is opaque to the WebView caller.
+///   - Path must exist AND be a directory. Passing a file path through
+///     `open::that` would launch the OS default handler for that file
+///     (text editor for /etc/passwd, browser for .html, etc.), which is
+///     a surprising and easily-misused side effect for a button labeled
+///     "Open Locally."
 pub async fn open_folder(
   Json(request): Json<OpenFolderRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
   let path = std::path::Path::new(&request.path);
 
-  if !path.exists() {
-    return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-      "error": format!("path does not exist: {}", request.path),
+  if !path.is_absolute() {
+    return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+      "error": format!("path must be absolute; got: {}", request.path),
+    })));
+  }
+
+  let metadata = match std::fs::metadata(path) {
+    Ok(m) => m,
+    Err(error) => {
+      return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+        "error": format!("cannot access path '{}': {}", request.path, error),
+      })));
+    }
+  };
+
+  if !metadata.is_dir() {
+    return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+      "error": format!("path is not a directory: {}", request.path),
     })));
   }
 

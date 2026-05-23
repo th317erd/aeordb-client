@@ -361,7 +361,7 @@ fn main() -> anyhow::Result<()> {
 
         tauri::Builder::default()
           .plugin(tauri_plugin_shell::init())
-          .invoke_handler(tauri::generate_handler![open_external_url, open_local_folder])
+          .invoke_handler(tauri::generate_handler![open_external_url])
           .setup(move |app| {
             use tauri::Manager;
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -633,55 +633,5 @@ fn open_external_url(url: String) -> Result<(), String> {
   } else {
     return Err("unsupported platform".to_string());
   };
-  result.map(|_| ()).map_err(|error| format!("spawn failed: {}", error))
-}
-
-/// Open a local folder in the OS's native file manager
-/// (Nautilus / Finder / Explorer). Used by the file browser's
-/// "Open Locally" button to reveal a sync relationship's local
-/// directory in the platform's filesystem UI.
-///
-/// Guards:
-///   - Path must be absolute. Relative paths would be resolved against
-///     the binary's CWD, which is opaque from the WebView side.
-///   - Path must exist and be a directory. Stops accidents like
-///     trying to "open" /etc/passwd, which would launch the OS default
-///     handler for that file (text editor, browser, etc.) instead of
-///     the file manager.
-///
-/// We deliberately do NOT also check that the path lives under one of
-/// the configured sync relationships' local_paths — the trust boundary
-/// here is tight (the WebView only talks to localhost), and the
-/// is_dir guard already prevents the dangerous "open arbitrary file"
-/// case. Adding a relationship check would add code without changing
-/// the practical attack surface.
-#[tauri::command]
-fn open_local_folder(path: String) -> Result<(), String> {
-  use std::path::Path;
-
-  let p = Path::new(&path);
-
-  if !p.is_absolute() {
-    return Err(format!("path must be absolute; got: {}", path));
-  }
-
-  let metadata = std::fs::metadata(p)
-    .map_err(|error| format!("cannot access path '{}': {}", path, error))?;
-
-  if !metadata.is_dir() {
-    return Err(format!("path is not a directory: {}", path));
-  }
-
-  let result = if cfg!(target_os = "linux") {
-    std::process::Command::new("xdg-open").arg(p).spawn()
-  } else if cfg!(target_os = "macos") {
-    std::process::Command::new("open").arg(p).spawn()
-  } else if cfg!(target_os = "windows") {
-    // explorer.exe with a path arg opens that folder in File Explorer.
-    std::process::Command::new("explorer").arg(p).spawn()
-  } else {
-    return Err("unsupported platform".to_string());
-  };
-
   result.map(|_| ()).map_err(|error| format!("spawn failed: {}", error))
 }
