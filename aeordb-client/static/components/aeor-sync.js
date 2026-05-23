@@ -66,7 +66,7 @@ class AeorSync extends HTMLElement {
       ),
 
       // Page guide
-      elements['aeor-info-box'].compact('')(
+      elements['aeor-info-box'].compact('').class('page-guide')(
         'A sync relationship pairs a folder on a connected database with a folder on this machine and keeps them in step. Pick a direction — ',
         strong('pull'),
         ' to download from the remote, ',

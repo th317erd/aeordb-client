@@ -118,13 +118,13 @@ class AeorDashboard extends HTMLElement {
           span.class('info-label')('Config Directory'),
           span.class('info-value mono')
             .textContent.bindState((s) => s.configDir, ['configDir'])(),
-          button.class('secondary small ml-sm').onClick(this._handleOpenConfigDir)('Open'),
+          button.class('secondary small ml-sm').onClick(this._handleOpenConfigDir)('Open Locally'),
         ),
         div.class('info-row')(
           span.class('info-label')('Data Directory'),
           span.class('info-value mono')
             .textContent.bindState((s) => s.dataDir, ['dataDir'])(),
-          button.class('secondary small ml-sm').onClick(this._handleOpenDataDir)('Open'),
+          button.class('secondary small ml-sm').onClick(this._handleOpenDataDir)('Open Locally'),
         ),
       ),
     ).build(document);

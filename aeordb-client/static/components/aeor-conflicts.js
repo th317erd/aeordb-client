@@ -63,7 +63,7 @@ class AeorConflicts extends HTMLElement {
       ),
 
       // Page guide
-      elements['aeor-info-box'].compact('')(
+      elements['aeor-info-box'].compact('').class('page-guide')(
         'A conflict appears when the same file changed on both the remote database and your local machine between syncs. For each entry, choose which version to keep — the ',
         strong('winner'),
         ' replaces the other side. The loser can be saved as a renamed copy if you want to hang onto it.',

@@ -414,6 +414,26 @@ tbody tr {
 
 .info-value {
   color: var(--text-primary);
+  /* Push to the right edge of the row when a trailing affordance (e.g.
+     the "Open Locally" button) is also present. .info-row uses flex
+     space-between, which with 3 children would center the middle one;
+     `margin-left: auto` forces this value to absorb all leading space
+     so it hugs the right side next to its action button. text-align:
+     right keeps the path glyphs right-aligned when the value's box
+     ends up wider than its content (e.g. on narrow viewports where
+     the path wraps). margin-right gives a visible gap from the next
+     sibling so the path doesn't smash into the button border. */
+  margin-left: auto;
+  margin-right: 0.5rem;
+  text-align: right;
+}
+
+/* Top-of-page guide info-boxes (Connections / Sync / Conflicts). The
+   class is set on the <aeor-info-box compact> instance, alongside
+   `compact` which gives it inline-block display. Adds breathing room
+   between the guide and the page body below it. */
+.page-guide {
+  margin-bottom: 1rem;
 }
 
 /* ==========================================================================

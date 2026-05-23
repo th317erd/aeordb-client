@@ -78,7 +78,7 @@ class AeorConnections extends HTMLElement {
       ),
 
       // Page guide
-      elements['aeor-info-box'].compact('')(
+      elements['aeor-info-box'].compact('').class('page-guide')(
         'Connections are pointers to remote AeorDB instances. Add one here, then head to the ',
         elements.strong('Sync'),
         ' page to choose which folders to mirror between that database and your local machine.',
