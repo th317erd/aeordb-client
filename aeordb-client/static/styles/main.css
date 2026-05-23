@@ -399,6 +399,11 @@ tbody tr {
 
 .info-row {
   display: flex;
+  /* Vertically center label + value + (optional) Open Locally button.
+     Default `align-items: stretch` lets the button's 1.75rem height
+     drive the row, but the inline label/value text aligns to its
+     baseline near the top — visibly off-center against the button. */
+  align-items: center;
   justify-content: space-between;
   padding: 6px 0;
   border-bottom: 1px solid var(--bg-tertiary);
