@@ -169,6 +169,71 @@ fn compute_local_subpath(relationship: &SyncRelationship, relative_path: &str) -
   }
 }
 
+/// Roll up a directory's sync state from the metadata of all files
+/// living somewhere under that directory. The browse handler calls
+/// this for every directory entry in a listing.
+///
+/// Returns one of the same string values used for file entries
+/// ("synced" / "pending_push" / "pending_pull" / "error" /
+/// "not_synced") so the client's existing per-file dot mapping can
+/// render the directory's rollup without any new state handling.
+///
+/// Priority — the "worst" descendant wins so the user sees the
+/// signal that needs the most attention:
+///   1. error          → any descendant failed → red dot
+///   2. pending_push / pending_pull → any descendant is in flight → yellow
+///   3. synced         → at least one descendant has metadata AND all
+///                       known descendants are synced → green
+///   4. not_synced     → no metadata for any descendant. Fall back to
+///                       the directory's own disk presence: a folder
+///                       that exists locally with no per-file metadata
+///                       (the typical post-force-resync state) reads
+///                       as "synced enough" rather than uniformly gray;
+///                       a folder that doesn't exist locally reads as
+///                       genuinely not synced.
+///
+/// "All descendants" is matched by path prefix on the engine's
+/// canonical remote path. Recursive — a broken file three levels deep
+/// will bubble up to the top-level folder's dot. That's the right
+/// signal for "is anything in this folder broken or in progress?".
+fn folder_rollup_status(
+  all_metas: &[crate::sync::metadata::FileSyncMeta],
+  dir_remote_path: &str,
+  dir_has_local: bool,
+) -> String {
+  // Trailing slash so "/Pictures/Family" doesn't also match a sibling
+  // named "/Pictures/FamilyArchive".
+  let prefix = format!("{}/", dir_remote_path.trim_end_matches('/'));
+
+  let mut saw_any   = false;
+  let mut any_error = false;
+  let mut any_push  = false;
+  let mut any_pull  = false;
+  let mut all_synced = true;  // optimistic; flipped when we see a non-synced child
+
+  for meta in all_metas {
+    if !meta.path.starts_with(&prefix) {
+      continue;
+    }
+    saw_any = true;
+    match meta.sync_status {
+      SyncStatus::Synced      => {},
+      SyncStatus::PendingPush => { any_push = true;  all_synced = false; },
+      SyncStatus::PendingPull => { any_pull = true;  all_synced = false; },
+      SyncStatus::Error       => { any_error = true; all_synced = false; },
+    }
+  }
+
+  if any_error  { return "error".to_string(); }
+  if any_push   { return "pending_push".to_string(); }
+  if any_pull   { return "pending_pull".to_string(); }
+  if saw_any && all_synced { return "synced".to_string(); }
+
+  // No descendant metadata at all. Fall back to the directory's disk
+  // presence — same semantics as the per-file fallback above.
+  if dir_has_local { "synced".to_string() } else { "not_synced".to_string() }
+}
+
 // ---------------------------------------------------------------------------
 // 1. Browse
 // ---------------------------------------------------------------------------
@@ -198,12 +263,28 @@ pub async fn browse(
 
   let metadata_store = SyncMetadataStore::new(&state.state_store);
 
+  // Load all per-file metadata for this relationship ONCE up front so
+  // the directory-rollup branch below can answer "what's the state of
+  // this folder's descendants?" without re-querying the store per
+  // directory in the listing. List size scales with the relationship's
+  // file count, not the listing's; for the ~84-file Aeolus folder we
+  // tested with this is sub-millisecond, but for a 100k-file
+  // relationship this read becomes the dominant cost of a browse
+  // call. If that ever bites we'll want a prefix index on the store
+  // (currently keyed by blake3(path), which doesn't support prefix
+  // scans), or a per-directory rollup cache. Not worth the complexity
+  // until a real workload demands it.
+  let all_metas = metadata_store
+    .list_file_metas(relationship_id)
+    .unwrap_or_default();
+
   let mut entries = Vec::with_capacity(listing.items.len());
   for entry in listing.items {
     let entry_remote_path = format!("{}/{}", remote_path.trim_end_matches('/'), entry.name);
+    let is_dir = entry.entry_type == 3;
 
     // Determine has_local FIRST so we can use it as a fallback when
-    // the metadata store has no entry for this file.
+    // the metadata store has no entry for this file/folder.
     let local_file_path = Path::new(&relationship.local_path)
       .join(relative_path)
       .join(&entry.name);
@@ -221,19 +302,23 @@ pub async fn browse(
     // local files in place. Without the fallback every browse after a
     // force-resync reports "not_synced" for every file that's actually
     // already on disk and correctly content-identical to the remote.
-    // The UI dot would then go gray for everything until the engine
-    // produced a fresh diff and re-pulled — which, in practice, can
-    // never happen if the engine returns an empty diff from a no-
-    // checkpoint baseline (a separate engine-side issue we've seen
-    // strand sync state indefinitely).
-    let sync_status = match metadata_store.get_file_meta(relationship_id, &entry_remote_path) {
-      Ok(Some(meta)) => match meta.sync_status {
-        SyncStatus::Synced      => "synced".to_string(),
-        SyncStatus::PendingPush => "pending_push".to_string(),
-        SyncStatus::PendingPull => "pending_pull".to_string(),
-        SyncStatus::Error       => "error".to_string(),
-      },
-      _ => if has_local { "synced".to_string() } else { "not_synced".to_string() },
+    //
+    // For DIRECTORIES, the sync_status is a rollup of all descendants'
+    // statuses (see folder_rollup_status below) — there's no per-
+    // directory metadata in the store, so we have to derive it from
+    // the per-file metadata that lives under this directory's path.
+    let sync_status = if is_dir {
+      folder_rollup_status(&all_metas, &entry_remote_path, has_local)
+    } else {
+      match metadata_store.get_file_meta(relationship_id, &entry_remote_path) {
+        Ok(Some(meta)) => match meta.sync_status {
+          SyncStatus::Synced      => "synced".to_string(),
+          SyncStatus::PendingPush => "pending_push".to_string(),
+          SyncStatus::PendingPull => "pending_pull".to_string(),
+          SyncStatus::Error       => "error".to_string(),
+        },
+        _ => if has_local { "synced".to_string() } else { "not_synced".to_string() },
+      }
     };
 
     entries.push(BrowseEntry {
