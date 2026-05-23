@@ -115,7 +115,7 @@ class AeorSettings extends HTMLElement {
                     (state) => state.config_dir,
                     ['config_dir'],
                   )(),
-                button.class('secondary small').onClick(this._openConfigDir)('Open'),
+                button.class('secondary small').onClick(this._openConfigDir)('Open Locally'),
               ),
             ),
             div.class('form-row')(
@@ -126,7 +126,7 @@ class AeorSettings extends HTMLElement {
                     (state) => state.data_dir,
                     ['data_dir'],
                   )(),
-                button.class('secondary small').onClick(this._openDataDir)('Open'),
+                button.class('secondary small').onClick(this._openDataDir)('Open Locally'),
               ),
             ),
           ),
