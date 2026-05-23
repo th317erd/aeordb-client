@@ -256,10 +256,16 @@ pub async fn browse(
   tracing::info!("browsing {} (remote: {})", relationship_id, remote_path);
 
   let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
+  // No more `.map_err(|e| BadGateway(e.to_string()))` here — that
+  // collapsed connect-refused / 5xx / 4xx / parse errors into one
+  // opaque "bad gateway" string and the UI rendered them all as
+  // "the server denied access." The RemoteClient now emits
+  // categorized errors (UpstreamUnreachable / UpstreamServer /
+  // UpstreamProtocol / UpstreamRejected) and the JSON wire format
+  // carries a `category` field so the UI can branch correctly.
   let listing = remote_client
     .list_directory_paginated(&remote_path, query.limit, query.offset)
-    .await
-    .map_err(|error| ClientError::BadGateway(error.to_string()))?;
+    .await?;
 
   let metadata_store = SyncMetadataStore::new(&state.state_store);
 

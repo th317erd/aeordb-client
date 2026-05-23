@@ -55,6 +55,55 @@ pub struct RemoteFileMetadata {
   pub updated_at:   Option<i64>,
 }
 
+/// Classify a `reqwest::Error` from `.send()` into a categorized
+/// ClientError. Distinguishes "couldn't even reach the engine"
+/// (UpstreamUnreachable — connect/timeout/DNS/TLS) from other
+/// transport-layer issues that fall through to UpstreamServer.
+/// Without this, every transport failure used to map to
+/// ClientError::Server, which the UI then rendered as "the server
+/// denied access" — wildly misleading for a connection-refused.
+fn classify_reqwest_send_error(error: &reqwest::Error, remote_path: &str) -> ClientError {
+  // is_connect: TCP/DNS/TLS failed. is_timeout: request timed out
+  // before any response. is_request: malformed request (rare; we
+  // build the URL ourselves so this would be a bug not a network
+  // issue, but treat as protocol).
+  if error.is_connect() || error.is_timeout() {
+    ClientError::UpstreamUnreachable(
+      format!("couldn't reach engine for {}: {}", remote_path, error),
+    )
+  } else if error.is_request() {
+    ClientError::UpstreamProtocol(
+      format!("malformed request to engine for {}: {}", remote_path, error),
+    )
+  } else {
+    // Catch-all: body decode errors, etc. Treat as unreachable since
+    // the user's likely action is the same (retry / check network).
+    ClientError::UpstreamUnreachable(
+      format!("transport error talking to engine for {}: {}", remote_path, error),
+    )
+  }
+}
+
+/// Classify a non-success HTTP status from the upstream engine into
+/// a categorized ClientError. 4xx → UpstreamRejected (status code
+/// preserved; passive callers should NOT distinguish 403 from 404
+/// in user-visible UI per the DB team's 2026-05-23 retraction).
+/// 5xx → UpstreamServer. Other → UpstreamServer as a safe fallback.
+fn classify_upstream_status(status: u16, body: &str, remote_path: &str) -> ClientError {
+  let body_excerpt = body.chars().take(200).collect::<String>();
+  if (400..500).contains(&status) {
+    ClientError::UpstreamRejected {
+      status,
+      message: format!("engine refused {}: {}", remote_path, body_excerpt),
+    }
+  } else {
+    ClientError::UpstreamServer {
+      status,
+      message: format!("engine failed for {}: {}", remote_path, body_excerpt),
+    }
+  }
+}
+
 /// Client for talking to a remote aeordb instance.
 /// Handles JWT token exchange: exchanges the API key for a JWT on first
 /// authenticated request, caches it, and re-exchanges on 401.
@@ -388,18 +437,16 @@ impl RemoteClient {
     }
 
     let response = request.send().await
-      .map_err(|error| ClientError::Server(
-        format!("failed to list remote directory {}: {}", remote_path, error),
-      ))?;
+      .map_err(|error| classify_reqwest_send_error(&error, remote_path))?;
 
-    if !response.status().is_success() {
-      return Err(ClientError::Server(
-        format!("remote returned HTTP {} for {}", response.status(), remote_path),
-      ));
+    let status = response.status();
+    if !status.is_success() {
+      let body = response.text().await.unwrap_or_default();
+      return Err(classify_upstream_status(status.as_u16(), &body, remote_path));
     }
 
     let listing: DirectoryListingResponse = response.json().await
-      .map_err(|error| ClientError::Server(
+      .map_err(|error| ClientError::UpstreamProtocol(
         format!("failed to parse directory listing for {}: {}", remote_path, error),
       ))?;
 
