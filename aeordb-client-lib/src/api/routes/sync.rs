@@ -154,6 +154,7 @@ async fn run_sync(
     let mut bytes_transferred: u64 = 0;
     let mut duration_ms:       u64 = 0;
     let mut errors: Vec<String>    = Vec::new();
+    let mut warnings: Vec<String>  = Vec::new();
     let mut parts: Vec<String>     = Vec::new();
 
     if let Some(ref pull) = result.pull {
@@ -161,6 +162,7 @@ async fn run_sync(
       bytes_transferred += pull.total_bytes;
       duration_ms       += pull.duration_ms;
       errors.extend(pull.errors.iter().cloned());
+      warnings.extend(pull.warnings.iter().cloned());
       parts.push(format!("pull(pulled={}, deleted={}, failed={})", pull.files_pulled, pull.files_deleted, pull.files_failed));
     }
     if let Some(ref push) = result.push {
@@ -182,6 +184,7 @@ async fn run_sync(
       bytes_transferred,
       duration_ms,
       errors,
+      warnings,
       timestamp:         chrono::Utc::now().timestamp_millis(),
     };
 

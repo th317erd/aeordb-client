@@ -384,6 +384,7 @@ fn broadcast_push(
     bytes_transferred: result.total_bytes,
     duration_ms:       result.duration_ms,
     errors:            result.errors.clone(),
+    warnings:          Vec::new(),
     timestamp:         chrono::Utc::now().timestamp_millis(),
   };
   broadcast_event(event_tx, &event);
@@ -409,6 +410,7 @@ fn broadcast_pull(
     bytes_transferred: result.total_bytes,
     duration_ms:       result.duration_ms,
     errors:            result.errors.clone(),
+    warnings:          result.warnings.clone(),
     timestamp:         chrono::Utc::now().timestamp_millis(),
   };
   broadcast_event(event_tx, &event);
@@ -424,6 +426,7 @@ fn broadcast_full_sync(
   let mut bytes_transferred: u64 = 0;
   let mut duration_ms:       u64 = 0;
   let mut errors: Vec<String>    = Vec::new();
+  let mut warnings: Vec<String>  = Vec::new();
   let mut parts: Vec<String>     = Vec::new();
 
   if let Some(ref pull) = result.pull {
@@ -431,6 +434,7 @@ fn broadcast_full_sync(
     bytes_transferred += pull.total_bytes;
     duration_ms       += pull.duration_ms;
     errors.extend(pull.errors.iter().cloned());
+    warnings.extend(pull.warnings.iter().cloned());
     parts.push(format!("pull(pulled={}, deleted={}, failed={})", pull.files_pulled, pull.files_deleted, pull.files_failed));
   }
 
@@ -454,6 +458,7 @@ fn broadcast_full_sync(
     bytes_transferred,
     duration_ms,
     errors,
+    warnings,
     timestamp:         chrono::Utc::now().timestamp_millis(),
   };
   broadcast_event(event_tx, &event);
@@ -475,6 +480,7 @@ fn broadcast_error(
     bytes_transferred: 0,
     duration_ms:       0,
     errors:            vec![error_message.to_string()],
+    warnings:          Vec::new(),
     timestamp:         chrono::Utc::now().timestamp_millis(),
   };
   broadcast_event(event_tx, &event);
