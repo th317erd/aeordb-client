@@ -29,16 +29,6 @@ pub struct PullResult {
   pub total_bytes:    u64,
   pub duration_ms:    u64,
   pub errors:         Vec<String>,
-  /// Non-fatal anomalies detected during the pull. Distinct from
-  /// `errors` because they don't indicate a failure of any specific
-  /// file operation — they're signals that the SHAPE of the diff
-  /// disagrees with what we'd expect (e.g. the engine reports the
-  /// remote tree changed but the diff contains zero changes). Surface
-  /// to the user so a silent-but-pathological state doesn't masquerade
-  /// as a healthy "0 pulled" outcome. See the DB team's report at
-  /// aeordb-client/bot-docs/bug-reports/2026-05-22-pull-sync-silently-
-  /// treats-permission-failures-as-success.md for the motivation.
-  pub warnings:       Vec<String>,
 }
 
 /// Pull remote changes from an aeordb server to the local filesystem.
@@ -69,7 +59,6 @@ pub async fn pull_sync(
   let mut symlinks_pulled: u64 = 0;
   let mut total_bytes: u64 = 0;
   let mut errors: Vec<String> = Vec::new();
-  let mut warnings: Vec<String> = Vec::new();
 
   // Load the last sync checkpoint to get incremental diffs.
   let checkpoint = metadata_store.get_checkpoint(&relationship.id)?;
@@ -78,63 +67,6 @@ pub async fn pull_sync(
   // Fetch the diff from the remote.
   let diff = fetch_remote_diff(connection, since_root_hash.as_deref(), http_client).await?;
   let new_root_hash = diff.root_hash.clone();
-
-  // Anomaly detection: distinguish "no work to do" from "diff shape
-  // disagrees with engine state." The DB team flagged this in their
-  // 2026-05-22 report after we hit a Susan/ folder that was supposed
-  // to sync but quietly returned empty diffs forever. The engine fix
-  // (f42778a) closes that specific bug, but the client should also
-  // surface the SHAPE mismatch so the next misconfiguration doesn't
-  // hide in the same activity-feed-green non-symptom.
-  let total_changes = diff.changes.files_added.len()
-    + diff.changes.files_modified.len()
-    + diff.changes.files_deleted.len()
-    + diff.changes.symlinks_added.len()
-    + diff.changes.symlinks_modified.len()
-    + diff.changes.symlinks_deleted.len();
-
-  if total_changes == 0 {
-    match since_root_hash.as_deref() {
-      None => {
-        // Cold start: we sent `since_root_hash=None`. Engine should have
-        // returned a from-scratch listing of everything we can see. A
-        // zero-change response here means either "this relationship's
-        // remote really is empty" (rare and the user would know) or
-        // "the engine returned nothing despite having content" (the
-        // permission-filter bug we just fixed, or a future one).
-        let msg = format!(
-          "cold-start pull returned 0 changes for '{}' — the relationship's remote may be empty, \
-           or the engine's diff is silently filtering out content you should be receiving \
-           (e.g. server-side permission changes). New root hash: {}.",
-          relationship.name, new_root_hash,
-        );
-        tracing::warn!("{}", msg);
-        warnings.push(msg);
-      }
-      Some(prev_hash) if prev_hash != new_root_hash => {
-        // Tree changed (root hash advanced) but the diff has zero
-        // changes from our perspective. The engine sees a different
-        // tree than we last observed, but reports we're getting none
-        // of the delta. Strong signal of a permission-filter mismatch
-        // or a similar server-side filter that omits paths from the
-        // diff without surfacing an error.
-        let msg = format!(
-          "pull returned 0 changes for '{}' but the remote root hash advanced \
-           (was {}, now {}). The diff may be omitting paths due to a server-side \
-           filter (typically a permission change). If you expect new files, contact \
-           your admin.",
-          relationship.name, prev_hash, new_root_hash,
-        );
-        tracing::warn!("{}", msg);
-        warnings.push(msg);
-      }
-      Some(_) => {
-        // Tree unchanged AND diff is empty — genuinely no work. No
-        // warning. This is the healthy "all caught up" outcome and
-        // it's the by-far common case.
-      }
-    }
-  }
 
   // Process added and modified files.
   let files_to_download: Vec<&RemoteSyncFileEntry> = diff.changes.files_added.iter()
@@ -436,7 +368,6 @@ pub async fn pull_sync(
     total_bytes,
     duration_ms,
     errors,
-    warnings,
   })
 }
 

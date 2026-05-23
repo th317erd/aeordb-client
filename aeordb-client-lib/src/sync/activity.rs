@@ -21,16 +21,6 @@ pub struct SyncEvent {
   pub bytes_transferred: u64,
   pub duration_ms:       u64,
   pub errors:            Vec<String>,
-  /// Non-fatal anomalies (e.g. "diff shape disagrees with engine
-  /// state"). Distinct from `errors` because they don't indicate
-  /// that any specific file operation failed — they're signals that
-  /// SOMETHING is off and the user should know. UI surfaces these
-  /// with a yellow warning treatment rather than red.
-  ///
-  /// `serde(default)` so events recorded before this field existed
-  /// deserialize cleanly with an empty Vec.
-  #[serde(default)]
-  pub warnings:          Vec<String>,
   pub timestamp:         i64,
 }
 
@@ -113,7 +103,6 @@ impl SyncActivityLog {
       bytes_transferred: result.total_bytes,
       duration_ms:       result.duration_ms,
       errors:            result.errors.clone(),
-      warnings:          result.warnings.clone(),
       timestamp:         chrono::Utc::now().timestamp_millis(),
     };
 
@@ -144,7 +133,6 @@ impl SyncActivityLog {
       bytes_transferred: result.total_bytes,
       duration_ms:       result.duration_ms,
       errors:            result.errors.clone(),
-      warnings:          Vec::new(),
       timestamp:         chrono::Utc::now().timestamp_millis(),
     };
 
@@ -162,7 +150,6 @@ impl SyncActivityLog {
     let mut bytes_transferred: u64 = 0;
     let mut duration_ms:       u64 = 0;
     let mut errors: Vec<String>    = Vec::new();
-    let mut warnings: Vec<String>  = Vec::new();
     let mut parts: Vec<String>     = Vec::new();
 
     if let Some(ref pull) = result.pull {
@@ -170,7 +157,6 @@ impl SyncActivityLog {
       bytes_transferred += pull.total_bytes;
       duration_ms       += pull.duration_ms;
       errors.extend(pull.errors.iter().cloned());
-      warnings.extend(pull.warnings.iter().cloned());
       parts.push(format!(
         "pull(pulled={}, deleted={}, failed={})",
         pull.files_pulled, pull.files_deleted, pull.files_failed,
@@ -204,7 +190,6 @@ impl SyncActivityLog {
       bytes_transferred,
       duration_ms,
       errors,
-      warnings,
       timestamp:         chrono::Utc::now().timestamp_millis(),
     };
 
@@ -228,7 +213,6 @@ impl SyncActivityLog {
       bytes_transferred: 0,
       duration_ms:       0,
       errors:            vec![error_message.to_string()],
-      warnings:          Vec::new(),
       timestamp:         chrono::Utc::now().timestamp_millis(),
     };
 
