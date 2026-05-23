@@ -7,9 +7,11 @@ import { elements } from '../aeor/elements.js';
 import '../aeor/components/aeor-confirm-button.js';
 import '../aeor/components/aeor-checkbox.js';
 import '../aeor/components/aeor-info-box.js';
+import '../aeor/components/aeor-select.js';
 
-const { div, h1, h2, h3, label, input, select, option, button, table, thead, tbody, tr, th, td, span, a, strong } = elements;
+const { div, h1, h2, h3, label, input, option, button, table, thead, tbody, tr, th, td, span, a, strong } = elements;
 const aeorCheckbox = elements['aeor-checkbox'];
+const aeorSelect   = elements['aeor-select'];
 
 class AeorSync extends HTMLElement {
   constructor() {
@@ -151,7 +153,7 @@ class AeorSync extends HTMLElement {
       ),
       div.class('form-row')(
         label('Connection'),
-        select.id('form-connection')(...connectionOptions),
+        aeorSelect.id('form-connection').name('form-connection')(...connectionOptions),
       ),
       div.class('form-row')(
         label('Remote Path'),
@@ -169,7 +171,7 @@ class AeorSync extends HTMLElement {
       ),
       div.class('form-row')(
         label('Direction'),
-        select.id('form-direction')(
+        aeorSelect.id('form-direction').name('form-direction')(
           option.value('pull_only')('Pull Only'),
           option.value('push_only')('Push Only'),
           option.value('bidirectional')('Bidirectional'),
@@ -220,7 +222,7 @@ class AeorSync extends HTMLElement {
       ),
       div.class('form-row')(
         label('Direction'),
-        select.id('form-direction')(...directionOptions),
+        aeorSelect.id('form-direction').name('form-direction')(...directionOptions),
       ),
       div.class('form-row')(
         label('Filter (optional, comma-separated globs)'),
