@@ -4,3 +4,17 @@ members = [
   "aeordb-client-lib",
   "aeordb-client",
 ]
+# The `aeordb` directory is a symlink to the sibling aeordb engine
+# repo, brought in as a path dependency by aeordb-client-lib. It has
+# its own Cargo workspace (with its own [workspace.package] inheritance
+# block), and we must NOT pull it into ours — without this exclude,
+# cargo walks up from aeordb-client/aeordb/aeordb-lib/Cargo.toml and
+# tries to inherit workspace.package.edition from THIS root manifest,
+# which doesn't define one, and the build fails with:
+#   error inheriting `edition` from workspace root manifest's
+#   `workspace.package.edition`
+# Excluding the symlinked subdir tells cargo "this is somebody else's
+# workspace, don't try to absorb it."
+exclude = [
+  "aeordb",
+]

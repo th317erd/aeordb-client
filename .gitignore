@@ -27,3 +27,4 @@ auth.json
 
 # Claude Code tooling (per-developer MCP config)
 .mcp.json
+.claude/

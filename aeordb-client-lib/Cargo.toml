@@ -5,7 +5,18 @@ edition = "2024"
 license-file = "../LICENSE-BSL.md"
 
 [dependencies]
-aeordb = { git = "ssh://git@github.com/th317erd/aeordb.git", branch = "development" }
+# Engine library. Resolved via the in-repo `aeordb` symlink at the
+# aeordb-client root, which points at the sibling aeordb workspace
+# (../aeordb under our standard `aeordb-workspace/` layout). We
+# previously pulled this as a `{git = …}` dep, which broke on Mac and
+# Windows: cargo cached the engine in ~/.cargo/git/checkouts/…, far
+# from the aeor-web-components / aeordb-web-components sibling repos
+# that the engine's build.rs expects to find by walking ancestor
+# directories. With this path dep, the engine source lives at its real
+# location, the build.rs walk finds the siblings, and engine changes
+# pick up on the next `cargo build` without `cargo update -p aeordb`
+# gymnastics.
+aeordb = { path = "../aeordb/aeordb-lib" }
 anyhow = "1"
 # NDJSON-stream progress events for the self-update apply endpoint.
 async-stream = "0.3"
