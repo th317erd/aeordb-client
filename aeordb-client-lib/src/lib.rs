@@ -6,6 +6,8 @@ pub mod health;
 pub mod models;
 pub mod preferences;
 pub mod remote;
+pub mod security;
 pub mod server;
 pub mod state;
 pub mod sync;
+pub mod update;

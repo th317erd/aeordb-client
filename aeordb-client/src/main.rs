@@ -172,6 +172,15 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
+      // Self-update bootstrap. Both calls are no-ops in the common case:
+      //   - cleanup_after_relaunch is Windows-only; deletes <exe>.old if
+      //     the previous run's relauncher left one behind.
+      //   - ingest_test_public_key only fires when AEORDB_TEST_PUBLIC_KEY
+      //     is set (loopback tests against a local update server).
+      //     Stays unset in production.
+      aeordb_client_lib::update::cleanup_after_relaunch();
+      aeordb_client_lib::update::ingest_test_public_key();
+
       let (headless, start_minimized, bind, port, config_path, data_path) = match cli.command {
         Some(Commands::Start { headless, start_minimized, bind, port, config, database }) => {
           (
@@ -306,6 +315,9 @@ fn main() -> anyhow::Result<()> {
       let health_config_store = state.config_store.clone();
       let health_event_tx     = state.event_tx.clone();
       let health_map_handle   = state.health_map.clone();
+      // Self-update startup poll handle — populated on the runtime
+      // below so the About page has a snapshot to render immediately.
+      let update_info_for_poll = state.update_info.clone();
       // Autostart plumbing — the listener thread (spawned after Tauri
       // is set up) owns the plugin handle and reconciles the desired
       // state against the OS.
@@ -337,6 +349,16 @@ fn main() -> anyhow::Result<()> {
           health_event_tx,
           health_map_handle,
         );
+      });
+
+      // Fire-and-forget self-update check on startup. Tolerates network
+      // down / 503 / 404; the result lands in `update_info` and is
+      // served by GET /api/v1/update/status. The About page polls that
+      // endpoint on mount, so a slow first poll just shows
+      // "You're up to date" until the response lands a moment later.
+      runtime.spawn(async move {
+        let client = reqwest::Client::new();
+        aeordb_client_lib::update::check_once(&client, &update_info_for_poll).await;
       });
 
       // Start HTTP server on the runtime, signal readiness via channel

@@ -8,3 +8,4 @@ pub mod shares;
 pub mod status;
 pub mod sync;
 pub mod system;
+pub mod update;

@@ -15,6 +15,7 @@ use crate::api::routes::events;
 use crate::api::routes::files;
 use crate::api::routes::preferences as preferences_routes;
 use crate::api::routes::settings;
+use crate::api::routes::update as update_routes;
 use crate::api::routes::shares;
 use crate::api::routes::status::get_status;
 use crate::api::routes::sync;
@@ -25,6 +26,7 @@ use crate::health::{HealthMap, new_health_map, start_health_pinger};
 use crate::preferences::PreferencesStore;
 use crate::state::StateStore;
 use crate::sync::runner::SyncRunner;
+use crate::update::{SharedUpdateInfo, new_state as new_update_state};
 
 /// A single SSE event broadcast to all `/api/v1/events` subscribers. The
 /// `event_name` becomes the SSE `event:` field so JS listeners can route
@@ -56,6 +58,12 @@ pub struct AppState {
   pub data_dir:        PathBuf,
   pub health_map:      HealthMap,
   pub preferences:     Arc<PreferencesStore>,
+
+  /// Cached snapshot of the most recent `/api/version` poll. Populated
+  /// by `crate::update::check_once` (kicked off at startup and by
+  /// POST /api/v1/update/check); read by GET /api/v1/update/status and
+  /// POST /api/v1/update/apply.
+  pub update_info:     SharedUpdateInfo,
 
   /// Desired auto-start state. Written by `PATCH /api/v1/settings`
   /// (auto_start_system field); read by main.rs's autostart listener
@@ -131,6 +139,9 @@ pub fn build_router(state: AppState) -> Router {
     .route("/shares/{relationship_id}/links/{key_id}", delete(shares::revoke_share_link))
     .route("/settings", get(settings::get_settings).patch(settings::update_settings))
     .route("/preferences", get(preferences_routes::get_preferences).patch(preferences_routes::patch_preferences))
+    .route("/update/status", get(update_routes::update_status))
+    .route("/update/check",  post(update_routes::update_check))
+    .route("/update/apply",  post(update_routes::update_apply))
     .route("/open-folder", post(system::open_folder))
     .route("/pick-directory", post(system::pick_directory))
     .route("/shutdown", post(system::shutdown))
@@ -170,6 +181,7 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
 
   let health_map = new_health_map();
   let preferences = Arc::new(PreferencesStore::load(&config_dir)?);
+  let update_info = new_update_state();
 
   // Autostart desired-state lives in AppState so the settings PATCH
   // handler can publish updates. Bool starts false; main.rs seeds it
@@ -190,6 +202,7 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
     data_dir,
     health_map,
     preferences,
+    update_info,
     autostart_enabled,
     autostart_signal,
   })

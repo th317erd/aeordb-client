@@ -1445,6 +1445,91 @@ aeor-conflicts {
 }
 
 /* ==========================================================================
+   Self-update widget on the About page (`.about-section--update`).
+
+   The hold-to-confirm button is always visible — when no update is
+   available it sits disabled with "You're up to date." next to it;
+   when one is available it switches to "Update to vX.Y.Z" and a
+   matching status line.
+
+   Themed via the aeor-confirm-button --lpb-* CSS variables (the base
+   component reads these for bg / border / fill) so we don't fight
+   :hover !important rules in the base CSS. Green palette matches the
+   "positive forward action" semantic the hold-to-confirm pattern
+   already uses elsewhere.
+   ========================================================================== */
+.about-update-row {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  flex-wrap: wrap;
+}
+
+aeor-confirm-button.about-update-btn {
+  display: inline-flex;
+  min-width: 12rem;
+  /* Darker green base so the brighter --success fill reads as a
+     committed sweep, not green-on-green. */
+  --lpb-bg:     #2ea043;
+  --lpb-text:   #fff;
+  --lpb-border: #2ea043;
+  --lpb-fill:   var(--success, #3fb950);
+}
+aeor-confirm-button.about-update-btn .aeor-confirm-btn {
+  font-weight: 600;
+  width: 100%;
+  justify-content: center;
+}
+/* Long-press: drain bg to transparent so the green fill rises into an
+   empty outline — looks like the button is "filling up" with commitment,
+   not painting green-on-green. */
+aeor-confirm-button.about-update-btn .aeor-confirm-btn.pressing,
+aeor-confirm-button.about-update-btn .aeor-confirm-btn.pressing:hover {
+  background-color: transparent !important;
+}
+/* Disabled = up-to-date. Pin to muted palette so we don't show a faint
+   hint of the active green underneath. */
+aeor-confirm-button.about-update-btn[disabled] {
+  --lpb-bg:     var(--bg-tertiary, #21262d);
+  --lpb-text:   var(--text-muted, #8b949e);
+  --lpb-border: var(--border, #30363d);
+  --lpb-fill:   var(--border, #30363d);
+}
+/* Apply failed: destructive red. Same var-driven theming as the
+   active state — no hover overrides needed. */
+aeor-confirm-button.about-update-btn.about-update-btn-error {
+  --lpb-bg:     var(--danger, #c0392b);
+  --lpb-text:   #fff;
+  --lpb-border: var(--danger, #c0392b);
+  --lpb-fill:   var(--danger, #c0392b);
+}
+.about-update-status {
+  color: var(--text-secondary, #8b949e);
+  font-size: 0.875rem;
+}
+
+/* Apply-in-flight (.applying): we drive the existing progress fill
+   directly from JS by setting --progress on .aeor-confirm-btn. The
+   .confirmed state hides the fill (opacity: 0) for the post-confirm
+   green flash; un-hide it here so the bar can rise again under our
+   control. Disabled opacity is overridden because we set disabled=true
+   to lock interaction while the apply runs, but we WANT the visual to
+   stay vivid (apply is a confident "yes, doing it" state, not a dim
+   "wait, no"). */
+aeor-confirm-button.about-update-btn.applying .aeor-confirm-btn,
+aeor-confirm-button.about-update-btn.applying .aeor-confirm-btn:hover {
+  background-color: transparent !important;
+}
+aeor-confirm-button.about-update-btn.applying .aeor-confirm-btn-fill {
+  opacity: 1 !important;
+  transition: width 0.2s ease-out;
+}
+aeor-confirm-button.about-update-btn.applying[disabled] .aeor-confirm-btn {
+  opacity: 1;
+  cursor: progress;
+}
+
+/* ==========================================================================
    Per-file sync status dot
 
    Client-only affordance. Rendered by AeorFileBrowser.syncStatusIndicator()
