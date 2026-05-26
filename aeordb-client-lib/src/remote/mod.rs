@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::connections::{AuthType, RemoteConnection};
 use crate::error::{ClientError, Result};
+use crate::jwt_cache::JwtSlot;
 
 /// Minimal percent-encoder for URL query values. Mirrors the engine-side
 /// helper in share_link_routes.rs so the portal URL we mint here is
@@ -127,11 +128,35 @@ pub struct RemoteClient {
   http_client: reqwest::Client,
   base_url:    String,
   api_key:     Option<String>,
-  jwt_token:   std::sync::Mutex<Option<String>>,
+  /// Shared JWT slot. Multiple RemoteClient instances for the same
+  /// connection share the same slot (via `crate::jwt_cache::JwtCache`)
+  /// so a token minted by one request handler is visible to the next.
+  /// Without this, every API handler creating a fresh RemoteClient hit
+  /// `POST /auth/token` on the engine — see jwt_cache.rs for the why.
+  jwt_slot:    JwtSlot,
 }
 
 impl RemoteClient {
+  /// Standalone constructor — gives the client its own private JWT
+  /// slot. Use this only when there's no shared cache available (e.g.
+  /// one-shot CLI commands, tests). Production code paths should call
+  /// `from_connection_cached` so the JWT survives across requests.
   pub fn from_connection(connection: &RemoteConnection, http_client: &reqwest::Client) -> Self {
+    Self::from_connection_cached(
+      connection,
+      http_client,
+      std::sync::Arc::new(std::sync::Mutex::new(None)),
+    )
+  }
+
+  /// Shared-cache constructor. `jwt_slot` should come from
+  /// `AppState.jwt_cache.slot_for(&connection.id)` so all concurrent
+  /// requests for this connection share the same token.
+  pub fn from_connection_cached(
+    connection: &RemoteConnection,
+    http_client: &reqwest::Client,
+    jwt_slot: JwtSlot,
+  ) -> Self {
     let api_key = if connection.auth_type == AuthType::ApiKey {
       connection.api_key.clone()
     } else {
@@ -142,7 +167,7 @@ impl RemoteClient {
       http_client: http_client.clone(),
       base_url:    connection.base_url(),
       api_key,
-      jwt_token:   std::sync::Mutex::new(None),
+      jwt_slot,
     }
   }
 
@@ -150,19 +175,21 @@ impl RemoteClient {
   pub async fn auth_header(&self) -> Option<String> {
     let api_key = self.api_key.as_ref()?;
 
-    // Check for cached JWT
+    // Check for cached JWT (in the shared slot).
     {
-      let cached = self.jwt_token.lock().unwrap();
+      let cached = self.jwt_slot.lock().unwrap();
       if let Some(ref token) = *cached {
         return Some(format!("Bearer {}", token));
       }
     }
 
-    // Exchange API key for JWT
+    // Exchange API key for JWT and stash in the shared slot so the
+    // next request on this connection — possibly from a different
+    // handler — reuses it.
     match self.exchange_token(api_key).await {
       Ok(token) => {
         let header = format!("Bearer {}", token);
-        *self.jwt_token.lock().unwrap() = Some(token);
+        *self.jwt_slot.lock().unwrap() = Some(token);
         Some(header)
       }
       Err(error) => {
@@ -173,9 +200,45 @@ impl RemoteClient {
     }
   }
 
-  /// Clear the cached JWT (e.g., on 401) so the next request re-exchanges.
-  fn invalidate_token(&self) {
-    *self.jwt_token.lock().unwrap() = None;
+  /// Clear the cached JWT (e.g. on 401) so the next request re-exchanges.
+  /// Pub so handlers can clear the shared slot when they see a 401 from
+  /// the engine — the cache is then re-populated on the very next call.
+  pub fn invalidate_token(&self) {
+    *self.jwt_slot.lock().unwrap() = None;
+  }
+
+  /// Send a request with the cached JWT; on 401, invalidate the slot
+  /// and retry exactly once with a freshly-minted token. Surfaces the
+  /// second response regardless of status (a 401 after re-mint means
+  /// the underlying api_key is genuinely bad).
+  ///
+  /// `build` is called once per attempt to construct a fresh
+  /// RequestBuilder — RequestBuilder isn't cloneable, so we can't
+  /// retry by re-using the same builder. Don't put streaming bodies
+  /// (`reqwest::Body::wrap_stream`) through here: the second call
+  /// would re-read the stream, which is one-shot. The upload path
+  /// has its own non-retrying flow for exactly that reason.
+  ///
+  /// Closure must be `Fn` so it can be invoked twice — capture inputs
+  /// by reference, not by move.
+  pub async fn authed_send<F>(&self, build: F) -> reqwest::Result<reqwest::Response>
+  where
+    F: Fn() -> reqwest::RequestBuilder,
+  {
+    let attempt = || async {
+      let mut req = build();
+      if let Some(auth) = self.auth_header().await {
+        req = req.header("Authorization", auth);
+      }
+      req.send().await
+    };
+    let response = attempt().await?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+      tracing::debug!("RemoteClient: 401 from engine, invalidating JWT and retrying once");
+      self.invalidate_token();
+      return attempt().await;
+    }
+    Ok(response)
   }
 
   /// Build a pre-authenticated portal URL pointing at a file/directory on
@@ -201,11 +264,23 @@ impl RemoteClient {
   }
 
   /// Exchange an API key for a JWT token via POST /auth/token.
+  ///
+  /// `include_refresh: false` is the daemon default — we never need a
+  /// refresh-token row stored on the engine because we always have the
+  /// raw API key in memory and can re-mint a JWT at any time. Without
+  /// this flag, the engine creates a persistent
+  /// /.aeordb-system/refresh-tokens/... record on every token mint,
+  /// which (combined with our 15s dashboard poll) was leaking
+  /// thousands of orphaned token rows per day. Only the interactive
+  /// browser-login flow on the portal needs `include_refresh: true`.
   async fn exchange_token(&self, api_key: &str) -> Result<String> {
     let url = format!("{}/auth/token", self.base_url);
     let response = self.http_client
       .post(&url)
-      .json(&serde_json::json!({ "api_key": api_key }))
+      .json(&serde_json::json!({
+        "api_key":         api_key,
+        "include_refresh": false,
+      }))
       .send()
       .await
       .map_err(|e| ClientError::Server(format!("token exchange failed: {}", e)))?;
@@ -229,12 +304,7 @@ impl RemoteClient {
   pub async fn list_directory(&self, remote_path: &str) -> Result<Vec<RemoteEntry>> {
     let url = format!("{}/files{}", self.base_url, remote_path);
 
-    let mut request = self.http_client.get(&url);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.get(&url)).await
       .map_err(|error| ClientError::Server(
         format!("failed to list remote directory {}: {}", remote_path, error),
       ))?;
@@ -267,12 +337,7 @@ impl RemoteClient {
   pub async fn download_file(&self, remote_path: &str) -> Result<(reqwest::Response, RemoteFileMetadata)> {
     let url = format!("{}/files{}", self.base_url, remote_path);
 
-    let mut request = self.http_client.get(&url);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.get(&url)).await
       .map_err(|error| ClientError::Server(
         format!("failed to download {}: {}", remote_path, error),
       ))?;
@@ -322,12 +387,7 @@ impl RemoteClient {
   pub async fn exists(&self, remote_path: &str) -> Result<bool> {
     let url = format!("{}/files{}", self.base_url, remote_path);
 
-    let mut request = self.http_client.head(&url);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.head(&url)).await
       .map_err(|error| ClientError::Server(
         format!("failed to check existence of {}: {}", remote_path, error),
       ))?;
@@ -375,12 +435,7 @@ impl RemoteClient {
   pub async fn delete_file(&self, remote_path: &str) -> Result<()> {
     let url = format!("{}/files{}", self.base_url, remote_path);
 
-    let mut request = self.http_client.delete(&url);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.delete(&url)).await
       .map_err(|error| ClientError::Server(
         format!("failed to delete remote {}: {}", remote_path, error),
       ))?;
@@ -398,16 +453,9 @@ impl RemoteClient {
   /// Uses PUT /links/{path} with {"target": "..."} body.
   pub async fn create_symlink(&self, remote_path: &str, target: &str) -> Result<()> {
     let url = format!("{}/links{}", self.base_url, remote_path);
+    let body = serde_json::json!({ "target": target });
 
-    let mut request = self.http_client
-      .put(&url)
-      .json(&serde_json::json!({ "target": target }));
-
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.put(&url).json(&body)).await
       .map_err(|error| ClientError::Server(
         format!("failed to create symlink {}: {}", remote_path, error),
       ))?;
@@ -426,16 +474,9 @@ impl RemoteClient {
   pub async fn rename_file(&self, from_path: &str, to_path: &str) -> Result<()> {
     let clean_from = from_path.trim_start_matches('/');
     let url = format!("{}/files/{}", self.base_url, clean_from);
+    let body = serde_json::json!({ "to": to_path });
 
-    let mut request = self.http_client
-      .patch(&url)
-      .json(&serde_json::json!({ "to": to_path }));
-
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.patch(&url).json(&body)).await
       .map_err(|error| ClientError::Server(
         format!("failed to rename {} to {}: {}", from_path, to_path, error),
       ))?;
@@ -469,12 +510,7 @@ impl RemoteClient {
       url = format!("{}?{}", url, params.join("&"));
     }
 
-    let mut request = self.http_client.get(&url);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.get(&url)).await
       .map_err(|error| classify_reqwest_send_error(&error, remote_path))?;
 
     let status = response.status();
@@ -494,11 +530,7 @@ impl RemoteClient {
   /// Get shares for a path. GET /files/shares?path=...
   pub async fn get_shares(&self, path: &str) -> Result<serde_json::Value> {
     let url = format!("{}/files/shares?path={}", self.base_url, path);
-    let mut request = self.http_client.get(&url);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.get(&url)).await
       .map_err(|e| ClientError::Server(format!("failed to get shares: {}", e)))?;
     if !response.status().is_success() {
       return Err(ClientError::Server(format!("get shares returned HTTP {}", response.status())));
@@ -510,11 +542,7 @@ impl RemoteClient {
   /// Grant share access. POST /files/share
   pub async fn share(&self, body: &serde_json::Value) -> Result<serde_json::Value> {
     let url = format!("{}/files/share", self.base_url);
-    let mut request = self.http_client.post(&url).json(body);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.post(&url).json(body)).await
       .map_err(|e| ClientError::Server(format!("failed to share: {}", e)))?;
     if !response.status().is_success() {
       return Err(ClientError::Server(format!("share returned HTTP {}", response.status())));
@@ -532,11 +560,7 @@ impl RemoteClient {
   /// Revoke share access. DELETE /files/shares (with JSON body)
   pub async fn unshare(&self, body: &serde_json::Value) -> Result<serde_json::Value> {
     let url = format!("{}/files/shares", self.base_url);
-    let mut request = self.http_client.delete(&url).json(body);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.delete(&url).json(body)).await
       .map_err(|e| ClientError::Server(format!("failed to unshare: {}", e)))?;
     if !response.status().is_success() {
       return Err(ClientError::Server(format!("unshare returned HTTP {}", response.status())));
@@ -553,11 +577,7 @@ impl RemoteClient {
   /// Get users that can receive shares. GET /auth/keys/users
   pub async fn get_shareable_users(&self) -> Result<serde_json::Value> {
     let url = format!("{}/auth/keys/users", self.base_url);
-    let mut request = self.http_client.get(&url);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.get(&url)).await
       .map_err(|e| ClientError::Server(format!("failed to get users: {}", e)))?;
     if !response.status().is_success() {
       return Err(ClientError::Server(format!("get users returned HTTP {}", response.status())));
@@ -569,11 +589,7 @@ impl RemoteClient {
   /// Get groups that can receive shares. GET /system/groups
   pub async fn get_shareable_groups(&self) -> Result<serde_json::Value> {
     let url = format!("{}/system/groups", self.base_url);
-    let mut request = self.http_client.get(&url);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.get(&url)).await
       .map_err(|e| ClientError::Server(format!("failed to get groups: {}", e)))?;
     if !response.status().is_success() {
       return Err(ClientError::Server(format!("get groups returned HTTP {}", response.status())));
@@ -586,11 +602,7 @@ impl RemoteClient {
   /// The caller should set base_url in the body before calling.
   pub async fn create_share_link(&self, body: &serde_json::Value) -> Result<serde_json::Value> {
     let url = format!("{}/files/share-link", self.base_url);
-    let mut request = self.http_client.post(&url).json(body);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.post(&url).json(body)).await
       .map_err(|e| ClientError::Server(format!("failed to create share link: {}", e)))?;
     if !response.status().is_success() {
       return Err(ClientError::Server(format!("create share link returned HTTP {}", response.status())));
@@ -602,11 +614,7 @@ impl RemoteClient {
   /// Get active share links. GET /files/share-links?path=...
   pub async fn get_share_links(&self, path: &str) -> Result<serde_json::Value> {
     let url = format!("{}/files/share-links?path={}", self.base_url, path);
-    let mut request = self.http_client.get(&url);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.get(&url)).await
       .map_err(|e| ClientError::Server(format!("failed to get share links: {}", e)))?;
     if !response.status().is_success() {
       return Err(ClientError::Server(format!("get share links returned HTTP {}", response.status())));
@@ -618,11 +626,7 @@ impl RemoteClient {
   /// Revoke a share link. DELETE /files/share-links/{key_id}
   pub async fn revoke_share_link(&self, key_id: &str) -> Result<serde_json::Value> {
     let url = format!("{}/files/share-links/{}", self.base_url, key_id);
-    let mut request = self.http_client.delete(&url);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.delete(&url)).await
       .map_err(|e| ClientError::Server(format!("failed to revoke share link: {}", e)))?;
     if !response.status().is_success() {
       return Err(ClientError::Server(format!("revoke share link returned HTTP {}", response.status())));
@@ -705,14 +709,11 @@ impl RemoteClient {
   pub async fn create_symlink_via_header(&self, file_path: &str, target: &str) -> Result<()> {
     let clean = file_path.trim_start_matches('/');
     let url = format!("{}/files/{}", self.base_url, clean);
-    let mut request = self.http_client
-      .put(&url)
-      .header("Content-Type", "application/json")
-      .header("X-Aeor-Symlink", target);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-    let response = request.send().await
+    let response = self.authed_send(|| {
+      self.http_client.put(&url)
+        .header("Content-Type", "application/json")
+        .header("X-Aeor-Symlink", target)
+    }).await
       .map_err(|e| ClientError::Server(format!("create_symlink_via_header send: {}", e)))?;
     if !response.status().is_success() {
       return Err(ClientError::Server(format!(
@@ -724,13 +725,13 @@ impl RemoteClient {
   }
 
   // --- engine call helpers ---
+  //
+  // Thin wrappers around `authed_send` (which handles auth + 401 retry)
+  // that handle the JSON serialization + status-check + body parse
+  // boilerplate for the engine UI proxy methods.
 
   async fn engine_get_json(&self, url: &str, op: &str) -> Result<serde_json::Value> {
-    let mut request = self.http_client.get(url);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.get(url)).await
       .map_err(|e| ClientError::Server(format!("{} send: {}", op, e)))?;
     if !response.status().is_success() {
       return Err(ClientError::Server(format!(
@@ -742,11 +743,7 @@ impl RemoteClient {
   }
 
   async fn engine_post_json(&self, url: &str, body: &serde_json::Value, op: &str) -> Result<serde_json::Value> {
-    let mut request = self.http_client.post(url).json(body);
-    if let Some(ref auth) = self.auth_header().await {
-      request = request.header("Authorization", auth);
-    }
-    let response = request.send().await
+    let response = self.authed_send(|| self.http_client.post(url).json(body)).await
       .map_err(|e| ClientError::Server(format!("{} send: {}", op, e)))?;
     if !response.status().is_success() {
       return Err(ClientError::Server(format!(

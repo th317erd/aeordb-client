@@ -26,6 +26,10 @@ pub struct SyncRunner {
   activity:    SyncActivityLog,
   http_client: reqwest::Client,
   event_tx:    broadcast::Sender<crate::server::ServerEvent>,
+  /// Shared JWT cache (same instance as AppState.jwt_cache) so the
+  /// sync loop reuses the cached token instead of re-exchanging on
+  /// every push/pull/diff cycle.
+  jwt_cache:   crate::jwt_cache::JwtCache,
 }
 
 struct RunningSync {
@@ -41,7 +45,13 @@ pub struct SyncRunnerStatus {
 }
 
 impl SyncRunner {
-  pub fn new(state: Arc<StateStore>, config: Arc<ConfigStore>, http_client: reqwest::Client, event_tx: broadcast::Sender<crate::server::ServerEvent>) -> Self {
+  pub fn new(
+    state:       Arc<StateStore>,
+    config:      Arc<ConfigStore>,
+    http_client: reqwest::Client,
+    event_tx:    broadcast::Sender<crate::server::ServerEvent>,
+    jwt_cache:   crate::jwt_cache::JwtCache,
+  ) -> Self {
     let activity = SyncActivityLog::new(state.clone());
 
     Self {
@@ -51,6 +61,7 @@ impl SyncRunner {
       activity,
       http_client,
       event_tx,
+      jwt_cache,
     }
   }
 
@@ -99,6 +110,7 @@ impl SyncRunner {
     let http_client_clone     = self.http_client.clone();
     let config_clone          = self.config.clone();
     let event_tx_clone        = self.event_tx.clone();
+    let jwt_cache_clone       = self.jwt_cache.clone();
 
     let sync_interval = self.config.get().await
       .map(|c| c.settings.sync_interval_seconds)
@@ -107,7 +119,7 @@ impl SyncRunner {
     tracing::info!("starting sync for '{}' ({:?})", relationship.name, relationship.direction);
 
     let handle = tokio::spawn(async move {
-      run_sync_loop(state_clone, activity_clone, config_clone, relationship, connection, http_client_clone, sync_interval, event_tx_clone).await;
+      run_sync_loop(state_clone, activity_clone, config_clone, relationship, connection, http_client_clone, sync_interval, event_tx_clone, jwt_cache_clone).await;
     });
 
     running.insert(relationship_id_owned, RunningSync {
@@ -186,6 +198,7 @@ async fn run_sync_loop(
   http_client: reqwest::Client,
   sync_interval_seconds: u64,
   event_tx: broadcast::Sender<crate::server::ServerEvent>,
+  jwt_cache: crate::jwt_cache::JwtCache,
 ) {
   let direction = relationship.direction.clone();
   let filter    = relationship.filter.clone();
@@ -193,7 +206,7 @@ async fn run_sync_loop(
   tracing::info!("sync loop active for '{}' ({:?})", relationship.name, direction);
 
   // --- Step 1: Initial full sync (push + pull based on direction) ---
-  match sync_relationship(&state, &connection, &relationship, &http_client).await {
+  match sync_relationship(&state, &connection, &relationship, &http_client, &jwt_cache).await {
     Ok(result) => {
       log_sync_result(&relationship.name, &result);
       if let Err(error) = activity.log_full_sync(&relationship.id, &relationship.name, &result) {
@@ -263,7 +276,7 @@ async fn run_sync_loop(
         }
 
         // Push local changes to the remote.
-        match push_sync(&state, &connection, &relationship, &http_client).await {
+        match push_sync(&state, &connection, &relationship, &http_client, &jwt_cache).await {
           Ok(result) => {
             if result.files_pushed > 0 || result.files_deleted > 0 || result.files_failed > 0 {
               tracing::info!(
@@ -294,7 +307,7 @@ async fn run_sync_loop(
           None => std::future::pending().await,
         }
       } => {
-        match pull_sync(&state, &connection, &relationship, &http_client).await {
+        match pull_sync(&state, &connection, &relationship, &http_client, &jwt_cache).await {
           Ok(result) => {
             if result.files_pulled > 0 || result.files_deleted > 0 || result.files_failed > 0 {
               tracing::info!(
@@ -338,7 +351,7 @@ async fn run_sync_loop(
           }
         };
 
-        match sync_relationship(&state, &current_connection, &current_relationship, &http_client).await {
+        match sync_relationship(&state, &current_connection, &current_relationship, &http_client, &jwt_cache).await {
           Ok(result) => {
             log_sync_result(&relationship.name, &result);
             if let Err(error) = activity.log_full_sync(&relationship.id, &relationship.name, &result) {

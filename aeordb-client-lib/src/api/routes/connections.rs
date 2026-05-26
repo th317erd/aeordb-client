@@ -119,7 +119,8 @@ pub async fn portal_url(
   let path = query.path.unwrap_or_else(|| "/".to_string());
   let normalized = if path.starts_with('/') { path } else { format!("/{}", path) };
 
-  let client = RemoteClient::from_connection(&connection, &state.http_client);
+  let jwt_slot = state.jwt_cache.slot_for(&id);
+  let client = RemoteClient::from_connection_cached(&connection, &state.http_client, jwt_slot);
   let url = client.portal_url(&normalized).await?;
   Ok(Json(PortalUrlResponse { url }))
 }
@@ -156,7 +157,8 @@ pub async fn browse_remote(
   let path_for_request = if trimmed.is_empty() { "/".to_string() } else { format!("{}/", trimmed) };
   let is_root = trimmed.is_empty();
 
-  let client = RemoteClient::from_connection(&connection, &state.http_client);
+  let jwt_slot = state.jwt_cache.slot_for(&id);
+  let client = RemoteClient::from_connection_cached(&connection, &state.http_client, jwt_slot);
 
   let items = client.list_directory(&path_for_request).await
     .map_err(|error| ClientError::BadGateway(error.to_string()))?;
@@ -192,7 +194,8 @@ pub async fn proxy_remote(
   let connection = manager.get(&id).await?
     .ok_or_else(|| ClientError::NotFound(format!("connection not found: {}", id)))?;
 
-  let client = RemoteClient::from_connection(&connection, &state.http_client);
+  let jwt_slot = state.jwt_cache.slot_for(&id);
+  let client = RemoteClient::from_connection_cached(&connection, &state.http_client, jwt_slot);
   let base = connection.base_url();
   let query_suffix = match query {
     Some(q) if !q.is_empty() => format!("?{}", q),
@@ -200,12 +203,10 @@ pub async fn proxy_remote(
   };
   let url = format!("{}/{}{}", base, remote_path, query_suffix);
 
-  let mut request = state.http_client.get(&url);
-  if let Some(ref auth) = client.auth_header().await {
-    request = request.header("Authorization", auth);
-  }
-
-  let upstream = request.send().await
+  // authed_send adds the cached JWT + retries once on 401 with a
+  // freshly-minted token. Shared with every RemoteClient method so
+  // the retry semantics are identical across the codebase.
+  let upstream = client.authed_send(|| state.http_client.get(&url)).await
     .map_err(|error| ClientError::BadGateway(format!("proxy fetch failed: {}", error)))?;
 
   let status = upstream.status();

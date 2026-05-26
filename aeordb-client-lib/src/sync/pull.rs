@@ -5,7 +5,7 @@ use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
 
 use super::file_mtime_async;
-use crate::connections::{AuthType, RemoteConnection};
+use crate::connections::RemoteConnection;
 use crate::error::{ClientError, Result};
 use crate::remote::RemoteClient;
 use crate::state::StateStore;
@@ -41,10 +41,12 @@ pub async fn pull_sync(
   connection: &RemoteConnection,
   relationship: &SyncRelationship,
   http_client: &reqwest::Client,
+  jwt_cache: &crate::jwt_cache::JwtCache,
 ) -> Result<PullResult> {
   let start = Instant::now();
 
-  let remote_client = RemoteClient::from_connection(connection, http_client);
+  let jwt_slot = jwt_cache.slot_for(&connection.id);
+  let remote_client = RemoteClient::from_connection_cached(connection, http_client, jwt_slot);
   let metadata_store = SyncMetadataStore::new(state);
 
   let local_base = Path::new(&relationship.local_path);
@@ -64,8 +66,11 @@ pub async fn pull_sync(
   let checkpoint = metadata_store.get_checkpoint(&relationship.id)?;
   let since_root_hash = checkpoint.as_ref().map(|c| c.remote_root_hash.clone());
 
-  // Fetch the diff from the remote.
-  let diff = fetch_remote_diff(connection, since_root_hash.as_deref(), http_client).await?;
+  // Fetch the diff from the remote. Pass the cache so this call
+  // reuses the same JWT slot the rest of pull_sync uses, instead of
+  // minting its own token via the (now-removed) inline /auth/token
+  // dance that was creating a fresh refresh-token row on every cycle.
+  let diff = fetch_remote_diff(connection, since_root_hash.as_deref(), http_client, jwt_cache).await?;
   let new_root_hash = diff.root_hash.clone();
 
   // Process added and modified files.
@@ -380,6 +385,7 @@ async fn fetch_remote_diff(
   connection: &RemoteConnection,
   since_root_hash: Option<&str>,
   http_client: &reqwest::Client,
+  jwt_cache: &crate::jwt_cache::JwtCache,
 ) -> Result<RemoteSyncDiffResponse> {
   let base = connection.base_url();
   let url = format!("{}/sync/diff", base);
@@ -388,38 +394,18 @@ async fn fetch_remote_diff(
     "since_root_hash": since_root_hash,
   });
 
-  let mut request = http_client.post(&url).json(&body);
+  // Authenticate via the shared JWT cache instead of doing an inline
+  // /auth/token POST on every diff. Previously this function did its
+  // own token exchange per call which (a) duplicated the logic in
+  // RemoteClient::auth_header and (b) bypassed the cache entirely,
+  // minting a fresh JWT + refresh-token-row on every 60s pull cycle.
+  // authed_send handles auth + 401-retry uniformly with every other
+  // engine call.
+  let jwt_slot = jwt_cache.slot_for(&connection.id);
+  let remote_client = RemoteClient::from_connection_cached(connection, http_client, jwt_slot);
 
-  // Use JWT token exchange for authentication
-  if connection.auth_type == AuthType::ApiKey {
-    if let Some(ref api_key) = connection.api_key {
-      // Try to exchange the API key for a JWT first
-      let token_url = format!("{}/auth/token", base);
-      let token = http_client
-        .post(&token_url)
-        .json(&serde_json::json!({ "api_key": api_key }))
-        .send()
-        .await
-        .ok()
-        .and_then(|r| if r.status().is_success() { Some(r) } else { None });
-
-      if let Some(token_response) = token {
-        if let Ok(body) = token_response.json::<serde_json::Value>().await {
-          if let Some(jwt) = body.get("token").and_then(|t| t.as_str()) {
-            request = request.header("Authorization", format!("Bearer {}", jwt));
-          }
-        }
-      } else {
-        // Fall back to raw API key
-        request = request.header("Authorization", format!("Bearer {}", api_key));
-      }
-    }
-  }
-
-  let response = request.send().await
-    .map_err(|error| ClientError::Server(
-      format!("sync/diff request failed: {}", error),
-    ))?;
+  let response = remote_client.authed_send(|| http_client.post(&url).json(&body)).await
+    .map_err(|error| ClientError::Server(format!("sync/diff request failed: {}", error)))?;
 
   if !response.status().is_success() {
     let status = response.status();

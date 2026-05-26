@@ -3,6 +3,7 @@ pub mod config;
 pub mod connections;
 pub mod error;
 pub mod health;
+pub mod jwt_cache;
 pub mod models;
 pub mod preferences;
 pub mod remote;

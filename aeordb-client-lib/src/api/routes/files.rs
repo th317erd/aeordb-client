@@ -68,9 +68,12 @@ pub struct OpenLocallyRequest {
 /// to the engine on behalf of a relationship. It collapses what used to
 /// be three lines (load_relationship_and_connection + new RemoteClient)
 /// into one, and ensures every caller picks the same HTTP client + auth
-/// path. None of the existing callers used the bare RemoteConnection
-/// for anything except feeding it into RemoteClient::from_connection,
-/// so the two-step helper was retired.
+/// path.
+///
+/// The RemoteClient is built with `from_connection_cached`, sharing its
+/// JWT slot with every other concurrent caller for the same connection
+/// — so the engine only sees one `POST /auth/token` per connection per
+/// JWT lifetime, instead of one per handler invocation.
 async fn load_relationship_client(
   state: &AppState,
   relationship_id: &str,
@@ -87,7 +90,8 @@ async fn load_relationship_client(
       format!("connection not found: {}", relationship.remote_connection_id),
     ))?;
 
-  let client = RemoteClient::from_connection(&connection, &state.http_client);
+  let jwt_slot = state.jwt_cache.slot_for(&relationship.remote_connection_id);
+  let client = RemoteClient::from_connection_cached(&connection, &state.http_client, jwt_slot);
   Ok((relationship, client))
 }
 

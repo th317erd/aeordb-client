@@ -20,6 +20,7 @@ pub async fn sync_relationship(
   connection: &RemoteConnection,
   relationship: &SyncRelationship,
   http_client: &reqwest::Client,
+  jwt_cache: &crate::jwt_cache::JwtCache,
 ) -> Result<SyncResult> {
   let direction = &relationship.direction;
   let mut result = SyncResult { push: None, pull: None };
@@ -27,12 +28,12 @@ pub async fn sync_relationship(
   // Pull first (if direction allows) so we have the latest remote state
   // before pushing local changes.
   if *direction == SyncDirection::PullOnly || *direction == SyncDirection::Bidirectional {
-    result.pull = Some(pull_sync(state, connection, relationship, http_client).await?);
+    result.pull = Some(pull_sync(state, connection, relationship, http_client, jwt_cache).await?);
   }
 
   // Push if direction allows.
   if *direction == SyncDirection::PushOnly || *direction == SyncDirection::Bidirectional {
-    result.push = Some(push_sync(state, connection, relationship, http_client).await?);
+    result.push = Some(push_sync(state, connection, relationship, http_client, jwt_cache).await?);
   }
 
   Ok(result)

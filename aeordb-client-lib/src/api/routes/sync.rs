@@ -134,9 +134,12 @@ async fn run_sync(
     tracing::info!("force-resync: cleared sync state for '{}'", relationship.name);
   }
 
-  // Run the sync (push and/or pull based on direction).
-  let result = sync_relationship(&state.state_store, &connection, &relationship, &state.http_client)
-    .await
+  // Run the sync (push and/or pull based on direction). Pass the
+  // shared JWT cache so the trigger call reuses the cached token
+  // instead of minting a fresh one on the engine.
+  let result = sync_relationship(
+    &state.state_store, &connection, &relationship, &state.http_client, &state.jwt_cache,
+  ).await
     .map_err(|error| ClientError::Server(error.to_string()))?;
 
   // Log to activity feed (non-fatal).

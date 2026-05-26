@@ -36,10 +36,12 @@ pub async fn push_sync(
   connection: &RemoteConnection,
   relationship: &SyncRelationship,
   http_client: &reqwest::Client,
+  jwt_cache: &crate::jwt_cache::JwtCache,
 ) -> Result<PushResult> {
   let start = Instant::now();
 
-  let remote_client = RemoteClient::from_connection(connection, http_client);
+  let jwt_slot = jwt_cache.slot_for(&connection.id);
+  let remote_client = RemoteClient::from_connection_cached(connection, http_client, jwt_slot);
   let metadata_store = SyncMetadataStore::new(state);
 
   let local_base = Path::new(&relationship.local_path);

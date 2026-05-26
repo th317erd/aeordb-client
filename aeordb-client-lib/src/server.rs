@@ -23,6 +23,7 @@ use crate::api::routes::system;
 use crate::config::{ConfigStore, default_config_path, default_data_path};
 use crate::error::{ClientError, Result};
 use crate::health::{HealthMap, new_health_map, start_health_pinger};
+use crate::jwt_cache::JwtCache;
 use crate::preferences::PreferencesStore;
 use crate::state::StateStore;
 use crate::sync::runner::SyncRunner;
@@ -58,6 +59,13 @@ pub struct AppState {
   pub data_dir:        PathBuf,
   pub health_map:      HealthMap,
   pub preferences:     Arc<PreferencesStore>,
+
+  /// Process-wide JWT cache, keyed by connection_id. RemoteClient
+  /// instances pull their JWT slot from here so the token minted by
+  /// the first request survives until the next 401 — instead of every
+  /// handler creating a fresh client and hitting POST /auth/token.
+  /// See `crate::jwt_cache` for the why.
+  pub jwt_cache:       JwtCache,
 
   /// Cached snapshot of the most recent `/api/version` poll. Populated
   /// by `crate::update::check_once` (kicked off at startup and by
@@ -170,7 +178,14 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
 
   let state_store  = Arc::new(state_store);
   let config_store = Arc::new(config_store);
-  let sync_runner  = SyncRunner::new(state_store.clone(), config_store.clone(), http_client.clone(), event_tx.clone());
+  let jwt_cache    = JwtCache::new();
+  let sync_runner  = SyncRunner::new(
+    state_store.clone(),
+    config_store.clone(),
+    http_client.clone(),
+    event_tx.clone(),
+    jwt_cache.clone(),
+  );
 
   let config_dir = config.config_path.parent()
     .unwrap_or_else(|| std::path::Path::new("."))
@@ -182,6 +197,8 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
   let health_map = new_health_map();
   let preferences = Arc::new(PreferencesStore::load(&config_dir)?);
   let update_info = new_update_state();
+  // jwt_cache was created above and handed to SyncRunner; we reuse the
+  // same instance in AppState so handlers + sync share one cache.
 
   // Autostart desired-state lives in AppState so the settings PATCH
   // handler can publish updates. Bool starts false; main.rs seeds it
@@ -202,6 +219,7 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
     data_dir,
     health_map,
     preferences,
+    jwt_cache,
     update_info,
     autostart_enabled,
     autostart_signal,
