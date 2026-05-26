@@ -2,6 +2,7 @@ pub mod conflicts;
 pub mod connections;
 pub mod events;
 pub mod files;
+pub mod preferences;
 pub mod settings;
 pub mod shares;
 pub mod status;

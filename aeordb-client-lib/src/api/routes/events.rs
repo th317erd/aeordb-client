@@ -12,7 +12,7 @@ pub async fn event_stream(
     let rx = state.event_tx.subscribe();
     let stream = BroadcastStream::new(rx)
         .filter_map(|result| result.ok())
-        .map(|data| Ok(Event::default().event("sync_activity").data(data)));
+        .map(|se| Ok(Event::default().event(se.event_name).data(se.data)));
 
     Sse::new(stream).keep_alive(
         KeepAlive::new().interval(std::time::Duration::from_secs(15)),

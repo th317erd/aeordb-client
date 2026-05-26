@@ -36,6 +36,13 @@ enum Commands {
     #[arg(long)]
     headless: bool,
 
+    /// Launch with the main window hidden, tray icon visible. Used by
+    /// the autostart plugin so logging in doesn't pop a window on top
+    /// of whatever you were doing. The user opens the window via the
+    /// tray icon. No-op when --headless is also set.
+    #[arg(long)]
+    start_minimized: bool,
+
     /// Host address to bind to
     #[arg(long, default_value = "127.0.0.1")]
     bind: String,
@@ -165,10 +172,11 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
-      let (headless, bind, port, config_path, data_path) = match cli.command {
-        Some(Commands::Start { headless, bind, port, config, database }) => {
+      let (headless, start_minimized, bind, port, config_path, data_path) = match cli.command {
+        Some(Commands::Start { headless, start_minimized, bind, port, config, database }) => {
           (
             headless,
+            start_minimized,
             bind,
             port,
             config.unwrap_or_else(default_config_path),
@@ -176,6 +184,7 @@ fn main() -> anyhow::Result<()> {
           )
         }
         _ => (
+          false,
           false,
           "127.0.0.1".to_string(),
           9400,
@@ -294,6 +303,15 @@ fn main() -> anyhow::Result<()> {
       let sync_runner   = state.sync_runner.clone();
       let sync_runner_shutdown = sync_runner.clone();
       let sync_runner_post_tauri = sync_runner.clone();
+      let health_config_store = state.config_store.clone();
+      let health_event_tx     = state.event_tx.clone();
+      let health_map_handle   = state.health_map.clone();
+      // Autostart plumbing — the listener thread (spawned after Tauri
+      // is set up) owns the plugin handle and reconciles the desired
+      // state against the OS.
+      let autostart_enabled       = state.autostart_enabled.clone();
+      let autostart_signal        = state.autostart_signal.clone();
+      let autostart_config_store  = state.config_store.clone();
       let api_router    = build_router(state);
       let static_router = static_files::static_routes();
       let app           = api_router.merge(static_router);
@@ -305,6 +323,20 @@ fn main() -> anyhow::Result<()> {
       // Start continuous sync for all enabled relationships
       runtime.spawn(async move {
         sync_runner.start_all_enabled().await;
+      });
+
+      // Start the connection health pinger so UI can react when an
+      // engine that was unreachable at boot comes online (auto-refresh
+      // file-browser tabs stuck on "Cannot reach the server"). The
+      // function does its own tokio::spawn internally; we just need to
+      // be inside the runtime when we call it. The returned JoinHandle
+      // is dropped — the detached task runs for the process lifetime.
+      runtime.spawn(async move {
+        let _ = aeordb_client_lib::health::start_health_pinger(
+          health_config_store,
+          health_event_tx,
+          health_map_handle,
+        );
       });
 
       // Start HTTP server on the runtime, signal readiness via channel
@@ -361,6 +393,19 @@ fn main() -> anyhow::Result<()> {
 
         tauri::Builder::default()
           .plugin(tauri_plugin_shell::init())
+          // tauri-plugin-autostart writes the platform-appropriate
+          // autostart entry (XDG .desktop on Linux, registry Run key on
+          // Windows, launchd on macOS). args=["start","--start-minimized"]
+          // means: when the OS launches us at login, run with the window
+          // hidden and the tray icon visible — clicking the tray opens
+          // the window. No --headless: we want the tray icon so the user
+          // can tell the daemon is alive.
+          .plugin(
+            tauri_plugin_autostart::Builder::new()
+              .app_name("aeordb-client")
+              .args(vec!["start", "--start-minimized"])
+              .build(),
+          )
           .invoke_handler(tauri::generate_handler![open_external_url])
           .setup(move |app| {
             use tauri::Manager;
@@ -387,6 +432,11 @@ fn main() -> anyhow::Result<()> {
             });
 
             // --- Create the main window ---
+            // start_minimized → build the window hidden. The tray icon
+            // is still added below, so the user sees that the app
+            // launched and can click it to open the window. Used by
+            // the autostart path so logging in doesn't punch a window
+            // through whatever the user was looking at.
             let parsed_url: tauri::Url = url.parse().expect("valid localhost URL");
             let window = tauri::WebviewWindowBuilder::new(
               app,
@@ -396,6 +446,7 @@ fn main() -> anyhow::Result<()> {
             .title("AeorDB Client")
             .inner_size(1200.0, 850.0)
             .min_inner_size(900.0, 650.0)
+            .visible(!start_minimized)
             .build()?;
 
             // --- Close-to-tray: hide window on close instead of quitting ---
@@ -487,6 +538,63 @@ fn main() -> anyhow::Result<()> {
                 }
               })
               .build(app)?;
+
+            // --- Autostart listener + boot-time reconciliation ---
+            // Owns the plugin handle. On startup, loads the persisted
+            // setting and reconciles against the OS (covers the case
+            // where the user toggled autostart on, then manually
+            // deleted the .desktop file). After that, blocks on the
+            // signal Notify; the settings PATCH handler ticks it
+            // whenever the user toggles the checkbox.
+            use tauri_plugin_autostart::ManagerExt;
+            let as_handle  = app.handle().clone();
+            let as_enabled = autostart_enabled.clone();
+            let as_signal  = autostart_signal.clone();
+            let as_config  = autostart_config_store.clone();
+            std::thread::spawn(move || {
+              let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build autostart runtime");
+              rt.block_on(async move {
+                // Seed the desired-state atomic from the persisted
+                // config now that we have a runtime. AppState's bool
+                // started at false because create_app_state is sync.
+                if let Ok(config) = as_config.get().await {
+                  as_enabled.store(
+                    config.settings.auto_start_system,
+                    std::sync::atomic::Ordering::SeqCst,
+                  );
+                }
+
+                // Initial reconciliation. We always call enable() when
+                // the setting is on, even if is_enabled() already says
+                // true — this overwrites any stale hand-rolled .desktop
+                // file from the pre-plugin era (which used --headless
+                // and never properly started the tray/UI). The plugin's
+                // enable() is idempotent so re-running it on a
+                // correctly-installed entry is a no-op rewrite.
+                let desired = as_enabled.load(std::sync::atomic::Ordering::SeqCst);
+                let mgr = as_handle.autolaunch();
+                let result = if desired { mgr.enable() } else { mgr.disable() };
+                match result {
+                  Ok(_)      => tracing::info!("autostart reconciled at startup: enabled={}", desired),
+                  Err(error) => tracing::warn!("failed to reconcile autostart at startup: {}", error),
+                }
+
+                // Listen for further changes.
+                loop {
+                  as_signal.notified().await;
+                  let desired = as_enabled.load(std::sync::atomic::Ordering::SeqCst);
+                  let mgr = as_handle.autolaunch();
+                  let result = if desired { mgr.enable() } else { mgr.disable() };
+                  match result {
+                    Ok(_)      => tracing::info!("autostart applied: enabled={}", desired),
+                    Err(error) => tracing::warn!("failed to apply autostart toggle: {}", error),
+                  }
+                }
+              });
+            });
 
             Ok(())
           })

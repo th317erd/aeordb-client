@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use axum::Router;
@@ -12,6 +13,7 @@ use crate::api::routes::conflicts;
 use crate::api::routes::connections;
 use crate::api::routes::events;
 use crate::api::routes::files;
+use crate::api::routes::preferences as preferences_routes;
 use crate::api::routes::settings;
 use crate::api::routes::shares;
 use crate::api::routes::status::get_status;
@@ -19,8 +21,27 @@ use crate::api::routes::sync;
 use crate::api::routes::system;
 use crate::config::{ConfigStore, default_config_path, default_data_path};
 use crate::error::{ClientError, Result};
+use crate::health::{HealthMap, new_health_map, start_health_pinger};
+use crate::preferences::PreferencesStore;
 use crate::state::StateStore;
 use crate::sync::runner::SyncRunner;
+
+/// A single SSE event broadcast to all `/api/v1/events` subscribers. The
+/// `event_name` becomes the SSE `event:` field so JS listeners can route
+/// on it (e.g. `evtSource.addEventListener('connection_health', …)`). The
+/// `data` is opaque to the broadcast channel — typically JSON, but the
+/// SSE handler passes it through verbatim as the `data:` field.
+#[derive(Clone, Debug)]
+pub struct ServerEvent {
+  pub event_name: String,
+  pub data:       String,
+}
+
+impl ServerEvent {
+  pub fn new(event_name: impl Into<String>, data: impl Into<String>) -> Self {
+    Self { event_name: event_name.into(), data: data.into() }
+  }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -30,9 +51,20 @@ pub struct AppState {
   pub sync_runner:     SyncRunner,
   pub http_client:     reqwest::Client,
   pub shutdown_signal: Option<Arc<Notify>>,
-  pub event_tx:        broadcast::Sender<String>,
+  pub event_tx:        broadcast::Sender<ServerEvent>,
   pub config_dir:      PathBuf,
   pub data_dir:        PathBuf,
+  pub health_map:      HealthMap,
+  pub preferences:     Arc<PreferencesStore>,
+
+  /// Desired auto-start state. Written by `PATCH /api/v1/settings`
+  /// (auto_start_system field); read by main.rs's autostart listener
+  /// thread which owns the tauri-plugin-autostart handle.
+  pub autostart_enabled: Arc<AtomicBool>,
+  /// Notified after `autostart_enabled` changes. The listener thread
+  /// wakes, reads the latest desired state, and applies it via the
+  /// plugin.
+  pub autostart_signal:  Arc<Notify>,
 }
 
 pub struct ServerConfig {
@@ -60,7 +92,9 @@ pub fn build_router(state: AppState) -> Router {
     .route("/connections/{id}", get(connections::get_connection).patch(connections::update_connection).delete(connections::delete_connection))
     .route("/connections/{id}/test", post(connections::test_connection))
     .route("/connections/{id}/browse", get(connections::browse_remote))
+    .route("/connections/{id}/portal-url", get(connections::portal_url))
     .route("/connections/{id}/proxy/{*path}", get(connections::proxy_remote))
+    .route("/health/connections", get(connections::list_health))
     .route("/sync", get(sync::list_relationships).post(sync::create_relationship))
     .route("/sync/{id}", get(sync::get_relationship).patch(sync::update_relationship).delete(sync::delete_relationship))
     .route("/sync/{id}/enable", post(sync::enable_relationship))
@@ -79,9 +113,16 @@ pub fn build_router(state: AppState) -> Router {
     .route("/conflicts/dismiss-all", post(conflicts::dismiss_all_conflicts))
     .route("/browse/{relationship_id}", get(files::browse))
     .route("/browse/{relationship_id}/{*path}", get(files::browse))
+    .route("/browse/{relationship_id}/deleted", get(files::list_deleted))
     .route("/files/{relationship_id}/{*path}", get(files::serve_file).put(files::upload_file).delete(files::delete_file))
     .route("/files/{relationship_id}/open", post(files::open_locally))
     .route("/files/{relationship_id}/rename", post(files::rename_file))
+    .route("/files/{relationship_id}/restore", post(files::restore_deleted))
+    .route("/files/{relationship_id}/copy", post(files::copy_files))
+    .route("/files/{relationship_id}/symlink", post(files::create_symlink))
+    .route("/versions/{relationship_id}/history/{*path}", get(files::version_history))
+    .route("/snapshots/{relationship_id}", get(files::list_snapshots).post(files::create_snapshot))
+    .route("/snapshots/{relationship_id}/{snapshot_id}/restore", post(files::restore_from_snapshot))
     .route("/shares/{relationship_id}", get(shares::get_shares).post(shares::share).delete(shares::unshare))
     .route("/shares/{relationship_id}/users", get(shares::get_shareable_users))
     .route("/shares/{relationship_id}/groups", get(shares::get_shareable_groups))
@@ -89,6 +130,7 @@ pub fn build_router(state: AppState) -> Router {
     .route("/shares/{relationship_id}/links", get(shares::get_share_links))
     .route("/shares/{relationship_id}/links/{key_id}", delete(shares::revoke_share_link))
     .route("/settings", get(settings::get_settings).patch(settings::update_settings))
+    .route("/preferences", get(preferences_routes::get_preferences).patch(preferences_routes::patch_preferences))
     .route("/open-folder", post(system::open_folder))
     .route("/pick-directory", post(system::pick_directory))
     .route("/shutdown", post(system::shutdown))
@@ -126,6 +168,16 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
     .unwrap_or_else(|| std::path::Path::new("."))
     .to_path_buf();
 
+  let health_map = new_health_map();
+  let preferences = Arc::new(PreferencesStore::load(&config_dir)?);
+
+  // Autostart desired-state lives in AppState so the settings PATCH
+  // handler can publish updates. Bool starts false; main.rs seeds it
+  // from the persisted config once a runtime is available, then ticks
+  // the signal to force the listener to reconcile against the OS.
+  let autostart_enabled = Arc::new(AtomicBool::new(false));
+  let autostart_signal  = Arc::new(Notify::new());
+
   Ok(AppState {
     started_at:      Instant::now(),
     state_store,
@@ -136,11 +188,20 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
     event_tx,
     config_dir,
     data_dir,
+    health_map,
+    preferences,
+    autostart_enabled,
+    autostart_signal,
   })
 }
 
 pub async fn start_server(config: ServerConfig) -> Result<()> {
   let state    = create_app_state(&config)?;
+  let _health_handle = start_health_pinger(
+    state.config_store.clone(),
+    state.event_tx.clone(),
+    state.health_map.clone(),
+  );
   let router   = build_router(state);
   let address  = format!("{}:{}", config.host, config.port);
   let listener = TcpListener::bind(&address).await.map_err(|error| {
@@ -162,6 +223,11 @@ pub async fn start_server_with_handle(
   config: ServerConfig,
 ) -> Result<(SocketAddr, tokio::task::JoinHandle<Result<()>>)> {
   let state    = create_app_state(&config)?;
+  let _health_handle = start_health_pinger(
+    state.config_store.clone(),
+    state.event_tx.clone(),
+    state.health_map.clone(),
+  );
   let router   = build_router(state);
   let address  = format!("{}:{}", config.host, config.port);
   let listener = TcpListener::bind(&address).await.map_err(|error| {

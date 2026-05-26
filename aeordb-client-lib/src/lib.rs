@@ -1,9 +1,10 @@
 pub mod api;
-pub mod autostart;
 pub mod config;
 pub mod connections;
 pub mod error;
+pub mod health;
 pub mod models;
+pub mod preferences;
 pub mod remote;
 pub mod server;
 pub mod state;

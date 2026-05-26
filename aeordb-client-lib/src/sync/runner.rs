@@ -25,7 +25,7 @@ pub struct SyncRunner {
   config:      Arc<ConfigStore>,
   activity:    SyncActivityLog,
   http_client: reqwest::Client,
-  event_tx:    broadcast::Sender<String>,
+  event_tx:    broadcast::Sender<crate::server::ServerEvent>,
 }
 
 struct RunningSync {
@@ -41,7 +41,7 @@ pub struct SyncRunnerStatus {
 }
 
 impl SyncRunner {
-  pub fn new(state: Arc<StateStore>, config: Arc<ConfigStore>, http_client: reqwest::Client, event_tx: broadcast::Sender<String>) -> Self {
+  pub fn new(state: Arc<StateStore>, config: Arc<ConfigStore>, http_client: reqwest::Client, event_tx: broadcast::Sender<crate::server::ServerEvent>) -> Self {
     let activity = SyncActivityLog::new(state.clone());
 
     Self {
@@ -55,7 +55,7 @@ impl SyncRunner {
   }
 
   /// Get a reference to the event broadcast sender.
-  pub fn event_tx(&self) -> &broadcast::Sender<String> {
+  pub fn event_tx(&self) -> &broadcast::Sender<crate::server::ServerEvent> {
     &self.event_tx
   }
 
@@ -185,7 +185,7 @@ async fn run_sync_loop(
   connection: crate::connections::RemoteConnection,
   http_client: reqwest::Client,
   sync_interval_seconds: u64,
-  event_tx: broadcast::Sender<String>,
+  event_tx: broadcast::Sender<crate::server::ServerEvent>,
 ) {
   let direction = relationship.direction.clone();
   let filter    = relationship.filter.clone();
@@ -360,13 +360,13 @@ async fn run_sync_loop(
 }
 
 /// Broadcast a SyncEvent as JSON over the event channel.
-fn broadcast_event(event_tx: &broadcast::Sender<String>, event: &crate::sync::activity::SyncEvent) {
+fn broadcast_event(event_tx: &broadcast::Sender<crate::server::ServerEvent>, event: &crate::sync::activity::SyncEvent) {
   let json = serde_json::to_string(event).unwrap_or_default();
-  let _ = event_tx.send(json); // ignore if no subscribers
+  let _ = event_tx.send(crate::server::ServerEvent::new("sync_activity", json));
 }
 
 fn broadcast_push(
-  event_tx: &broadcast::Sender<String>,
+  event_tx: &broadcast::Sender<crate::server::ServerEvent>,
   relationship_id: &str,
   relationship_name: &str,
   result: &crate::sync::push::PushResult,
@@ -390,7 +390,7 @@ fn broadcast_push(
 }
 
 fn broadcast_pull(
-  event_tx: &broadcast::Sender<String>,
+  event_tx: &broadcast::Sender<crate::server::ServerEvent>,
   relationship_id: &str,
   relationship_name: &str,
   result: &crate::sync::pull::PullResult,
@@ -415,7 +415,7 @@ fn broadcast_pull(
 }
 
 fn broadcast_full_sync(
-  event_tx: &broadcast::Sender<String>,
+  event_tx: &broadcast::Sender<crate::server::ServerEvent>,
   relationship_id: &str,
   relationship_name: &str,
   result: &crate::sync::replication::SyncResult,
@@ -460,7 +460,7 @@ fn broadcast_full_sync(
 }
 
 fn broadcast_error(
-  event_tx: &broadcast::Sender<String>,
+  event_tx: &broadcast::Sender<crate::server::ServerEvent>,
   relationship_id: &str,
   relationship_name: &str,
   error_message: &str,

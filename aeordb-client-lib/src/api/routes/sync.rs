@@ -186,7 +186,7 @@ async fn run_sync(
     };
 
     if let Ok(json) = serde_json::to_string(&event) {
-      let _ = state.event_tx.send(json);
+      let _ = state.event_tx.send(crate::server::ServerEvent::new("sync_activity", json));
     }
   }
 

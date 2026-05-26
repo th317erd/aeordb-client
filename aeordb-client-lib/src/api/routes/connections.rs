@@ -18,6 +18,26 @@ pub async fn list_connections(
   manager.list().await.map(Json)
 }
 
+/// GET /api/v1/health/connections
+///
+/// One-shot snapshot of every connection's most recent health-check
+/// result. The background pinger (crate::health) populates this every
+/// 10s; consumers that want live updates should subscribe to the
+/// `connection_health` SSE event in addition to fetching this.
+///
+/// Routed under `/health/...` (not `/connections/health`) to avoid
+/// colliding with the `/connections/{id}` dynamic matcher.
+///
+/// Returns an empty array before the first ping completes (~10s after
+/// boot), or for connections created after the most recent tick.
+pub async fn list_health(
+  State(state): State<AppState>,
+) -> Json<Vec<crate::health::HealthSnapshot>> {
+  let map = state.health_map.lock().await;
+  let snapshots: Vec<_> = map.values().cloned().collect();
+  Json(snapshots)
+}
+
 pub async fn create_connection(
   State(state): State<AppState>,
   Json(request): Json<CreateConnectionRequest>,
@@ -67,6 +87,41 @@ pub async fn test_connection(
 #[derive(Debug, Deserialize)]
 pub struct BrowseQuery {
   pub path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PortalUrlQuery {
+  pub path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PortalUrlResponse {
+  pub url: String,
+}
+
+/// GET /api/v1/connections/{id}/portal-url?path=/some/dir
+///
+/// Mints a short-lived JWT from the connection's API key and returns a
+/// pre-authenticated portal URL pointing at the given path on the engine's
+/// web UI. The renderer opens this URL via `open_external_url` to surface
+/// the file/folder in the user's browser already logged in.
+///
+/// 404 if the connection is missing or has no API key.
+pub async fn portal_url(
+  State(state): State<AppState>,
+  Path(id): Path<String>,
+  Query(query): Query<PortalUrlQuery>,
+) -> Result<Json<PortalUrlResponse>, ClientError> {
+  let manager = ConnectionManager::new(&state.config_store);
+  let connection = manager.get(&id).await?
+    .ok_or_else(|| ClientError::NotFound(format!("connection not found: {}", id)))?;
+
+  let path = query.path.unwrap_or_else(|| "/".to_string());
+  let normalized = if path.starts_with('/') { path } else { format!("/{}", path) };
+
+  let client = RemoteClient::from_connection(&connection, &state.http_client);
+  let url = client.portal_url(&normalized).await?;
+  Ok(Json(PortalUrlResponse { url }))
 }
 
 #[derive(Debug, Serialize)]

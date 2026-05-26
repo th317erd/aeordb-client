@@ -1,8 +1,9 @@
+use std::sync::atomic::Ordering;
+
 use axum::extract::State;
 use axum::response::Json;
 use serde::{Deserialize, Serialize};
 
-use crate::autostart;
 use crate::error::ClientError;
 use crate::server::AppState;
 
@@ -73,11 +74,14 @@ pub async fn update_settings(
     }
   }).await?;
 
-  // Install/remove system autostart if the setting changed.
+  // Signal the autostart listener (owned by main.rs's Tauri thread) so
+  // it can flip the OS-level autostart entry via tauri-plugin-autostart.
+  // The plugin handles per-OS storage (XDG .desktop on Linux, registry
+  // Run key on Windows, launchd on macOS) — we just publish "user wants
+  // X" here and let the listener reconcile.
   if let Some(enabled) = request.auto_start_system {
-    if let Err(error) = autostart::set_autostart(enabled) {
-      tracing::warn!("failed to update system autostart: {}", error);
-    }
+    state.autostart_enabled.store(enabled, Ordering::SeqCst);
+    state.autostart_signal.notify_one();
   }
 
   // Re-read to return the updated state.

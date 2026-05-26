@@ -3,6 +3,22 @@ use serde::{Deserialize, Serialize};
 use crate::connections::{AuthType, RemoteConnection};
 use crate::error::{ClientError, Result};
 
+/// Minimal percent-encoder for URL query values. Mirrors the engine-side
+/// helper in share_link_routes.rs so the portal URL we mint here is
+/// indistinguishable from one minted by the engine's share-link flow.
+fn simple_url_encode(input: &str) -> String {
+  let mut out = String::with_capacity(input.len() * 2);
+  for byte in input.bytes() {
+    match byte {
+      b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' =>
+        out.push(byte as char),
+      _ =>
+        out.push_str(&format!("%{:02X}", byte)),
+    }
+  }
+  out
+}
+
 /// Entry type constants from aeordb.
 pub const ENTRY_TYPE_FILE:      u8 = 2;
 pub const ENTRY_TYPE_DIRECTORY: u8 = 3;
@@ -160,6 +176,28 @@ impl RemoteClient {
   /// Clear the cached JWT (e.g., on 401) so the next request re-exchanges.
   fn invalidate_token(&self) {
     *self.jwt_token.lock().unwrap() = None;
+  }
+
+  /// Build a pre-authenticated portal URL pointing at a file/directory on
+  /// the engine's web UI. Used by the desktop client's "Open Remotely" flow
+  /// — the user clicks, the renderer asks for this URL, and it opens in the
+  /// system browser already logged in via a short-lived JWT.
+  ///
+  /// Returns `Err(NotFound)` if the connection has no API key configured
+  /// (we can't mint a token without one).
+  pub async fn portal_url(&self, path: &str) -> Result<String> {
+    let api_key = self.api_key.as_ref()
+      .ok_or_else(|| ClientError::NotFound(
+        "connection has no API key; cannot mint a portal token".to_string(),
+      ))?;
+    let token = self.exchange_token(api_key).await?;
+    let base = self.base_url.trim_end_matches('/');
+    Ok(format!(
+      "{}/?token={}&page=files&path={}",
+      base,
+      token,
+      simple_url_encode(path),
+    ))
   }
 
   /// Exchange an API key for a JWT token via POST /auth/token.
@@ -595,6 +633,133 @@ impl RemoteClient {
     } else {
       serde_json::from_str(&text)
         .map_err(|e| ClientError::Server(format!("failed to parse revoke response: {}", e)))
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Engine UI proxy methods
+  //
+  // The desktop client's file browser needs feature parity with the engine's
+  // web portal: deleted-file listings, snapshots, version history, paste-as-
+  // copy/move, symlinks. The portal's JS hits the engine endpoints directly;
+  // the client routes through client-lib so the renderer doesn't have to
+  // know about base URLs or auth tokens. These methods do the engine call;
+  // the matching api/routes/files.rs handlers map relationship_id →
+  // connection + absolute path before calling them.
+  // ---------------------------------------------------------------------------
+
+  /// GET /files/deleted?path={dir_path} — list deleted entries in a dir.
+  pub async fn fetch_deleted(&self, dir_path: &str) -> Result<serde_json::Value> {
+    let url = format!("{}/files/deleted?path={}", self.base_url, simple_url_encode(dir_path));
+    self.engine_get_json(&url, "fetch_deleted").await
+  }
+
+  /// POST /files/restore {path} — undelete a file.
+  pub async fn restore_file(&self, file_path: &str) -> Result<serde_json::Value> {
+    let url = format!("{}/files/restore", self.base_url);
+    self.engine_post_json(&url, &serde_json::json!({ "path": file_path }), "restore_file").await
+  }
+
+  /// GET /versions/history/{file_path} — list versions of a file.
+  pub async fn fetch_version_history(&self, file_path: &str) -> Result<serde_json::Value> {
+    let clean = file_path.trim_start_matches('/');
+    let url = format!("{}/versions/history/{}", self.base_url, clean);
+    self.engine_get_json(&url, "fetch_version_history").await
+  }
+
+  /// GET /versions/snapshots — list all snapshots on this engine. Not
+  /// relationship-scoped (snapshots are system-wide); the rel_id in the
+  /// client route is just for picking the connection.
+  pub async fn fetch_snapshots(&self) -> Result<serde_json::Value> {
+    let url = format!("{}/versions/snapshots", self.base_url);
+    self.engine_get_json(&url, "fetch_snapshots").await
+  }
+
+  /// POST /versions/snapshots {name} — create a named snapshot.
+  pub async fn create_snapshot(&self, name: &str) -> Result<serde_json::Value> {
+    let url = format!("{}/versions/snapshots", self.base_url);
+    self.engine_post_json(&url, &serde_json::json!({ "name": name }), "create_snapshot").await
+  }
+
+  /// POST /versions/snapshots/{snap_id}/restore {path} — restore one file
+  /// from a snapshot.
+  pub async fn restore_from_snapshot(&self, snapshot_id: &str, file_path: &str) -> Result<serde_json::Value> {
+    let url = format!("{}/versions/snapshots/{}/restore", self.base_url, snapshot_id);
+    self.engine_post_json(&url, &serde_json::json!({ "path": file_path }), "restore_from_snapshot").await
+  }
+
+  /// POST /files/copy {paths, destination} — copy files to a new dir.
+  pub async fn copy_files(&self, paths: &[String], destination: &str) -> Result<serde_json::Value> {
+    let url = format!("{}/files/copy", self.base_url);
+    self.engine_post_json(
+      &url,
+      &serde_json::json!({ "paths": paths, "destination": destination }),
+      "copy_files",
+    ).await
+  }
+
+  /// PUT /files{path} with X-Aeor-Symlink: {target} header. Matches the
+  /// engine's current header-based symlink convention (the older
+  /// PUT /links/{path} body is still served and used by the sync runner —
+  /// see `create_symlink` above — but new UI flows use this one).
+  pub async fn create_symlink_via_header(&self, file_path: &str, target: &str) -> Result<()> {
+    let clean = file_path.trim_start_matches('/');
+    let url = format!("{}/files/{}", self.base_url, clean);
+    let mut request = self.http_client
+      .put(&url)
+      .header("Content-Type", "application/json")
+      .header("X-Aeor-Symlink", target);
+    if let Some(ref auth) = self.auth_header().await {
+      request = request.header("Authorization", auth);
+    }
+    let response = request.send().await
+      .map_err(|e| ClientError::Server(format!("create_symlink_via_header send: {}", e)))?;
+    if !response.status().is_success() {
+      return Err(ClientError::Server(format!(
+        "create_symlink_via_header returned HTTP {} for {}",
+        response.status(), file_path,
+      )));
+    }
+    Ok(())
+  }
+
+  // --- engine call helpers ---
+
+  async fn engine_get_json(&self, url: &str, op: &str) -> Result<serde_json::Value> {
+    let mut request = self.http_client.get(url);
+    if let Some(ref auth) = self.auth_header().await {
+      request = request.header("Authorization", auth);
+    }
+    let response = request.send().await
+      .map_err(|e| ClientError::Server(format!("{} send: {}", op, e)))?;
+    if !response.status().is_success() {
+      return Err(ClientError::Server(format!(
+        "{} returned HTTP {}", op, response.status(),
+      )));
+    }
+    response.json().await
+      .map_err(|e| ClientError::Server(format!("{} parse: {}", op, e)))
+  }
+
+  async fn engine_post_json(&self, url: &str, body: &serde_json::Value, op: &str) -> Result<serde_json::Value> {
+    let mut request = self.http_client.post(url).json(body);
+    if let Some(ref auth) = self.auth_header().await {
+      request = request.header("Authorization", auth);
+    }
+    let response = request.send().await
+      .map_err(|e| ClientError::Server(format!("{} send: {}", op, e)))?;
+    if !response.status().is_success() {
+      return Err(ClientError::Server(format!(
+        "{} returned HTTP {}", op, response.status(),
+      )));
+    }
+    // Empty body is OK — return {ok: true}.
+    let text = response.text().await.unwrap_or_default();
+    if text.is_empty() {
+      Ok(serde_json::json!({"ok": true}))
+    } else {
+      serde_json::from_str(&text)
+        .map_err(|e| ClientError::Server(format!("{} parse: {}", op, e)))
     }
   }
 }

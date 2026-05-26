@@ -6,7 +6,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Json, Response};
 use serde::{Deserialize, Serialize};
 
-use crate::connections::{ConnectionManager, RemoteConnection};
+use crate::connections::ConnectionManager;
 use crate::error::ClientError;
 use crate::remote::RemoteClient;
 use crate::server::AppState;
@@ -62,11 +62,19 @@ pub struct OpenLocallyRequest {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Load a relationship and its associated connection from the config store.
-async fn load_relationship_and_connection(
+/// Load a relationship and a ready-to-use RemoteClient for it.
+///
+/// This is the canonical entry point for any handler that needs to talk
+/// to the engine on behalf of a relationship. It collapses what used to
+/// be three lines (load_relationship_and_connection + new RemoteClient)
+/// into one, and ensures every caller picks the same HTTP client + auth
+/// path. None of the existing callers used the bare RemoteConnection
+/// for anything except feeding it into RemoteClient::from_connection,
+/// so the two-step helper was retired.
+async fn load_relationship_client(
   state: &AppState,
   relationship_id: &str,
-) -> Result<(SyncRelationship, RemoteConnection), ClientError> {
+) -> Result<(SyncRelationship, RemoteClient), ClientError> {
   let relationship_manager = RelationshipManager::new(&state.config_store);
   let relationship = relationship_manager
     .get(relationship_id).await?
@@ -79,7 +87,8 @@ async fn load_relationship_and_connection(
       format!("connection not found: {}", relationship.remote_connection_id),
     ))?;
 
-  Ok((relationship, connection))
+  let client = RemoteClient::from_connection(&connection, &state.http_client);
+  Ok((relationship, client))
 }
 
 /// Compute a safe local path from a relationship base and a relative path.
@@ -147,6 +156,24 @@ fn guess_content_type(path: &str) -> &'static str {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Path translation
+//
+// The renderer (JS) deals in relationship-relative paths like `/Susan/foo`,
+// because that's what the user sees in the breadcrumb. The engine deals in
+// absolute paths like `/Pictures/Family/Susan/foo`. Two-way translation
+// happens here at the seam: `compute_remote_path` translates renderer →
+// engine, `strip_paths_in_json` translates engine → renderer.
+//
+// Convention for handlers:
+//   - INPUT: any request field named `path` is renderer-relative; call
+//     `compute_remote_path` (or `compute_remote_paths` for vec) on it
+//     before passing to RemoteClient.
+//   - OUTPUT: after calling RemoteClient, run the response through
+//     `strip_paths_in_json` so engine-absolute paths in the response come
+//     back as renderer-relative.
+// ---------------------------------------------------------------------------
+
 /// Compute the full remote path for a relative path within a relationship.
 fn compute_remote_path(relationship: &SyncRelationship, relative_path: &str) -> String {
   let base     = relationship.remote_path.trim_end_matches('/');
@@ -155,6 +182,78 @@ fn compute_remote_path(relationship: &SyncRelationship, relative_path: &str) -> 
     format!("{}/", base)
   } else {
     format!("{}/{}", base, relative)
+  }
+}
+
+/// Vec convenience — `compute_remote_path` over an array of relative paths.
+/// Used by handlers whose request body has a `paths: Vec<String>` field
+/// (e.g. copy).
+fn compute_remote_paths(relationship: &SyncRelationship, relative_paths: &[String]) -> Vec<String> {
+  relative_paths.iter()
+    .map(|p| compute_remote_path(relationship, p))
+    .collect()
+}
+
+/// Inverse of `compute_remote_path` — strip a relationship's remote_path
+/// prefix off an engine-absolute path so the result is renderer-friendly
+/// (relationship-relative). Engine APIs like `/files/deleted` return
+/// absolute paths; the JS layer works in relative coordinates, so we
+/// translate at the seam. Paths that don't fall under the relationship
+/// are passed through unchanged (the engine should never return those,
+/// but better to surface the data than swallow it).
+fn strip_remote_prefix(relationship: &SyncRelationship, abs_path: &str) -> String {
+  let base = relationship.remote_path.trim_end_matches('/');
+  if base.is_empty() {
+    return abs_path.to_string();
+  }
+  if let Some(rest) = abs_path.strip_prefix(base) {
+    // rest is "" if the path == base, otherwise starts with "/".
+    if rest.is_empty() { "/".to_string() } else { rest.to_string() }
+  } else {
+    abs_path.to_string()
+  }
+}
+
+/// Apply `strip_remote_prefix` to any string-valued `path` key, or to any
+/// string element of a `paths` array key, in a JSON value. Walks objects +
+/// arrays recursively. Used by the deleted/snapshot/version-history
+/// proxies to translate engine-absolute paths back into relationship-
+/// relative ones before handing off to the JS file browser.
+///
+/// Matching keys: `path` (single) and `paths` (array of strings). Any other
+/// key, including unrelated arrays, is walked but not rewritten.
+fn strip_paths_in_json(relationship: &SyncRelationship, value: &mut serde_json::Value) {
+  match value {
+    serde_json::Value::Object(map) => {
+      for (key, v) in map.iter_mut() {
+        match key.as_str() {
+          "path" => {
+            if let Some(s) = v.as_str() {
+              *v = serde_json::Value::String(strip_remote_prefix(relationship, s));
+              continue;
+            }
+          }
+          "paths" => {
+            if let Some(items) = v.as_array_mut() {
+              for item in items.iter_mut() {
+                if let Some(s) = item.as_str() {
+                  *item = serde_json::Value::String(strip_remote_prefix(relationship, s));
+                }
+              }
+              continue;
+            }
+          }
+          _ => {}
+        }
+        strip_paths_in_json(relationship, v);
+      }
+    }
+    serde_json::Value::Array(items) => {
+      for item in items.iter_mut() {
+        strip_paths_in_json(relationship, item);
+      }
+    }
+    _ => {}
   }
 }
 
@@ -248,14 +347,13 @@ pub async fn browse(
   let relationship_id = &params.relationship_id;
   let relative_path = params.path.as_deref().unwrap_or("");
 
-  let (relationship, connection) = load_relationship_and_connection(&state, relationship_id).await?;
+  let (relationship, remote_client) = load_relationship_client(&state, relationship_id).await?;
 
   let remote_path = compute_remote_path(&relationship, relative_path);
   let local_subpath = compute_local_subpath(&relationship, relative_path);
 
   tracing::info!("browsing {} (remote: {})", relationship_id, remote_path);
 
-  let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
   // No more `.map_err(|e| BadGateway(e.to_string()))` here — that
   // collapsed connect-refused / 5xx / 4xx / parse errors into one
   // opaque "bad gateway" string and the UI rendered them all as
@@ -369,7 +467,7 @@ pub async fn serve_file(
   AxumPath((relationship_id, relative_path)): AxumPath<(String, String)>,
   Query(query): Query<ServeQuery>,
 ) -> Result<Response, ClientError> {
-  let (relationship, connection) = load_relationship_and_connection(&state, &relationship_id).await?;
+  let (relationship, remote_client) = load_relationship_client(&state, &relationship_id).await?;
 
   let force_remote = query.source.as_deref() == Some("remote");
   let force_local = query.source.as_deref() == Some("local");
@@ -405,7 +503,6 @@ pub async fn serve_file(
   let remote_path = compute_remote_path(&relationship, &relative_path);
   tracing::info!("serving remote file: {}", remote_path);
 
-  let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
   let (resp, metadata) = remote_client
     .download_file(&remote_path)
     .await
@@ -440,7 +537,7 @@ pub async fn upload_file(
   headers: HeaderMap,
   body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, ClientError> {
-  let (relationship, connection) = load_relationship_and_connection(&state, &relationship_id).await?;
+  let (relationship, remote_client) = load_relationship_client(&state, &relationship_id).await?;
 
   let remote_path = compute_remote_path(&relationship, &relative_path);
   let content_type = headers
@@ -450,7 +547,6 @@ pub async fn upload_file(
 
   tracing::info!("uploading to remote: {}", remote_path);
 
-  let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
   remote_client
     .upload_file(&remote_path, reqwest::Body::from(body.to_vec()), content_type.as_deref())
     .await
@@ -470,13 +566,12 @@ pub async fn delete_file(
   State(state): State<AppState>,
   AxumPath((relationship_id, relative_path)): AxumPath<(String, String)>,
 ) -> Result<Json<serde_json::Value>, ClientError> {
-  let (relationship, connection) = load_relationship_and_connection(&state, &relationship_id).await?;
+  let (relationship, remote_client) = load_relationship_client(&state, &relationship_id).await?;
 
   let remote_path = compute_remote_path(&relationship, &relative_path);
 
   tracing::info!("deleting from remote: {}", remote_path);
 
-  let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
   remote_client
     .delete_file(&remote_path)
     .await
@@ -530,9 +625,7 @@ pub async fn rename_file(
   AxumPath(relationship_id): AxumPath<String>,
   Json(request): Json<RenameRequest>,
 ) -> Result<Json<serde_json::Value>, ClientError> {
-  let (_, connection) = load_relationship_and_connection(&state, &relationship_id).await?;
-
-  let remote_client = RemoteClient::from_connection(&connection, &state.http_client);
+  let (_, remote_client) = load_relationship_client(&state, &relationship_id).await?;
 
   remote_client.rename_file(&request.from, &request.to).await
     .map_err(|error| ClientError::BadGateway(error.to_string()))?;
@@ -544,4 +637,135 @@ pub async fn rename_file(
     "from":    request.from,
     "to":      request.to,
   })))
+}
+
+// ---------------------------------------------------------------------------
+// Engine UI proxy handlers
+//
+// One-liner handlers that wrap relationship_id → connection + absolute path,
+// then forward to the engine via RemoteClient. These exist to give the
+// desktop file browser the same surface area as the engine's web portal
+// (deleted files, snapshots, version history, copy, symlinks) without the
+// renderer needing to know about engine URLs or auth.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct DeletedQuery { pub path: Option<String> }
+
+/// GET /api/v1/browse/{relationship_id}/deleted?path=…
+pub async fn list_deleted(
+  State(state): State<AppState>,
+  AxumPath(relationship_id): AxumPath<String>,
+  Query(query): Query<DeletedQuery>,
+) -> Result<Json<serde_json::Value>, ClientError> {
+  let (rel, client) = load_relationship_client(&state, &relationship_id).await?;
+  let dir_relative = query.path.unwrap_or_else(|| "/".to_string());
+  let remote_dir = compute_remote_path(&rel, &dir_relative);
+  let mut value = client.fetch_deleted(&remote_dir).await?;
+  strip_paths_in_json(&rel, &mut value);
+  Ok(Json(value))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RestoreRequest { pub path: String }
+
+/// POST /api/v1/files/{relationship_id}/restore — body: {path}
+/// `path` is relationship-relative.
+pub async fn restore_deleted(
+  State(state): State<AppState>,
+  AxumPath(relationship_id): AxumPath<String>,
+  Json(req): Json<RestoreRequest>,
+) -> Result<Json<serde_json::Value>, ClientError> {
+  let (rel, client) = load_relationship_client(&state, &relationship_id).await?;
+  let remote_path = compute_remote_path(&rel, &req.path);
+  client.restore_file(&remote_path).await.map(Json)
+}
+
+/// GET /api/v1/versions/{relationship_id}/history/{*path}
+pub async fn version_history(
+  State(state): State<AppState>,
+  AxumPath((relationship_id, file_path)): AxumPath<(String, String)>,
+) -> Result<Json<serde_json::Value>, ClientError> {
+  let (rel, client) = load_relationship_client(&state, &relationship_id).await?;
+  let remote_path = compute_remote_path(&rel, &file_path);
+  let mut value = client.fetch_version_history(&remote_path).await?;
+  strip_paths_in_json(&rel, &mut value);
+  Ok(Json(value))
+}
+
+/// GET /api/v1/snapshots/{relationship_id} — list all snapshots on the
+/// engine this relationship connects to. Snapshots are system-wide on
+/// the engine; rel_id just picks which connection to authenticate with.
+pub async fn list_snapshots(
+  State(state): State<AppState>,
+  AxumPath(relationship_id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, ClientError> {
+  let (_rel, client) = load_relationship_client(&state, &relationship_id).await?;
+  client.fetch_snapshots().await.map(Json)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateSnapshotRequest { pub name: String }
+
+/// POST /api/v1/snapshots/{relationship_id} — body: {name}
+pub async fn create_snapshot(
+  State(state): State<AppState>,
+  AxumPath(relationship_id): AxumPath<String>,
+  Json(req): Json<CreateSnapshotRequest>,
+) -> Result<Json<serde_json::Value>, ClientError> {
+  let (_rel, client) = load_relationship_client(&state, &relationship_id).await?;
+  client.create_snapshot(&req.name).await.map(Json)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RestoreFromSnapshotRequest { pub path: String }
+
+/// POST /api/v1/snapshots/{relationship_id}/{snapshot_id}/restore — body: {path}
+pub async fn restore_from_snapshot(
+  State(state): State<AppState>,
+  AxumPath((relationship_id, snapshot_id)): AxumPath<(String, String)>,
+  Json(req): Json<RestoreFromSnapshotRequest>,
+) -> Result<Json<serde_json::Value>, ClientError> {
+  let (rel, client) = load_relationship_client(&state, &relationship_id).await?;
+  let remote_path = compute_remote_path(&rel, &req.path);
+  client.restore_from_snapshot(&snapshot_id, &remote_path).await.map(Json)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CopyRequest {
+  pub paths:       Vec<String>,
+  pub destination: String,
+}
+
+/// POST /api/v1/files/{relationship_id}/copy — body: {paths, destination}
+/// All paths are relationship-relative.
+pub async fn copy_files(
+  State(state): State<AppState>,
+  AxumPath(relationship_id): AxumPath<String>,
+  Json(req): Json<CopyRequest>,
+) -> Result<Json<serde_json::Value>, ClientError> {
+  let (rel, client) = load_relationship_client(&state, &relationship_id).await?;
+  let abs_paths = compute_remote_paths(&rel, &req.paths);
+  let abs_dest = compute_remote_path(&rel, &req.destination);
+  client.copy_files(&abs_paths, &abs_dest).await.map(Json)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SymlinkRequest {
+  pub path:   String,
+  pub target: String,
+}
+
+/// POST /api/v1/files/{relationship_id}/symlink — body: {path, target}
+/// `path` is relationship-relative. `target` is engine-absolute (no
+/// translation — symlink targets aren't relationship-bound).
+pub async fn create_symlink(
+  State(state): State<AppState>,
+  AxumPath(relationship_id): AxumPath<String>,
+  Json(req): Json<SymlinkRequest>,
+) -> Result<Json<serde_json::Value>, ClientError> {
+  let (rel, client) = load_relationship_client(&state, &relationship_id).await?;
+  let remote_path = compute_remote_path(&rel, &req.path);
+  client.create_symlink_via_header(&remote_path, &req.target).await?;
+  Ok(Json(serde_json::json!({ "ok": true })))
 }
