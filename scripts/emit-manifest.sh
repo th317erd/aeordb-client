@@ -79,16 +79,14 @@ fi
 # that; they only attest "this file was what was signed," not "this is
 # the right kind of binary"). The prefix discipline is load-bearing.
 #
-# macOS builds aren't in the pipeline yet — partial manifests are valid,
-# the client just won't offer self-update on a missing platform. When
-# macOS artifacts start landing in downloads/, add an
-# `aeordb-client-macos-aarch64` block (and -x86_64 if we ship separate
-# arch builds instead of a universal binary) alongside the existing two
-# and re-add the macos-aarch64 / macos-x86_64 entries to the platforms
-# map below.
+# macOS x86_64 (Intel Macs) is not in the pipeline. We can either ship
+# a universal binary under `aeordb-client-macos-aarch64` (lipo'd) or
+# add a separate `aeordb-client-macos-x86_64` block alongside this one
+# when Intel Mac demand justifies it. The current entry is arm64-only.
 LINUX_FILE="aeordb-client-linux-x86_64"
 WINDOWS_FILE="aeordb-client-windows-x86_64.exe"
-for f in "$LINUX_FILE" "$WINDOWS_FILE"; do
+MACOS_AARCH64_FILE="aeordb-client-macos-aarch64"
+for f in "$LINUX_FILE" "$WINDOWS_FILE" "$MACOS_AARCH64_FILE"; do
   if [[ ! -f "$DOWNLOADS_DIR/$f" ]]; then
     echo "emit-manifest.sh: missing artifact: $DOWNLOADS_DIR/$f" >&2
     exit 1
@@ -107,8 +105,9 @@ filesize() {
   fi
 }
 
-LINUX_SHA=$(sha256 "$DOWNLOADS_DIR/$LINUX_FILE");   LINUX_SIZE=$(filesize "$DOWNLOADS_DIR/$LINUX_FILE")
-WIN_SHA=$(sha256   "$DOWNLOADS_DIR/$WINDOWS_FILE"); WIN_SIZE=$(filesize "$DOWNLOADS_DIR/$WINDOWS_FILE")
+LINUX_SHA=$(sha256       "$DOWNLOADS_DIR/$LINUX_FILE");         LINUX_SIZE=$(filesize       "$DOWNLOADS_DIR/$LINUX_FILE")
+WIN_SHA=$(sha256         "$DOWNLOADS_DIR/$WINDOWS_FILE");       WIN_SIZE=$(filesize         "$DOWNLOADS_DIR/$WINDOWS_FILE")
+MAC_AARCH64_SHA=$(sha256 "$DOWNLOADS_DIR/$MACOS_AARCH64_FILE"); MAC_AARCH64_SIZE=$(filesize "$DOWNLOADS_DIR/$MACOS_AARCH64_FILE")
 
 RELEASED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RELEASE_NOTES_URL="https://aeordb.com/docs/release-notes/${VERSION}.html"
@@ -121,8 +120,9 @@ cat > "$DOWNLOADS_DIR/manifest.json" <<EOF
   "released_at": "$RELEASED_AT",
   "release_notes_url": "$RELEASE_NOTES_URL",
   "platforms": {
-    "linux-x86_64":   { "file": "$LINUX_FILE",   "size": $LINUX_SIZE, "sha256": "$LINUX_SHA" },
-    "windows-x86_64": { "file": "$WINDOWS_FILE", "size": $WIN_SIZE,   "sha256": "$WIN_SHA" }
+    "linux-x86_64":   { "file": "$LINUX_FILE",         "size": $LINUX_SIZE,       "sha256": "$LINUX_SHA" },
+    "windows-x86_64": { "file": "$WINDOWS_FILE",       "size": $WIN_SIZE,         "sha256": "$WIN_SHA" },
+    "macos-aarch64":  { "file": "$MACOS_AARCH64_FILE", "size": $MAC_AARCH64_SIZE, "sha256": "$MAC_AARCH64_SHA" }
   }
 }
 EOF
