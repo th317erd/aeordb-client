@@ -65,16 +65,18 @@ class AeorConnections extends HTMLElement {
       // Page header
       div.class('page-header')(
         h1('Connections'),
+        // Hidden while the form is open — the form's own Cancel button
+        // is the single way out, so users don't see two Cancels (one in
+        // the header, one in the form) competing for the same action.
         button.id('add-btn')
-          .class.bindState(
-            (state) => state.showAddForm ? 'secondary' : 'primary',
+          .class('primary')
+          .hidden.bindState(
+            (state) => state.showAddForm,
             ['showAddForm'],
           )
-          .textContent.bindState(
-            (state) => state.showAddForm ? 'Cancel' : 'Add Connection',
-            ['showAddForm'],
-          )
-          .onClick(this._toggleAddForm)(),
+          .onClick(this._toggleAddForm)(
+            'Add Connection',
+          ),
       ),
 
       // Page guide

@@ -51,20 +51,23 @@ class AeorSync extends HTMLElement {
       // Page header
       div.class('page-header')(
         h1('Sync Relationships'),
+        // Hidden while the add/edit form is open — the form's own Cancel
+        // button is the single way out, so users don't see two Cancels
+        // (one in the header, one in the form) competing for the same
+        // action.
         button.id('add-btn')
-          .class.bindState(
-            (s) => (s.showAddForm || s.editingId) ? 'secondary' : 'primary',
+          .class('primary')
+          .hidden.bindState(
+            (s) => s.showAddForm || !!s.editingId,
             ['showAddForm', 'editingId'],
           )
           .disabled.bindState(
-            (s) => s.connections.length === 0 && !s.showAddForm && !s.editingId,
-            ['connections', 'showAddForm', 'editingId'],
+            (s) => s.connections.length === 0,
+            ['connections'],
           )
-          .textContent.bindState(
-            (s) => (s.showAddForm || s.editingId) ? 'Cancel' : 'Add Sync',
-            ['showAddForm', 'editingId'],
-          )
-          .onClick(this._onAddToggle)(),
+          .onClick(this._onAddToggle)(
+            'Add Sync',
+          ),
       ),
 
       // Page guide
