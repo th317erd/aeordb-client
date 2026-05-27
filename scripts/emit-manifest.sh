@@ -79,18 +79,32 @@ fi
 # that; they only attest "this file was what was signed," not "this is
 # the right kind of binary"). The prefix discipline is load-bearing.
 #
-# macOS x86_64 (Intel Macs) is not in the pipeline. We can either ship
-# a universal binary under `aeordb-client-macos-aarch64` (lipo'd) or
-# add a separate `aeordb-client-macos-x86_64` block alongside this one
-# when Intel Mac demand justifies it. The current entry is arm64-only.
+# macOS ships as a single universal binary (lipo'd from
+# aarch64-apple-darwin + x86_64-apple-darwin release builds). Both
+# arch-specific platform keys in the manifest below point at the same
+# file, so an Apple Silicon client looking up "macos-aarch64" and an
+# Intel Mac looking up "macos-x86_64" both download the same URL and
+# both run it natively — the Mach-O fat binary header picks the right
+# slice at load time. Costs ~2x the on-disk size vs an arch-specific
+# build but matches Apple's recommended distribution model and avoids
+# any "download the wrong one" UX trap.
 LINUX_FILE="aeordb-client-linux-x86_64"
 WINDOWS_FILE="aeordb-client-windows-x86_64.exe"
-MACOS_AARCH64_FILE="aeordb-client-macos-aarch64"
-for f in "$LINUX_FILE" "$WINDOWS_FILE" "$MACOS_AARCH64_FILE"; do
+MACOS_FILE="aeordb-client-macos"
+
+# Normalize perms on every release artifact to 0644 (readable by everyone,
+# writable by owner). Without this, an artifact that landed with locked-down
+# perms — the Windows .exe is the classic offender, often arriving 0700 from
+# whatever Windows host built it — gets shipped by rsync at the same mode.
+# On FS-Server1 the aeordb-www systemd user then can't open the file when
+# `update-versions` tries to hash it, and the deploy aborts with EACCES.
+# Better to fix it here, once, than to keep finding it during deploys.
+for f in "$LINUX_FILE" "$WINDOWS_FILE" "$MACOS_FILE"; do
   if [[ ! -f "$DOWNLOADS_DIR/$f" ]]; then
     echo "emit-manifest.sh: missing artifact: $DOWNLOADS_DIR/$f" >&2
     exit 1
   fi
+  chmod 0644 "$DOWNLOADS_DIR/$f"
 done
 
 # sha256sum + stat are GNU; fall back to shasum (macOS) and stat -f.
@@ -105,9 +119,9 @@ filesize() {
   fi
 }
 
-LINUX_SHA=$(sha256       "$DOWNLOADS_DIR/$LINUX_FILE");         LINUX_SIZE=$(filesize       "$DOWNLOADS_DIR/$LINUX_FILE")
-WIN_SHA=$(sha256         "$DOWNLOADS_DIR/$WINDOWS_FILE");       WIN_SIZE=$(filesize         "$DOWNLOADS_DIR/$WINDOWS_FILE")
-MAC_AARCH64_SHA=$(sha256 "$DOWNLOADS_DIR/$MACOS_AARCH64_FILE"); MAC_AARCH64_SIZE=$(filesize "$DOWNLOADS_DIR/$MACOS_AARCH64_FILE")
+LINUX_SHA=$(sha256 "$DOWNLOADS_DIR/$LINUX_FILE");   LINUX_SIZE=$(filesize "$DOWNLOADS_DIR/$LINUX_FILE")
+WIN_SHA=$(sha256   "$DOWNLOADS_DIR/$WINDOWS_FILE"); WIN_SIZE=$(filesize "$DOWNLOADS_DIR/$WINDOWS_FILE")
+MAC_SHA=$(sha256   "$DOWNLOADS_DIR/$MACOS_FILE");   MAC_SIZE=$(filesize "$DOWNLOADS_DIR/$MACOS_FILE")
 
 RELEASED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RELEASE_NOTES_URL="https://aeordb.com/docs/release-notes/${VERSION}.html"
@@ -120,9 +134,10 @@ cat > "$DOWNLOADS_DIR/manifest.json" <<EOF
   "released_at": "$RELEASED_AT",
   "release_notes_url": "$RELEASE_NOTES_URL",
   "platforms": {
-    "linux-x86_64":   { "file": "$LINUX_FILE",         "size": $LINUX_SIZE,       "sha256": "$LINUX_SHA" },
-    "windows-x86_64": { "file": "$WINDOWS_FILE",       "size": $WIN_SIZE,         "sha256": "$WIN_SHA" },
-    "macos-aarch64":  { "file": "$MACOS_AARCH64_FILE", "size": $MAC_AARCH64_SIZE, "sha256": "$MAC_AARCH64_SHA" }
+    "linux-x86_64":   { "file": "$LINUX_FILE",   "size": $LINUX_SIZE, "sha256": "$LINUX_SHA" },
+    "windows-x86_64": { "file": "$WINDOWS_FILE", "size": $WIN_SIZE,   "sha256": "$WIN_SHA" },
+    "macos-aarch64":  { "file": "$MACOS_FILE",   "size": $MAC_SIZE,   "sha256": "$MAC_SHA" },
+    "macos-x86_64":   { "file": "$MACOS_FILE",   "size": $MAC_SIZE,   "sha256": "$MAC_SHA" }
   }
 }
 EOF

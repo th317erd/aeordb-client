@@ -18,3 +18,18 @@ members = [
 exclude = [
   "aeordb",
 ]
+
+# Release profile: strip debug symbols so the Linux binary ships at
+# the same size as Mac + Windows release builds. Without this, the
+# Linux ELF release came out 32MB (vs 23MB for the others) because
+# glibc + ELF debug sections aren't stripped by default; the MSVC
+# and Mach-O toolchains don't include the same debug payload in a
+# `--release` build, so they naturally ship smaller. `strip = "symbols"`
+# removes function-name + debug info from the binary — backtraces in
+# the field will show raw addresses rather than function names, but
+# the user-facing UI doesn't surface those anyway, and our `tracing`
+# log lines already carry the file:line context that matters for
+# remote debugging. If we ever ship symbol files for crash-symbolication
+# we'll revisit (Cargo split-debuginfo + a separate .debug upload).
+[profile.release]
+strip = "symbols"
