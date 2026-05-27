@@ -2,12 +2,10 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::Instant;
 
-use tokio_util::io::ReaderStream;
-
 use super::file_mtime;
 use crate::connections::RemoteConnection;
 use crate::error::{ClientError, Result};
-use crate::remote::RemoteClient;
+use crate::remote::{BlobConfig, CommitFile, RemoteClient, chunk_hash};
 use crate::state::StateStore;
 use crate::sync::content_type::mime_from_extension;
 use crate::sync::filter::matches_filter;
@@ -35,6 +33,7 @@ pub async fn push_sync(
   state: &StateStore,
   connection: &RemoteConnection,
   relationship: &SyncRelationship,
+  all_relationships: &[SyncRelationship],
   http_client: &reqwest::Client,
   jwt_cache: &crate::jwt_cache::JwtCache,
 ) -> Result<PushResult> {
@@ -43,6 +42,13 @@ pub async fn push_sync(
   let jwt_slot = jwt_cache.slot_for(&connection.id);
   let remote_client = RemoteClient::from_connection_cached(connection, http_client, jwt_slot);
   let metadata_store = SyncMetadataStore::new(state);
+
+  // Fetch the engine's chunk parameters once per push cycle. Files
+  // uploaded in this cycle all chunk to the same size + use the same
+  // hash prefix. If the engine ever changes these mid-flight (very
+  // unlikely), a subsequent cycle will pick up the new values.
+  let blob_config = remote_client.blob_config().await
+    .map_err(|e| ClientError::Server(format!("blob_config failed: {}", e)))?;
 
   let local_base = Path::new(&relationship.local_path);
   if !local_base.exists() {
@@ -62,10 +68,16 @@ pub async fn push_sync(
   // detect deletions (files in metadata but gone from disk).
   let mut seen_remote_paths: HashSet<String> = HashSet::new();
 
+  // Build the list of local directories owned by child relationships so
+  // the walker can skip them — otherwise a parent that wraps a child's
+  // folder would re-push every file the child is also responsible for.
+  let local_exclusions = crate::sync::hierarchy::child_local_exclusions(relationship, all_relationships);
+
   // Walk the local filesystem recursively in a blocking task since
   // std::fs::read_dir is inherently synchronous and recursive.
   let local_base_owned = local_base.to_path_buf();
-  let walker = tokio::task::spawn_blocking(move || walkdir(&local_base_owned))
+  let local_exclusions_owned = local_exclusions.clone();
+  let walker = tokio::task::spawn_blocking(move || walkdir(&local_base_owned, &local_exclusions_owned))
     .await
     .map_err(|error| ClientError::Io(
       std::io::Error::new(std::io::ErrorKind::Other, format!("walkdir task panicked: {}", error)),
@@ -240,32 +252,32 @@ pub async fn push_sync(
       }
     }
 
-    // Upload to remote using a streaming body from the file on disk.
+    // Chunk-based upload via the engine's content-addressable blob API.
+    // We've already got the full file in `content` (buffered for the
+    // blake3 hash above); slice it into engine-sized chunks, ask the
+    // engine which it's missing, upload only those, then commit the
+    // file by listing the ordered chunk hashes.
+    //
+    // The previous code path used a full-file PUT, which re-uploaded
+    // the entire body on every change regardless of how small the
+    // diff was — a 1 GB file with a 4 KB edit was 1 GB on the wire.
+    // The chunk path makes that the same 4 KB edit roughly one chunk
+    // (~256 KB today) of network traffic; cross-file dedup falls out
+    // naturally too (a chunk that's already in the engine's store
+    // skips re-upload regardless of which file referenced it first).
     let content_type = mime_from_extension(&entry_path);
 
-    // Open the file and create a streaming body to avoid holding the full
-    // content in memory during the upload (the `content` Vec is dropped
-    // after hashing; we re-open for streaming).
+    let push_outcome = push_file_via_chunks(
+      &remote_client,
+      &blob_config,
+      &remote_path,
+      &content,
+      content_type.as_deref(),
+    ).await;
+    // Drop after the chunk path is done with it — could be large.
     drop(content);
 
-    let upload_body = match tokio::fs::File::open(&entry_path).await {
-      Ok(file) => {
-        let stream = ReaderStream::new(file);
-        reqwest::Body::wrap_stream(stream)
-      }
-      Err(error) => {
-        let message = format!("failed to open {:?} for upload: {}", entry_path, error);
-        tracing::warn!("{}", message);
-        errors.push(message);
-        files_failed += 1;
-        continue;
-      }
-    };
-
-    match remote_client
-      .upload_file(&remote_path, upload_body, content_type.as_deref())
-      .await
-    {
+    match push_outcome {
       Ok(()) => {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let new_meta = FileSyncMeta {
@@ -314,9 +326,16 @@ pub async fn push_sync(
   // Detect deleted files: entries in metadata that no longer exist on disk.
   if relationship.delete_propagation.local_to_remote {
     let tracked_files = metadata_store.list_file_metas(&relationship.id)?;
+    // If a child relationship now owns part of the remote tree, files
+    // under those prefixes will be missing from our walk by design —
+    // they aren't deletions, so suppress the delete_file call.
+    let remote_exclusions = crate::sync::hierarchy::child_exclusions(relationship, all_relationships);
 
     for meta in tracked_files {
       if seen_remote_paths.contains(&meta.path) {
+        continue;
+      }
+      if crate::sync::hierarchy::is_excluded_by_child(&meta.path, &remote_exclusions) {
         continue;
       }
 
@@ -351,14 +370,21 @@ pub async fn push_sync(
 }
 
 /// Recursively walk a directory, returning all file and symlink paths.
-/// Skips directories themselves (the caller handles that).
-fn walkdir(root: &Path) -> Result<Vec<std::path::PathBuf>> {
+/// Skips directories themselves (the caller handles that). Any directory
+/// whose path matches one of `exclusions` is not descended into — used to
+/// skip child sync-relationships' local territory so a parent sync doesn't
+/// re-push files the child is already handling.
+fn walkdir(root: &Path, exclusions: &[std::path::PathBuf]) -> Result<Vec<std::path::PathBuf>> {
   let mut results = Vec::new();
-  walk_recursive(root, &mut results)?;
+  walk_recursive(root, exclusions, &mut results)?;
   Ok(results)
 }
 
-fn walk_recursive(dir: &Path, results: &mut Vec<std::path::PathBuf>) -> Result<()> {
+fn walk_recursive(
+  dir:        &Path,
+  exclusions: &[std::path::PathBuf],
+  results:    &mut Vec<std::path::PathBuf>,
+) -> Result<()> {
   let entries = std::fs::read_dir(dir)?;
 
   for entry in entries {
@@ -367,9 +393,18 @@ fn walk_recursive(dir: &Path, results: &mut Vec<std::path::PathBuf>) -> Result<(
     let file_type = entry.file_type()?;
 
     if file_type.is_symlink() || file_type.is_file() {
+      // A file at the exclusion root itself shouldn't happen (exclusions
+      // are directories), but check anyway so we never sync a file that
+      // belongs to a child relationship.
+      if crate::sync::hierarchy::is_local_excluded_by_child(&path, exclusions) {
+        continue;
+      }
       results.push(path);
     } else if file_type.is_dir() {
-      walk_recursive(&path, results)?;
+      if crate::sync::hierarchy::is_local_excluded_by_child(&path, exclusions) {
+        continue;
+      }
+      walk_recursive(&path, exclusions, results)?;
     }
   }
 
@@ -387,4 +422,71 @@ fn compute_remote_path(relative: &Path, remote_base: &str) -> String {
   let base = remote_base.trim_end_matches('/');
 
   format!("{}/{}", base, relative_str)
+}
+
+/// Upload one file's content via the engine's chunk API.
+///
+/// Pipeline:
+///   1. Split `bytes` into `config.chunk_size`-byte chunks.
+///   2. Hash each chunk: `blake3(config.chunk_hash_prefix + chunk_bytes)`.
+///   3. POST /blobs/check with the deduped hash list → get "needed".
+///   4. PUT /blobs/chunks/{hash} for each needed chunk (dedup so a
+///      file that references the same chunk twice only uploads it once).
+///   5. POST /blobs/commit with the file path + ordered chunk hashes.
+///
+/// Empty files (zero bytes) work too: chunks list is empty, the engine
+/// commits a zero-byte file from the empty list. The /blobs/check call
+/// for an empty hash list is also a valid no-op.
+async fn push_file_via_chunks(
+  client:       &RemoteClient,
+  config:       &BlobConfig,
+  remote_path:  &str,
+  bytes:        &[u8],
+  content_type: Option<&str>,
+) -> Result<()> {
+  // Pre-compute (hash, byte-range) for each chunk so the upload phase
+  // can borrow chunk slices without re-hashing.
+  let mut hashes_in_order: Vec<String> = Vec::new();
+  let mut chunk_slices:    Vec<(String, &[u8])> = Vec::new();
+  for chunk in bytes.chunks(config.chunk_size) {
+    let h = chunk_hash(&config.chunk_hash_prefix, chunk);
+    hashes_in_order.push(h.clone());
+    chunk_slices.push((h, chunk));
+  }
+
+  // De-dup the check request — a file that references the same chunk
+  // multiple times only needs to ask about it once.
+  let mut seen = HashSet::new();
+  let unique_hashes: Vec<String> = hashes_in_order.iter()
+    .filter(|h| seen.insert((*h).clone()))
+    .cloned()
+    .collect();
+
+  // /blobs/check on an empty list is allowed; engine returns empty
+  // have/needed. Skip the round-trip in that case.
+  let mut needed_set: HashSet<String> = if unique_hashes.is_empty() {
+    HashSet::new()
+  } else {
+    let response = client.blob_check(&unique_hashes).await?;
+    response.needed.into_iter().collect()
+  };
+
+  // Upload each needed chunk exactly once. needed_set.remove returns
+  // true the first time we see a hash; subsequent occurrences in
+  // chunk_slices are skipped automatically.
+  for (hash, chunk_bytes) in &chunk_slices {
+    if needed_set.remove(hash) {
+      client.upload_chunk(hash, chunk_bytes.to_vec()).await?;
+    }
+  }
+
+  // Commit. The engine validates that every referenced chunk exists in
+  // its store; if we forgot to upload one, this fails with InvalidInput.
+  let commit_file = CommitFile {
+    path:         remote_path.to_string(),
+    chunks:       hashes_in_order,
+    content_type: content_type.map(|s| s.to_string()),
+  };
+  client.blob_commit(&[commit_file]).await?;
+  Ok(())
 }

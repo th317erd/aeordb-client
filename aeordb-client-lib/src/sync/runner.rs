@@ -202,11 +202,13 @@ async fn run_sync_loop(
 ) {
   let direction = relationship.direction.clone();
   let filter    = relationship.filter.clone();
+  let relationship_manager = RelationshipManager::new(&config);
 
   tracing::info!("sync loop active for '{}' ({:?})", relationship.name, direction);
 
   // --- Step 1: Initial full sync (push + pull based on direction) ---
-  match sync_relationship(&state, &connection, &relationship, &http_client, &jwt_cache).await {
+  let all_relationships = relationship_manager.list().await.unwrap_or_default();
+  match sync_relationship(&state, &connection, &relationship, &all_relationships, &http_client, &jwt_cache).await {
     Ok(result) => {
       log_sync_result(&relationship.name, &result);
       if let Err(error) = activity.log_full_sync(&relationship.id, &relationship.name, &result) {
@@ -275,8 +277,11 @@ async fn run_sync_loop(
           continue;
         }
 
-        // Push local changes to the remote.
-        match push_sync(&state, &connection, &relationship, &http_client, &jwt_cache).await {
+        // Push local changes to the remote. Refetch the relationship
+        // list each cycle so nested-sync exclusions reflect the user's
+        // latest config (they may have added or removed a child sync).
+        let all_relationships = relationship_manager.list().await.unwrap_or_default();
+        match push_sync(&state, &connection, &relationship, &all_relationships, &http_client, &jwt_cache).await {
           Ok(result) => {
             if result.files_pushed > 0 || result.files_deleted > 0 || result.files_failed > 0 {
               tracing::info!(
@@ -307,7 +312,8 @@ async fn run_sync_loop(
           None => std::future::pending().await,
         }
       } => {
-        match pull_sync(&state, &connection, &relationship, &http_client, &jwt_cache).await {
+        let all_relationships = relationship_manager.list().await.unwrap_or_default();
+        match pull_sync(&state, &connection, &relationship, &all_relationships, &http_client, &jwt_cache).await {
           Ok(result) => {
             if result.files_pulled > 0 || result.files_deleted > 0 || result.files_failed > 0 {
               tracing::info!(
@@ -351,7 +357,8 @@ async fn run_sync_loop(
           }
         };
 
-        match sync_relationship(&state, &current_connection, &current_relationship, &http_client, &jwt_cache).await {
+        let all_relationships = relationship_manager.list().await.unwrap_or_default();
+        match sync_relationship(&state, &current_connection, &current_relationship, &all_relationships, &http_client, &jwt_cache).await {
           Ok(result) => {
             log_sync_result(&relationship.name, &result);
             if let Err(error) = activity.log_full_sync(&relationship.id, &relationship.name, &result) {

@@ -1,3 +1,4 @@
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 use crate::connections::{AuthType, RemoteConnection};
@@ -724,6 +725,150 @@ impl RemoteClient {
     Ok(())
   }
 
+  // ---------------------------------------------------------------------------
+  // Blob / chunk API
+  //
+  // The engine stores file content as content-addressable chunks: each
+  // chunk is keyed by `blake3("chunk:" + bytes)`. A file is a list of
+  // ordered chunk hashes + metadata. Uploading a file means:
+  //
+  //   1. blob_config()   — discover the engine's chunk size (256 KB today).
+  //   2. Split local content into chunks, compute each chunk's hash.
+  //   3. blob_check()    — ask the engine which of those hashes it ALREADY
+  //                        has. The "needed" list is the subset to upload.
+  //   4. upload_chunk()  — PUT each needed chunk's bytes. Idempotent;
+  //                        existing chunks return 200 instead of 201.
+  //   5. blob_commit()   — POST the file path + ordered chunk hashes;
+  //                        engine atomically materializes the file from
+  //                        chunks already in its store.
+  //
+  // Downloading is the same idea inverted: GET the file's chunk hash list
+  // (already available in the /sync/diff response), figure out which we
+  // already have locally (dedup against existing local chunks), then
+  // /sync/chunks-fetch the rest and reassemble.
+  //
+  // The win over the old full-file PUT path: a 1 GB file with a 4 KB edit
+  // re-uploads ~256 KB (one chunk) instead of 1 GB. Same gain on pull.
+  // Cross-file dedup also falls out of this: two files sharing a chunk
+  // only store it once on the engine.
+
+  /// GET /blobs/config — engine parameters (chunk size, hash algo).
+  pub async fn blob_config(&self) -> Result<BlobConfig> {
+    let url = format!("{}/blobs/config", self.base_url);
+    let response = self.authed_send(|| self.http_client.get(&url)).await
+      .map_err(|e| ClientError::Server(format!("blob_config send: {}", e)))?;
+    if !response.status().is_success() {
+      return Err(ClientError::Server(format!("blob_config returned HTTP {}", response.status())));
+    }
+    response.json::<BlobConfig>().await
+      .map_err(|e| ClientError::Server(format!("blob_config parse: {}", e)))
+  }
+
+  /// POST /blobs/check — for a list of chunk hashes, return which the
+  /// engine already has + which it needs us to upload.
+  pub async fn blob_check(&self, hashes: &[String]) -> Result<BlobCheckResponse> {
+    let url = format!("{}/blobs/check", self.base_url);
+    let body = serde_json::json!({ "hashes": hashes });
+    let response = self.authed_send(|| self.http_client.post(&url).json(&body)).await
+      .map_err(|e| ClientError::Server(format!("blob_check send: {}", e)))?;
+    if !response.status().is_success() {
+      return Err(ClientError::Server(format!("blob_check returned HTTP {}", response.status())));
+    }
+    response.json::<BlobCheckResponse>().await
+      .map_err(|e| ClientError::Server(format!("blob_check parse: {}", e)))
+  }
+
+  /// PUT /blobs/chunks/{hash} — upload a single chunk's raw bytes. The
+  /// engine hash-verifies `blake3("chunk:" + bytes)` against the URL and
+  /// rejects on mismatch (defense against silent corruption mid-transit).
+  /// 200 = chunk already existed; 201 = newly stored.
+  ///
+  /// Doesn't go through `authed_send` because the body is a `Vec<u8>`
+  /// payload not a JSON-serialized one, and we want to construct the
+  /// request once with the bytes (cloning a possibly-large body for the
+  /// 401-retry path would be wasteful). On 401 we re-mint the JWT
+  /// manually and retry once.
+  pub async fn upload_chunk(&self, hash_hex: &str, bytes: Vec<u8>) -> Result<()> {
+    let url = format!("{}/blobs/chunks/{}", self.base_url, hash_hex);
+    let send = |body: Vec<u8>| async {
+      let mut req = self.http_client.put(&url).body(body);
+      if let Some(ref auth) = self.auth_header().await {
+        req = req.header("Authorization", auth);
+      }
+      req.send().await
+    };
+    let mut response = send(bytes.clone()).await
+      .map_err(|e| ClientError::Server(format!("upload_chunk send: {}", e)))?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+      self.invalidate_token();
+      response = send(bytes).await
+        .map_err(|e| ClientError::Server(format!("upload_chunk retry: {}", e)))?;
+    }
+    if !response.status().is_success() {
+      let status = response.status();
+      let body = response.text().await.unwrap_or_default();
+      return Err(ClientError::Server(format!(
+        "upload_chunk {} returned HTTP {}: {}", hash_hex, status, body,
+      )));
+    }
+    Ok(())
+  }
+
+  /// POST /blobs/commit — materialize one or more files from already-
+  /// uploaded chunks. The engine validates that every referenced chunk
+  /// hash exists in its store, then atomically writes the file metadata.
+  pub async fn blob_commit(&self, files: &[CommitFile]) -> Result<serde_json::Value> {
+    let url = format!("{}/blobs/commit", self.base_url);
+    let body = serde_json::json!({ "files": files });
+    let response = self.authed_send(|| self.http_client.post(&url).json(&body)).await
+      .map_err(|e| ClientError::Server(format!("blob_commit send: {}", e)))?;
+    if !response.status().is_success() {
+      let status = response.status();
+      let body = response.text().await.unwrap_or_default();
+      return Err(ClientError::Server(format!(
+        "blob_commit returned HTTP {}: {}", status, body,
+      )));
+    }
+    response.json().await
+      .map_err(|e| ClientError::Server(format!("blob_commit parse: {}", e)))
+  }
+
+  /// POST /sync/chunks — fetch raw chunk bytes for the given hashes.
+  /// Engine returns `{ chunks: [{ hash, data: base64, size }, ...] }`.
+  /// We decode and return owned `(hash, bytes)` pairs.
+  ///
+  /// Engine limits: at most 10,000 hashes per request, at most 512 MB
+  /// of response payload. Callers must batch if either bound would be
+  /// exceeded — we DON'T batch internally here so the caller can see
+  /// the boundary and decide how to chunk (pun intended).
+  pub async fn sync_chunks(&self, hashes: &[String]) -> Result<Vec<(String, Vec<u8>)>> {
+    let url = format!("{}/sync/chunks", self.base_url);
+    let body = serde_json::json!({ "hashes": hashes });
+    let response = self.authed_send(|| self.http_client.post(&url).json(&body)).await
+      .map_err(|e| ClientError::Server(format!("sync_chunks send: {}", e)))?;
+    if !response.status().is_success() {
+      let status = response.status();
+      let body = response.text().await.unwrap_or_default();
+      return Err(ClientError::Server(format!(
+        "sync_chunks returned HTTP {}: {}", status, body,
+      )));
+    }
+    #[derive(Deserialize)]
+    struct ChunksResponse { chunks: Vec<ChunkEntry> }
+    #[derive(Deserialize)]
+    struct ChunkEntry { hash: String, data: String }
+    let parsed: ChunksResponse = response.json().await
+      .map_err(|e| ClientError::Server(format!("sync_chunks parse: {}", e)))?;
+
+    let mut out = Vec::with_capacity(parsed.chunks.len());
+    for entry in parsed.chunks {
+      let bytes = base64::engine::general_purpose::STANDARD.decode(&entry.data)
+        .map_err(|e| ClientError::Server(format!("sync_chunks base64 decode {}: {}", entry.hash, e)))?;
+      out.push((entry.hash, bytes));
+    }
+    Ok(out)
+  }
+
   // --- engine call helpers ---
   //
   // Thin wrappers around `authed_send` (which handles auth + 401 retry)
@@ -759,6 +904,50 @@ impl RemoteClient {
         .map_err(|e| ClientError::Server(format!("{} parse: {}", op, e)))
     }
   }
+}
+
+/// GET /blobs/config response — engine parameters for the chunk API.
+/// `chunk_size` is the maximum bytes per chunk; PUT /blobs/chunks/{hash}
+/// rejects anything bigger. `chunk_hash_prefix` is what gets prepended
+/// to chunk bytes before hashing (currently "chunk:") so the same byte
+/// sequence stored as a chunk vs as a file metadata blob hashes
+/// differently.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobConfig {
+  pub hash_algorithm:    String,
+  pub chunk_size:        usize,
+  pub chunk_hash_prefix: String,
+}
+
+/// POST /blobs/check response. `have` is the subset of the requested
+/// hashes the engine already has stored; `needed` is the subset the
+/// engine wants the client to upload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobCheckResponse {
+  pub have:   Vec<String>,
+  pub needed: Vec<String>,
+}
+
+/// One file in a POST /blobs/commit batch. `chunks` are the hex-encoded
+/// chunk hashes in order; the engine concatenates them in that order to
+/// materialize the file's content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitFile {
+  pub path:    String,
+  pub chunks:  Vec<String>,
+  #[serde(skip_serializing_if = "Option::is_none", default)]
+  pub content_type: Option<String>,
+}
+
+/// Compute the engine-canonical chunk hash for a byte slice:
+/// `blake3("chunk:" + bytes)`, hex-encoded. The "chunk:" prefix
+/// distinguishes chunk-blob hashes from file-metadata hashes (same
+/// algorithm, different namespace).
+pub fn chunk_hash(prefix: &str, bytes: &[u8]) -> String {
+  let mut hasher = blake3::Hasher::new();
+  hasher.update(prefix.as_bytes());
+  hasher.update(bytes);
+  hasher.finalize().to_hex().to_string()
 }
 
 /// Paginated directory listing response from GET /files/{path}?limit=N&offset=M.

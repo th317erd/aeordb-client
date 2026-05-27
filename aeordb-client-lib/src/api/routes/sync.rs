@@ -137,8 +137,10 @@ async fn run_sync(
   // Run the sync (push and/or pull based on direction). Pass the
   // shared JWT cache so the trigger call reuses the cached token
   // instead of minting a fresh one on the engine.
+  let all_relationships = relationship_manager.list().await.unwrap_or_default();
   let result = sync_relationship(
-    &state.state_store, &connection, &relationship, &state.http_client, &state.jwt_cache,
+    &state.state_store, &connection, &relationship, &all_relationships,
+    &state.http_client, &state.jwt_cache,
   ).await
     .map_err(|error| ClientError::Server(error.to_string()))?;
 
