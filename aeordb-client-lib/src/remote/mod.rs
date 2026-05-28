@@ -275,21 +275,83 @@ impl RemoteClient {
   /// thousands of orphaned token rows per day. Only the interactive
   /// browser-login flow on the portal needs `include_refresh: true`.
   async fn exchange_token(&self, api_key: &str) -> Result<String> {
-    let url = format!("{}/auth/token", self.base_url);
-    let response = self.http_client
-      .post(&url)
-      .json(&serde_json::json!({
-        "api_key":         api_key,
-        "include_refresh": false,
-      }))
-      .send()
-      .await
-      .map_err(|e| ClientError::Server(format!("token exchange failed: {}", e)))?;
+    let initial_url = format!("{}/auth/token", self.base_url);
+    let body = serde_json::json!({
+      "api_key":         api_key,
+      "include_refresh": false,
+    });
+
+    // Manually walk 301/302/307/308 redirects while preserving POST.
+    // reqwest's default policy downgrades POST→GET on 301/302 (the
+    // browser convention), which is the wrong answer for our auth
+    // endpoint: nginx in front of many engine deployments returns
+    // `301 Moved Permanently` to upgrade http→https, and the GET that
+    // reqwest then issues hits no /auth/token GET handler and comes
+    // back HTTP 405. Manual handling re-issues the same POST against
+    // the redirected URL so the upgrade is transparent.
+    let mut redirect_chain: Vec<String> = vec![initial_url.clone()];
+    let mut current_url = initial_url.clone();
+    let response = loop {
+      let response = self.http_client
+        .post(&current_url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| ClientError::Server(format!(
+          "token exchange POST to {} failed: {}", current_url, e,
+        )))?;
+
+      let status = response.status();
+      let is_redirect = matches!(status.as_u16(), 301 | 302 | 307 | 308);
+      if !is_redirect {
+        break response;
+      }
+
+      let location = response.headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+      let Some(loc) = location else {
+        return Err(ClientError::Server(format!(
+          "token exchange returned HTTP {} with no Location header (chain: {})",
+          status, redirect_chain.join(" → "),
+        )));
+      };
+
+      // Resolve the Location against the current URL (handles both
+      // absolute and relative redirects).
+      let next_url = match reqwest::Url::parse(&current_url)
+        .and_then(|base| base.join(&loc))
+      {
+        Ok(u) => u.to_string(),
+        Err(e) => return Err(ClientError::Server(format!(
+          "token exchange got HTTP {} with unparseable Location '{}': {}",
+          status, loc, e,
+        ))),
+      };
+
+      if redirect_chain.len() >= 5 {
+        return Err(ClientError::Server(format!(
+          "token exchange exceeded 5 redirects (chain: {} → {})",
+          redirect_chain.join(" → "), next_url,
+        )));
+      }
+      redirect_chain.push(next_url.clone());
+      current_url = next_url;
+    };
 
     if !response.status().is_success() {
-      return Err(ClientError::Server(
-        format!("token exchange returned HTTP {}", response.status()),
-      ));
+      let chain_summary = if redirect_chain.len() > 1 {
+        format!(" (after redirect: {})", redirect_chain.join(" → "))
+      } else {
+        String::new()
+      };
+      return Err(ClientError::Server(format!(
+        "token exchange returned HTTP {} for {}{} \
+         — check that the connection URL is correct and that the engine is reachable",
+        response.status(), self.base_url, chain_summary,
+      )));
     }
 
     let body: serde_json::Value = response.json().await

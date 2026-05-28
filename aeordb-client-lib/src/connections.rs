@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -248,6 +250,135 @@ impl<'a> ConnectionManager<'a> {
           message:    "connection timed out (10s)".to_string(),
           latency_ms: None,
         })
+      }
+    }
+  }
+}
+
+/// Probe every saved connection for a server-side `http→https` upgrade
+/// (issued as a 301/308 redirect by a fronting reverse proxy) and rewrite
+/// the stored URL when we see one. Runs once at startup as a fire-and-forget
+/// background task.
+///
+/// Why this exists: nginx in front of many engine deployments forces
+/// `Location: https://…` on plain-http requests. reqwest's default
+/// redirect policy is fine for GETs but downgrades POST→GET on 301/302,
+/// so our /auth/token POST gets redirected as a GET and comes back HTTP
+/// 405 — every authenticated call then 401s and the UI fails with vague
+/// 502s. exchange_token has its own preserves-POST redirect handler so
+/// the connection still works while http, but persisting the upgrade
+/// here makes the canonical URL match what the engine actually serves,
+/// trims one round trip per token mint, and quiets the noise.
+///
+/// Only applies the upgrade when the redirect target shares the same
+/// host:port and only changes the scheme to https — anything more
+/// surprising (different host, downgrade, weird scheme) is logged and
+/// left alone so we never silently send credentials somewhere new.
+pub async fn probe_and_upgrade_connection_urls(
+  config_store: Arc<ConfigStore>,
+  jwt_cache:    crate::jwt_cache::JwtCache,
+) {
+  let manager = ConnectionManager::new(&config_store);
+  let connections = match manager.list().await {
+    Ok(c)  => c,
+    Err(e) => {
+      tracing::warn!("URL upgrade probe: failed to list connections: {}", e);
+      return;
+    }
+  };
+
+  // We need a client that does NOT follow redirects so we can inspect
+  // the 3xx response ourselves; the default client follows transparently.
+  let probe_client = match reqwest::Client::builder()
+    .timeout(std::time::Duration::from_secs(10))
+    .redirect(reqwest::redirect::Policy::none())
+    .build()
+  {
+    Ok(c)  => c,
+    Err(e) => {
+      tracing::warn!("URL upgrade probe: failed to build HTTP client: {}", e);
+      return;
+    }
+  };
+
+  for conn in connections {
+    let base = conn.base_url();
+    if base.starts_with("https://") {
+      continue;
+    }
+
+    // /system/health is the same endpoint test_connection hits — cheap,
+    // always present, doesn't require auth.
+    let probe_url = format!("{}/system/health", base);
+    let resp = match probe_client.get(&probe_url).send().await {
+      Ok(r) => r,
+      Err(e) => {
+        tracing::debug!("URL upgrade probe: '{}' probe failed (likely offline): {}", conn.name, e);
+        continue;
+      }
+    };
+
+    let status = resp.status().as_u16();
+    if !matches!(status, 301 | 308) {
+      continue;
+    }
+
+    let Some(location) = resp.headers().get(reqwest::header::LOCATION)
+      .and_then(|v| v.to_str().ok()) else { continue; };
+    let Ok(base_url)  = reqwest::Url::parse(&probe_url) else { continue; };
+    let Ok(target)    = base_url.join(location) else {
+      tracing::warn!("URL upgrade probe: '{}' redirect to unparseable Location '{}'", conn.name, location);
+      continue;
+    };
+
+    // Only act when the only change is the scheme, http → https, on the
+    // same host:port. Anything else (different host, downgrade) is
+    // suspicious and we leave the connection alone so the user can
+    // investigate.
+    if target.scheme() != "https"
+      || target.host_str() != base_url.host_str()
+      || target.port_or_known_default() != base_url.port_or_known_default()
+    {
+      tracing::warn!(
+        "URL upgrade probe: '{}' redirected from {} to {} (not a same-host http→https upgrade); \
+         leaving connection URL unchanged",
+        conn.name, probe_url, target,
+      );
+      continue;
+    }
+
+    // Build the new base URL: scheme + host + optional explicit port.
+    let mut new_base = format!("https://{}", target.host_str().unwrap_or(""));
+    if let Some(port) = target.port() {
+      new_base.push(':');
+      new_base.push_str(&port.to_string());
+    }
+
+    tracing::info!(
+      "URL upgrade probe: upgrading '{}' from {} to {} (engine returned {})",
+      conn.name, base, new_base, status,
+    );
+
+    let update = UpdateConnectionRequest {
+      name:           None,
+      url:            Some(new_base),
+      auth_type:      None,
+      api_key:        None,
+      share_base_url: None,
+    };
+    match manager.update(&conn.id, update).await {
+      Ok(_) => {
+        // The cached JWT (if any) was minted for the old base URL — it
+        // may still be valid (JWTs are checked by signature, not by
+        // host) but invalidate as a precaution so the next request
+        // mints fresh against the canonical URL.
+        jwt_cache.slot_for(&conn.id).lock().unwrap().take();
+      }
+      Err(e) => {
+        tracing::warn!(
+          "URL upgrade probe: failed to persist upgrade for '{}': {}",
+          conn.name, e,
+        );
       }
     }
   }

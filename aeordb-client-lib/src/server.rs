@@ -233,6 +233,19 @@ pub async fn start_server(config: ServerConfig) -> Result<()> {
     state.event_tx.clone(),
     state.health_map.clone(),
   );
+
+  // One-shot URL upgrade probe: rewrites any saved http:// connection
+  // URL to https:// when the engine's reverse proxy answers a plain-http
+  // request with a 301/308 to the same host on https. Fire-and-forget;
+  // failures only log.
+  {
+    let cs = state.config_store.clone();
+    let jc = state.jwt_cache.clone();
+    tokio::spawn(async move {
+      crate::connections::probe_and_upgrade_connection_urls(cs, jc).await;
+    });
+  }
+
   let router   = build_router(state);
   let address  = format!("{}:{}", config.host, config.port);
   let listener = TcpListener::bind(&address).await.map_err(|error| {
@@ -259,6 +272,15 @@ pub async fn start_server_with_handle(
     state.event_tx.clone(),
     state.health_map.clone(),
   );
+
+  {
+    let cs = state.config_store.clone();
+    let jc = state.jwt_cache.clone();
+    tokio::spawn(async move {
+      crate::connections::probe_and_upgrade_connection_urls(cs, jc).await;
+    });
+  }
+
   let router   = build_router(state);
   let address  = format!("{}:{}", config.host, config.port);
   let listener = TcpListener::bind(&address).await.map_err(|error| {
