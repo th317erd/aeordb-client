@@ -1,5 +1,6 @@
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use crate::connections::{AuthType, RemoteConnection};
 use crate::error::{ClientError, Result};
@@ -231,7 +232,7 @@ impl RemoteClient {
       if let Some(auth) = self.auth_header().await {
         req = req.header("Authorization", auth);
       }
-      req.send().await
+      self.send_following_auth_redirects(req).await
     };
     let response = attempt().await?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
@@ -240,6 +241,43 @@ impl RemoteClient {
       return attempt().await;
     }
     Ok(response)
+  }
+
+  async fn send_following_auth_redirects(
+    &self,
+    request: reqwest::RequestBuilder,
+  ) -> reqwest::Result<reqwest::Response> {
+    let client = reqwest::Client::builder()
+      .timeout(Duration::from_secs(30))
+      .redirect(reqwest::redirect::Policy::none())
+      .build()?;
+    let mut request = request.build()?;
+
+    for _ in 0..5 {
+      let retry_request = request.try_clone();
+      let response = client.execute(request).await?;
+      let status = response.status();
+      let is_redirect = matches!(status.as_u16(), 301 | 302 | 307 | 308);
+      if !is_redirect {
+        return Ok(response);
+      }
+
+      let Some(location) = response.headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok()) else {
+        return Ok(response);
+      };
+      let Ok(next_url) = response.url().join(location) else {
+        return Ok(response);
+      };
+      let Some(mut next_request) = retry_request else {
+        return Ok(response);
+      };
+      *next_request.url_mut() = next_url;
+      request = next_request;
+    }
+
+    client.execute(request).await
   }
 
   /// Build a pre-authenticated portal URL pointing at a file/directory on
@@ -281,6 +319,14 @@ impl RemoteClient {
       "include_refresh": false,
     });
 
+    let auth_client = reqwest::Client::builder()
+      .timeout(Duration::from_secs(30))
+      .redirect(reqwest::redirect::Policy::none())
+      .build()
+      .map_err(|e| ClientError::Server(format!(
+        "failed to create no-redirect auth HTTP client: {}", e,
+      )))?;
+
     // Manually walk 301/302/307/308 redirects while preserving POST.
     // reqwest's default policy downgrades POST→GET on 301/302 (the
     // browser convention), which is the wrong answer for our auth
@@ -292,7 +338,7 @@ impl RemoteClient {
     let mut redirect_chain: Vec<String> = vec![initial_url.clone()];
     let mut current_url = initial_url.clone();
     let response = loop {
-      let response = self.http_client
+      let response = auth_client
         .post(&current_url)
         .json(&body)
         .send()
@@ -1022,4 +1068,182 @@ pub struct DirectoryListingResponse {
   pub limit:  Option<u64>,
   #[serde(default)]
   pub offset: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  use axum::extract::State;
+  use axum::http::{header, HeaderMap, StatusCode};
+  use axum::response::IntoResponse;
+  use axum::routing::{get, post};
+  use axum::{Json, Router};
+  use chrono::Utc;
+  use tokio::net::TcpListener;
+
+  async fn start_test_server(app: Router) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("failed to bind test server");
+    let address = listener.local_addr().expect("failed to read test server address");
+
+    tokio::spawn(async move {
+      axum::serve(listener, app).await.expect("test server failed");
+    });
+
+    format!("http://{}", address)
+  }
+
+  fn test_connection(url: String) -> RemoteConnection {
+    RemoteConnection {
+      id:             "test-connection".to_string(),
+      name:           "Test Connection".to_string(),
+      url,
+      auth_type:      AuthType::ApiKey,
+      api_key:        Some("raw-api-key".to_string()),
+      share_base_url: None,
+      created_at:     Utc::now(),
+      updated_at:     Utc::now(),
+    }
+  }
+
+  async fn auth_token(Json(body): Json<serde_json::Value>) -> impl IntoResponse {
+    if body.get("api_key").and_then(|v| v.as_str()) != Some("raw-api-key") {
+      return (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "bad api key" })),
+      );
+    }
+    if body.get("include_refresh").and_then(|v| v.as_bool()) != Some(false) {
+      return (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": "include_refresh must be false" })),
+      );
+    }
+
+    (
+      StatusCode::OK,
+      Json(serde_json::json!({ "token": "jwt-from-post-target" })),
+    )
+  }
+
+  async fn redirect_auth_token(State(target): State<String>) -> impl IntoResponse {
+    (
+      StatusCode::MOVED_PERMANENTLY,
+      [(header::LOCATION, target)],
+      "",
+    )
+  }
+
+  async fn redirect_without_location() -> impl IntoResponse {
+    (StatusCode::MOVED_PERMANENTLY, "")
+  }
+
+  async fn redirect_files_root(State(target): State<String>) -> impl IntoResponse {
+    (
+      StatusCode::MOVED_PERMANENTLY,
+      [(header::LOCATION, target)],
+      "",
+    )
+  }
+
+  async fn protected_files_root(headers: HeaderMap) -> impl IntoResponse {
+    if headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok())
+      != Some("Bearer jwt-from-post-target")
+    {
+      return (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "missing auth" })),
+      );
+    }
+
+    (
+      StatusCode::OK,
+      Json(serde_json::json!({
+        "items": [
+          {
+            "name": "Documents",
+            "entry_type": ENTRY_TYPE_DIRECTORY,
+            "size": 0,
+            "created_at": 0,
+            "updated_at": 0,
+            "content_type": null,
+            "path": "/Documents/",
+            "hash": null
+          }
+        ]
+      })),
+    )
+  }
+
+  #[tokio::test]
+  async fn exchange_token_preserves_post_across_301_redirect() {
+    let target_base = start_test_server(Router::new().route("/auth/token", post(auth_token))).await;
+    let redirect_base = start_test_server(
+      Router::new()
+        .route("/auth/token", post(redirect_auth_token))
+        .with_state(format!("{}/auth/token", target_base)),
+    )
+    .await;
+
+    let reqwest_client = reqwest::Client::new();
+    let client = RemoteClient::from_connection(&test_connection(redirect_base), &reqwest_client);
+
+    let token = client
+      .exchange_token("raw-api-key")
+      .await
+      .expect("token exchange should follow 301 by re-issuing POST");
+
+    assert_eq!(token, "jwt-from-post-target");
+  }
+
+  #[tokio::test]
+  async fn exchange_token_reports_redirect_without_location() {
+    let redirect_base = start_test_server(
+      Router::new().route("/auth/token", post(redirect_without_location)),
+    )
+    .await;
+
+    let reqwest_client = reqwest::Client::new();
+    let client = RemoteClient::from_connection(&test_connection(redirect_base), &reqwest_client);
+
+    let error = client
+      .exchange_token("raw-api-key")
+      .await
+      .expect_err("redirect without Location should fail");
+
+    assert!(
+      error.to_string().contains("no Location header"),
+      "unexpected error: {}",
+      error,
+    );
+  }
+
+  #[tokio::test]
+  async fn list_directory_preserves_authorization_across_redirect() {
+    let target_base = start_test_server(
+      Router::new().route("/files/", get(protected_files_root)),
+    )
+    .await;
+    let redirect_base = start_test_server(
+      Router::new()
+        .route("/auth/token", post(auth_token))
+        .route("/files/", get(redirect_files_root))
+        .with_state(format!("{}/files/", target_base)),
+    )
+    .await;
+
+    let reqwest_client = reqwest::Client::new();
+    let client = RemoteClient::from_connection(&test_connection(redirect_base), &reqwest_client);
+
+    let entries = client
+      .list_directory("/")
+      .await
+      .expect("directory listing should preserve auth through redirect");
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "Documents");
+    assert!(entries[0].is_directory());
+  }
 }

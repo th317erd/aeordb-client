@@ -59,6 +59,24 @@ fn normalize_url(input: &str) -> String {
   }
 }
 
+fn is_same_host_https_upgrade(base_url: &reqwest::Url, target: &reqwest::Url) -> bool {
+  if base_url.scheme() != "http"
+    || target.scheme() != "https"
+    || target.host_str() != base_url.host_str()
+  {
+    return false;
+  }
+
+  match (base_url.port(), target.port()) {
+    (None, None) => true,
+    (Some(left), Some(right)) if left == right => true,
+    (Some(80), None) => true,
+    (None, Some(443)) => true,
+    (Some(80), Some(443)) => true,
+    _ => false,
+  }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateConnectionRequest {
   pub name:      String,
@@ -335,10 +353,7 @@ pub async fn probe_and_upgrade_connection_urls(
     // same host:port. Anything else (different host, downgrade) is
     // suspicious and we leave the connection alone so the user can
     // investigate.
-    if target.scheme() != "https"
-      || target.host_str() != base_url.host_str()
-      || target.port_or_known_default() != base_url.port_or_known_default()
-    {
+    if !is_same_host_https_upgrade(&base_url, &target) {
       tracing::warn!(
         "URL upgrade probe: '{}' redirected from {} to {} (not a same-host http→https upgrade); \
          leaving connection URL unchanged",
@@ -414,6 +429,41 @@ mod tests {
   }
 
   #[test]
+  fn same_host_https_upgrade_allows_default_port_change() {
+    let base = reqwest::Url::parse("http://files.taraani.org/system/health").unwrap();
+    let target = reqwest::Url::parse("https://files.taraani.org/system/health").unwrap();
+    assert!(is_same_host_https_upgrade(&base, &target));
+  }
+
+  #[test]
+  fn same_host_https_upgrade_allows_explicit_default_ports() {
+    let base = reqwest::Url::parse("http://files.taraani.org:80/system/health").unwrap();
+    let target = reqwest::Url::parse("https://files.taraani.org:443/system/health").unwrap();
+    assert!(is_same_host_https_upgrade(&base, &target));
+  }
+
+  #[test]
+  fn same_host_https_upgrade_allows_same_explicit_port() {
+    let base = reqwest::Url::parse("http://localhost:6830/system/health").unwrap();
+    let target = reqwest::Url::parse("https://localhost:6830/system/health").unwrap();
+    assert!(is_same_host_https_upgrade(&base, &target));
+  }
+
+  #[test]
+  fn same_host_https_upgrade_rejects_different_host() {
+    let base = reqwest::Url::parse("http://files.taraani.org/system/health").unwrap();
+    let target = reqwest::Url::parse("https://evil.example/system/health").unwrap();
+    assert!(!is_same_host_https_upgrade(&base, &target));
+  }
+
+  #[test]
+  fn same_host_https_upgrade_rejects_non_default_port_change() {
+    let base = reqwest::Url::parse("http://localhost:6830/system/health").unwrap();
+    let target = reqwest::Url::parse("https://localhost:8443/system/health").unwrap();
+    assert!(!is_same_host_https_upgrade(&base, &target));
+  }
+
+  #[test]
   fn base_url_normalizes_already_stored_value_without_scheme() {
     let connection = RemoteConnection {
       id:             "1".to_string(),
@@ -428,4 +478,3 @@ mod tests {
     assert_eq!(connection.base_url(), "http://localhost:6830");
   }
 }
-
