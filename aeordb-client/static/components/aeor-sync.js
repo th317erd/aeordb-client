@@ -184,11 +184,24 @@ class AeorSync extends HTMLElement {
         label('Filter (optional, comma-separated globs)'),
         input.type('text').id('form-filter').placeholder('*.pdf, !*.tmp')(),
       ),
+      this._buildDeletePropagationFields(),
       div.class('form-actions')(
         button.class('primary').onClick(this._onFormSubmit)('Create'),
         button.class('secondary').onClick(this._onFormCancel)('Cancel'),
       ),
     ).build(document);
+  }
+
+  _buildDeletePropagationFields() {
+    return div.class('form-row')(
+      label('Delete Propagation'),
+      aeorCheckbox.id('form-delete-local-to-remote')(
+        'When a file is deleted locally, also delete it on the remote',
+      ),
+      aeorCheckbox.id('form-delete-remote-to-local')(
+        'When a file is deleted on the remote, also delete it locally',
+      ),
+    );
   }
 
   _buildEditForm() {
@@ -231,15 +244,7 @@ class AeorSync extends HTMLElement {
         label('Filter (optional, comma-separated globs)'),
         input.type('text').id('form-filter')(),
       ),
-      div.class('form-row')(
-        label('Delete Propagation'),
-        aeorCheckbox.id('form-delete-local-to-remote')(
-          'When a file is deleted locally, also delete it on the remote',
-        ),
-        aeorCheckbox.id('form-delete-remote-to-local')(
-          'When a file is deleted on the remote, also delete it locally',
-        ),
-      ),
+      this._buildDeletePropagationFields(),
       div.class('form-actions')(
         button.class('primary').onClick(this._onFormSubmit)('Save Changes'),
         button.class('secondary').onClick(this._onFormCancel)('Cancel'),
@@ -556,6 +561,8 @@ class AeorSync extends HTMLElement {
     const localPath    = this.querySelector('#form-local-path').value;
     const direction    = this.querySelector('#form-direction').value;
     const filter       = this.querySelector('#form-filter').value;
+    const localToRemote = this.querySelector('#form-delete-local-to-remote')?.checked || false;
+    const remoteToLocal = this.querySelector('#form-delete-remote-to-local')?.checked || false;
 
     if (!name || !connectionId || !remotePath || !localPath)
       return;
@@ -571,6 +578,10 @@ class AeorSync extends HTMLElement {
           local_path:           localPath,
           direction,
           filter:               (filter) ? filter : null,
+          delete_propagation: {
+            local_to_remote: localToRemote,
+            remote_to_local: remoteToLocal,
+          },
         }),
       });
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);
