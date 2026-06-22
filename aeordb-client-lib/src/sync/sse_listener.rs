@@ -9,17 +9,17 @@ use crate::error::Result;
 /// An event received from the remote aeordb SSE stream.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteEvent {
-  pub event_id:   String,
+  pub event_id: String,
   pub event_type: String,
-  pub timestamp:  i64,
-  pub payload:    serde_json::Value,
+  pub timestamp: i64,
+  pub payload: serde_json::Value,
 }
 
 /// A change detected from SSE — a file was created, modified, or deleted.
 #[derive(Debug, Clone)]
 pub struct RemoteChange {
   pub event_type: String,
-  pub path:       String,
+  pub path: String,
 }
 
 /// Start an SSE listener for a remote aeordb connection.
@@ -54,9 +54,16 @@ async fn sse_listener_loop(
       Ok(()) => {
         // Stream ended cleanly (server closed connection)
         if consecutive_failures > 0 {
-          tracing::info!("SSE connection to '{}' recovered after {} failures", connection.name, consecutive_failures);
+          tracing::info!(
+            "SSE connection to '{}' recovered after {} failures",
+            connection.name,
+            consecutive_failures
+          );
         }
-        tracing::info!("SSE stream closed for '{}', reconnecting...", connection.name);
+        tracing::info!(
+          "SSE stream closed for '{}', reconnecting...",
+          connection.name
+        );
         backoff = Duration::from_secs(1);
         consecutive_failures = 0;
       }
@@ -65,12 +72,16 @@ async fn sse_listener_loop(
         if consecutive_failures <= 1 {
           tracing::warn!(
             "SSE connection to '{}' failed: {}. Retrying in {:?}",
-            connection.name, error, backoff,
+            connection.name,
+            error,
+            backoff,
           );
         } else {
           tracing::debug!(
             "SSE connection to '{}' still failing (attempt {}). Retrying in {:?}",
-            connection.name, consecutive_failures, backoff,
+            connection.name,
+            consecutive_failures,
+            backoff,
           );
         }
       }
@@ -96,7 +107,7 @@ async fn connect_and_listen(
     url = format!("{}&path_prefix={}", url, path_prefixes[0]);
   }
 
-  let client      = reqwest::Client::new();
+  let client = reqwest::Client::new();
   let mut request = client.get(&url);
 
   if connection.auth_type == AuthType::ApiKey {
@@ -105,14 +116,16 @@ async fn connect_and_listen(
     }
   }
 
-  let response = request.send().await.map_err(|error| {
-    crate::error::ClientError::Server(format!("SSE connect failed: {}", error))
-  })?;
+  let response = request
+    .send()
+    .await
+    .map_err(|error| crate::error::ClientError::Server(format!("SSE connect failed: {}", error)))?;
 
   if !response.status().is_success() {
-    return Err(crate::error::ClientError::Server(
-      format!("SSE returned HTTP {}", response.status()),
-    ));
+    return Err(crate::error::ClientError::Server(format!(
+      "SSE returned HTTP {}",
+      response.status()
+    )));
   }
 
   tracing::info!("SSE connected to '{}'", connection.name);
@@ -123,9 +136,8 @@ async fn connect_and_listen(
   use futures_util::StreamExt;
 
   while let Some(chunk_result) = stream.next().await {
-    let chunk = chunk_result.map_err(|error| {
-      crate::error::ClientError::Server(format!("SSE read error: {}", error))
-    })?;
+    let chunk = chunk_result
+      .map_err(|error| crate::error::ClientError::Server(format!("SSE read error: {}", error)))?;
 
     let text = String::from_utf8_lossy(&chunk);
     buffer.push_str(&text);
@@ -150,9 +162,12 @@ async fn connect_and_listen(
 }
 
 /// Parse an SSE message and extract RemoteChange events.
-fn parse_sse_message(message: &str, path_prefixes: &[String]) -> Option<Vec<RemoteChange>> {
+pub(crate) fn parse_sse_message(
+  message: &str,
+  path_prefixes: &[String],
+) -> Option<Vec<RemoteChange>> {
   let mut event_type = None;
-  let mut data       = None;
+  let mut data = None;
 
   for line in message.lines() {
     if let Some(value) = line.strip_prefix("event: ") {
@@ -163,7 +178,7 @@ fn parse_sse_message(message: &str, path_prefixes: &[String]) -> Option<Vec<Remo
   }
 
   let event_type = event_type?;
-  let data       = data?;
+  let data = data?;
 
   let event: RemoteEvent = serde_json::from_str(&data).ok()?;
 
@@ -174,12 +189,13 @@ fn parse_sse_message(message: &str, path_prefixes: &[String]) -> Option<Vec<Remo
     for entry in entries {
       if let Some(path) = entry.get("path").and_then(|v| v.as_str()) {
         // Client-side path filtering (for multiple prefixes)
-        let matches = path_prefixes.is_empty() || path_prefixes.iter().any(|prefix| path.starts_with(prefix));
+        let matches =
+          path_prefixes.is_empty() || path_prefixes.iter().any(|prefix| path.starts_with(prefix));
 
         if matches {
           changes.push(RemoteChange {
             event_type: event_type.clone(),
-            path:       path.to_string(),
+            path: path.to_string(),
           });
         }
       }

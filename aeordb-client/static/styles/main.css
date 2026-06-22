@@ -153,7 +153,7 @@ button:disabled {
 /* Exclude `.invalid` so the shared red border isn't beaten by this
    shorthand on equal specificity (cascade order would otherwise win
    for main.css since it loads last). */
-input:not([type="checkbox"]):not(.invalid), select:not(.invalid) {
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(.invalid), select:not(.invalid) {
   font-family: var(--font-sans);
   font-size: 0.875rem;
   padding: 0.5rem 0.75rem;
@@ -167,7 +167,7 @@ input:not([type="checkbox"]):not(.invalid), select:not(.invalid) {
 
 /* For invalid fields, only set the structural rules — let shared
    .invalid own the border + outline colors. */
-input:not([type="checkbox"]).invalid, select.invalid {
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]).invalid, select.invalid {
   font-family: var(--font-sans);
   font-size: 0.875rem;
   padding: 0.5rem 0.75rem;
@@ -179,7 +179,7 @@ input:not([type="checkbox"]).invalid, select.invalid {
 
 /* Exclude `.invalid` so the shared invalid red ring isn't beaten by the
    local focus accent when the user clicks into an empty required field. */
-input:not([type="checkbox"]):not(.invalid):focus, select:not(.invalid):focus {
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(.invalid):focus, select:not(.invalid):focus {
   border-color: var(--accent);
 }
 
@@ -250,6 +250,11 @@ select {
 /* Checkbox layout/visuals are handled by <aeor-checkbox> from the shared
    component library. Sibling checkboxes in the same form-row stack with
    a small vertical gap so they don't render side-by-side. */
+.form-row > aeor-checkbox {
+  display: flex;
+  width: fit-content;
+}
+
 .form-row > aeor-checkbox + aeor-checkbox {
   margin-top: 0.5rem;
 }
@@ -301,6 +306,53 @@ tbody tr {
 
 .actions > * + * {
   margin-left: 8px;
+}
+
+aeor-sync td.actions > * {
+  vertical-align: middle;
+}
+
+aeor-sync td.actions aeor-confirm-button {
+  display: inline-block;
+}
+
+aeor-sync td.actions aeor-confirm-button.sync-progress-button,
+aeor-sync td.actions aeor-confirm-button.sync-progress-button .aeor-confirm-btn {
+  width: 7.25em;
+  min-width: 7.25em;
+}
+
+aeor-sync td.actions aeor-confirm-button .aeor-confirm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+aeor-sync td.actions aeor-confirm-button .aeor-confirm-btn-label {
+  display: block;
+  width: 100%;
+  text-align: center;
+}
+
+aeor-sync td.actions button.small {
+  justify-content: center;
+  text-align: center;
+}
+
+aeor-sync td.actions button.btn-toggle {
+  width: 5.25em;
+  min-width: 5.25em;
+}
+
+aeor-sync td.actions button.small:not(.btn-toggle) {
+  width: 4.25em;
+  min-width: 4.25em;
+}
+
+aeor-sync td.actions aeor-confirm-button.confirm-button-danger,
+aeor-sync td.actions aeor-confirm-button.confirm-button-danger .aeor-confirm-btn {
+  width: 5em;
+  min-width: 5em;
 }
 
 /* ==========================================================================
@@ -1508,25 +1560,13 @@ aeor-confirm-button.about-update-btn.about-update-btn-error {
   font-size: 0.875rem;
 }
 
-/* Apply-in-flight (.applying): we drive the existing progress fill
-   directly from JS by setting --progress on .aeor-confirm-btn. The
-   .confirmed state hides the fill (opacity: 0) for the post-confirm
-   green flash; un-hide it here so the bar can rise again under our
-   control. Disabled opacity is overridden because we set disabled=true
-   to lock interaction while the apply runs, but we WANT the visual to
-   stay vivid (apply is a confident "yes, doing it" state, not a dim
-   "wait, no"). */
+/* Apply-in-flight (.applying): progress is driven through the
+   aeor-confirm-button `progress` attribute. This page only changes the
+   update button's background treatment while the component owns fill,
+   disabled opacity, and cursor behavior. */
 aeor-confirm-button.about-update-btn.applying .aeor-confirm-btn,
 aeor-confirm-button.about-update-btn.applying .aeor-confirm-btn:hover {
   background-color: transparent !important;
-}
-aeor-confirm-button.about-update-btn.applying .aeor-confirm-btn-fill {
-  opacity: 1 !important;
-  transition: width 0.2s ease-out;
-}
-aeor-confirm-button.about-update-btn.applying[disabled] .aeor-confirm-btn {
-  opacity: 1;
-  cursor: progress;
 }
 
 /* ==========================================================================

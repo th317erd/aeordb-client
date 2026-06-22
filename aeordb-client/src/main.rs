@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use std::fs::File;
 use fs2::FileExt;
+use std::fs::File;
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
@@ -167,8 +167,7 @@ fn main() -> anyhow::Result<()> {
       // Server mode -- initialize logging
       tracing_subscriber::fmt()
         .with_env_filter(
-          EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("info")),
+          EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
@@ -182,16 +181,21 @@ fn main() -> anyhow::Result<()> {
       aeordb_client_lib::update::ingest_test_public_key();
 
       let (headless, start_minimized, bind, port, config_path, data_path) = match cli.command {
-        Some(Commands::Start { headless, start_minimized, bind, port, config, database }) => {
-          (
-            headless,
-            start_minimized,
-            bind,
-            port,
-            config.unwrap_or_else(default_config_path),
-            database.unwrap_or_else(default_data_path),
-          )
-        }
+        Some(Commands::Start {
+          headless,
+          start_minimized,
+          bind,
+          port,
+          config,
+          database,
+        }) => (
+          headless,
+          start_minimized,
+          bind,
+          port,
+          config.unwrap_or_else(default_config_path),
+          database.unwrap_or_else(default_data_path),
+        ),
         _ => (
           false,
           false,
@@ -211,7 +215,8 @@ fn main() -> anyhow::Result<()> {
 
       // Singleton: acquire an exclusive file lock to prevent multiple instances.
       // The lock is held for the lifetime of the process — released on exit.
-      let lock_path = data_path.parent()
+      let lock_path = data_path
+        .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("aeordb-client.lock");
       if let Some(parent) = lock_path.parent() {
@@ -230,7 +235,8 @@ fn main() -> anyhow::Result<()> {
           .build()
           .ok()
           .and_then(|client| {
-            client.post(&shutdown_url)
+            client
+              .post(&shutdown_url)
               .header("Content-Type", "application/json")
               .body("{}")
               .send()
@@ -266,7 +272,9 @@ fn main() -> anyhow::Result<()> {
               let pids = String::from_utf8_lossy(&output.stdout);
               for pid_str in pids.split_whitespace() {
                 if let Ok(pid) = pid_str.trim().parse::<i32>() {
-                  unsafe { libc::kill(pid, libc::SIGTERM); }
+                  unsafe {
+                    libc::kill(pid, libc::SIGTERM);
+                  }
                   eprintln!("sent SIGTERM to PID {}", pid);
                 }
               }
@@ -295,7 +303,7 @@ fn main() -> anyhow::Result<()> {
       let _lock_guard = lock_file;
 
       let server_config = ServerConfig {
-        host:        bind.clone(),
+        host: bind.clone(),
         port,
         config_path,
         data_path,
@@ -309,32 +317,46 @@ fn main() -> anyhow::Result<()> {
       state.shutdown_signal = Some(api_shutdown.clone());
       let api_shutdown_for_tauri = api_shutdown.clone();
 
-      let sync_runner   = state.sync_runner.clone();
+      let sync_runner = state.sync_runner.clone();
       let sync_runner_shutdown = sync_runner.clone();
       let sync_runner_post_tauri = sync_runner.clone();
+      let state_store_shutdown = state.state_store.clone();
+      let state_store_maintenance = state_store_shutdown.clone();
+      let state_store_post_tauri = state_store_shutdown.clone();
+      let state_store_tauri_exit = state_store_shutdown.clone();
+      let url_upgrade_config_store = state.config_store.clone();
+      let url_upgrade_jwt_cache = state.jwt_cache.clone();
       let health_config_store = state.config_store.clone();
-      let health_event_tx     = state.event_tx.clone();
-      let health_map_handle   = state.health_map.clone();
+      let health_event_tx = state.event_tx.clone();
+      let health_map_handle = state.health_map.clone();
       // Self-update startup poll handle — populated on the runtime
       // below so the About page has a snapshot to render immediately.
       let update_info_for_poll = state.update_info.clone();
       // Autostart plumbing — the listener thread (spawned after Tauri
       // is set up) owns the plugin handle and reconciles the desired
       // state against the OS.
-      let autostart_enabled       = state.autostart_enabled.clone();
-      let autostart_signal        = state.autostart_signal.clone();
-      let autostart_config_store  = state.config_store.clone();
-      let api_router    = build_router(state);
+      let autostart_enabled = state.autostart_enabled.clone();
+      let autostart_signal = state.autostart_signal.clone();
+      let autostart_config_store = state.config_store.clone();
+      let api_router = build_router(state);
       let static_router = static_files::static_routes();
-      let app           = api_router.merge(static_router);
+      let app = api_router.merge(static_router);
 
       // Create the tokio runtime manually -- Tauri must own the main thread
       let runtime = tokio::runtime::Runtime::new()?;
       let runtime_handle = runtime.handle().clone();
 
-      // Start continuous sync for all enabled relationships
+      // Normalize saved engine URLs before starting sync. The library
+      // HTTP-server entrypoint does this in start_server(); the desktop
+      // path builds AppState directly, so it must run the same probe here
+      // or http→https reverse-proxy redirects keep every sync on port 80.
       runtime.spawn(async move {
-        sync_runner.start_all_enabled().await;
+        aeordb_client_lib::connections::probe_and_upgrade_connection_urls(
+          url_upgrade_config_store,
+          url_upgrade_jwt_cache,
+        )
+        .await;
+        sync_runner.start_all_enabled_if_configured().await;
       });
 
       // Start the connection health pinger so UI can react when an
@@ -366,11 +388,19 @@ fn main() -> anyhow::Result<()> {
       let address = format!("{}:{}", bind, port);
 
       runtime.spawn(async move {
+        state_store_maintenance.start_maintenance_tasks();
+      });
+
+      runtime.spawn(async move {
         let listener = match tokio::net::TcpListener::bind(&address).await {
           Ok(l) => l,
           Err(error) => {
             tracing::error!("failed to bind to {}: {}", address, error);
-            let _ = ready_tx.send(Err(anyhow::anyhow!("failed to bind to {}: {}", address, error)));
+            let _ = ready_tx.send(Err(anyhow::anyhow!(
+              "failed to bind to {}: {}",
+              address,
+              error
+            )));
             return;
           }
         };
@@ -404,10 +434,20 @@ fn main() -> anyhow::Result<()> {
 
       if headless {
         // Block the main thread until shutdown signal, then stop all sync runners
+        let api_shutdown_for_headless = api_shutdown_for_tauri.clone();
         runtime.block_on(async {
-          shutdown_signal().await;
+          tokio::select! {
+            _ = shutdown_signal() => {}
+            _ = api_shutdown_for_headless.notified() => {
+              tracing::info!("API shutdown received — exiting headless mode");
+            }
+          }
           tracing::info!("stopping all sync runners...");
           sync_runner_shutdown.stop_all().await;
+          tracing::info!("shutting down local state database...");
+          if let Err(error) = state_store_shutdown.shutdown() {
+            tracing::error!("state database shutdown failed: {}", error);
+          }
         });
       } else {
         // Run Tauri on the main thread -- webview loads from our HTTP server
@@ -431,9 +471,9 @@ fn main() -> anyhow::Result<()> {
           .invoke_handler(tauri::generate_handler![open_external_url])
           .setup(move |app| {
             use tauri::Manager;
+            use tauri::image::Image;
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
             use tauri::tray::TrayIconBuilder;
-            use tauri::image::Image;
 
             // Bridge OS signals (SIGTERM/SIGINT) and the /api/v1/shutdown
             // request into Tauri's event loop. Without this, the HTTP
@@ -441,6 +481,8 @@ fn main() -> anyhow::Result<()> {
             // process alive — dev-watch then can't restart cleanly.
             let exit_handle = app.handle().clone();
             let api_shutdown_for_exit = api_shutdown_for_tauri.clone();
+            let sync_runner_for_exit = sync_runner_shutdown.clone();
+            let state_store_for_exit = state_store_tauri_exit.clone();
             runtime_handle.spawn(async move {
               tokio::select! {
                 _ = shutdown_signal() => {
@@ -449,6 +491,12 @@ fn main() -> anyhow::Result<()> {
                 _ = api_shutdown_for_exit.notified() => {
                   tracing::info!("API shutdown received — exiting Tauri");
                 }
+              }
+              tracing::info!("stopping all sync runners...");
+              sync_runner_for_exit.stop_all().await;
+              tracing::info!("shutting down local state database...");
+              if let Err(error) = state_store_for_exit.shutdown() {
+                tracing::error!("state database shutdown failed: {}", error);
               }
               exit_handle.exit(0);
             });
@@ -460,7 +508,7 @@ fn main() -> anyhow::Result<()> {
             // the autostart path so logging in doesn't punch a window
             // through whatever the user was looking at.
             let parsed_url: tauri::Url = url.parse().expect("valid localhost URL");
-            let window = tauri::WebviewWindowBuilder::new(
+            let window_builder = tauri::WebviewWindowBuilder::new(
               app,
               "main",
               tauri::WebviewUrl::External(parsed_url),
@@ -468,8 +516,14 @@ fn main() -> anyhow::Result<()> {
             .title("AeorDB Client")
             .inner_size(1200.0, 850.0)
             .min_inner_size(900.0, 650.0)
-            .visible(!start_minimized)
-            .build()?;
+            .visible(!start_minimized);
+
+            #[cfg(not(debug_assertions))]
+            let window_builder = window_builder.initialization_script(
+              "window.addEventListener('contextmenu', event => event.preventDefault(), { capture: true });",
+            );
+
+            let window = window_builder.build()?;
 
             // --- Close-to-tray: hide window on close instead of quitting ---
             let window_for_close = window.clone();
@@ -485,15 +539,16 @@ fn main() -> anyhow::Result<()> {
             let icon = Image::from_bytes(icon_bytes)
               .unwrap_or_else(|_| Image::new(&[255, 255, 255, 255], 1, 1));
 
-            let window_for_open      = window.clone();
-            let app_handle_for_quit  = app.handle().clone();
+            let window_for_open = window.clone();
+            let app_handle_for_quit = app.handle().clone();
             let sync_runner_for_quit = sync_runner_shutdown.clone();
-            let api_base             = format!("http://{}", bound_addr);
-            let paused              = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let state_store_for_quit = state_store_tauri_exit.clone();
+            let api_base = format!("http://{}", bound_addr);
+            let paused = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-            let open_item  = MenuItemBuilder::with_id("open", "Open AeorDB Client").build(app)?;
+            let open_item = MenuItemBuilder::with_id("open", "Open AeorDB Client").build(app)?;
             let pause_item = MenuItemBuilder::with_id("pause", "Pause All Sync").build(app)?;
-            let quit_item  = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
             let tray_menu = MenuBuilder::new(app)
               .item(&open_item)
@@ -509,47 +564,56 @@ fn main() -> anyhow::Result<()> {
               .icon(icon)
               .tooltip("AeorDB Client")
               .menu(&tray_menu)
-              .on_menu_event(move |_app, event| {
-                match event.id().as_ref() {
-                  "open" => {
-                    let _ = window_for_open.show();
-                    let _ = window_for_open.set_focus();
-                  }
-                  "pause" => {
-                    let is_paused = paused_clone.load(std::sync::atomic::Ordering::Relaxed);
-                    let endpoint = if is_paused {
-                      format!("{}/api/v1/sync/resume-all", api_base)
-                    } else {
-                      format!("{}/api/v1/sync/pause-all", api_base)
-                    };
+              .on_menu_event(move |_app, event| match event.id().as_ref() {
+                "open" => {
+                  let _ = window_for_open.show();
+                  let _ = window_for_open.set_focus();
+                }
+                "pause" => {
+                  let is_paused = paused_clone.load(std::sync::atomic::Ordering::Relaxed);
+                  let endpoint = if is_paused {
+                    format!("{}/api/v1/sync/resume-all", api_base)
+                  } else {
+                    format!("{}/api/v1/sync/pause-all", api_base)
+                  };
 
-                    match reqwest::blocking::Client::new().post(&endpoint).send() {
-                      Ok(_) => {
-                        let new_paused = !is_paused;
-                        paused_clone.store(new_paused, std::sync::atomic::Ordering::Relaxed);
+                  match reqwest::blocking::Client::new().post(&endpoint).send() {
+                    Ok(_) => {
+                      let new_paused = !is_paused;
+                      paused_clone.store(new_paused, std::sync::atomic::Ordering::Relaxed);
 
-                        let new_text = if new_paused { "Resume All Sync" } else { "Pause All Sync" };
-                        let _ = pause_item.set_text(new_text);
+                      let new_text = if new_paused {
+                        "Resume All Sync"
+                      } else {
+                        "Pause All Sync"
+                      };
+                      let _ = pause_item.set_text(new_text);
 
-                        tracing::info!("sync {}", if new_paused { "paused" } else { "resumed" });
-                      }
-                      Err(error) => {
-                        tracing::error!("failed to toggle sync: {}", error);
-                      }
+                      tracing::info!("sync {}", if new_paused { "paused" } else { "resumed" });
+                    }
+                    Err(error) => {
+                      tracing::error!("failed to toggle sync: {}", error);
                     }
                   }
-                  "quit" => {
-                    tracing::info!("quit requested from tray — shutting down gracefully");
-                    let runner = sync_runner_for_quit.clone();
-                    let handle = app_handle_for_quit.clone();
-                    std::thread::spawn(move || {
-                      let rt = tokio::runtime::Runtime::new().unwrap();
-                      rt.block_on(async { runner.stop_all().await });
-                      handle.exit(0);
-                    });
-                  }
-                  _ => {}
                 }
+                "quit" => {
+                  tracing::info!("quit requested from tray — shutting down gracefully");
+                  let runner = sync_runner_for_quit.clone();
+                  let state_store = state_store_for_quit.clone();
+                  let handle = app_handle_for_quit.clone();
+                  std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(async {
+                      runner.stop_all().await;
+                      tracing::info!("shutting down local state database...");
+                      if let Err(error) = state_store.shutdown() {
+                        tracing::error!("state database shutdown failed: {}", error);
+                      }
+                    });
+                    handle.exit(0);
+                  });
+                }
+                _ => {}
               })
               .on_tray_icon_event(move |tray, event| {
                 if let tauri::tray::TrayIconEvent::DoubleClick { .. } = event {
@@ -569,10 +633,10 @@ fn main() -> anyhow::Result<()> {
             // signal Notify; the settings PATCH handler ticks it
             // whenever the user toggles the checkbox.
             use tauri_plugin_autostart::ManagerExt;
-            let as_handle  = app.handle().clone();
+            let as_handle = app.handle().clone();
             let as_enabled = autostart_enabled.clone();
-            let as_signal  = autostart_signal.clone();
-            let as_config  = autostart_config_store.clone();
+            let as_signal = autostart_signal.clone();
+            let as_config = autostart_config_store.clone();
             std::thread::spawn(move || {
               let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -600,8 +664,10 @@ fn main() -> anyhow::Result<()> {
                 let mgr = as_handle.autolaunch();
                 let result = if desired { mgr.enable() } else { mgr.disable() };
                 match result {
-                  Ok(_)      => tracing::info!("autostart reconciled at startup: enabled={}", desired),
-                  Err(error) => tracing::warn!("failed to reconcile autostart at startup: {}", error),
+                  Ok(_) => tracing::info!("autostart reconciled at startup: enabled={}", desired),
+                  Err(error) => {
+                    tracing::warn!("failed to reconcile autostart at startup: {}", error)
+                  }
                 }
 
                 // Listen for further changes.
@@ -611,7 +677,7 @@ fn main() -> anyhow::Result<()> {
                   let mgr = as_handle.autolaunch();
                   let result = if desired { mgr.enable() } else { mgr.disable() };
                   match result {
-                    Ok(_)      => tracing::info!("autostart applied: enabled={}", desired),
+                    Ok(_) => tracing::info!("autostart applied: enabled={}", desired),
                     Err(error) => tracing::warn!("failed to apply autostart toggle: {}", error),
                   }
                 }
@@ -627,6 +693,10 @@ fn main() -> anyhow::Result<()> {
         runtime.block_on(async {
           tracing::info!("stopping all sync runners...");
           sync_runner_post_tauri.stop_all().await;
+          tracing::info!("shutting down local state database...");
+          if let Err(error) = state_store_post_tauri.shutdown() {
+            tracing::error!("state database shutdown failed: {}", error);
+          }
         });
       }
     }
@@ -677,8 +747,25 @@ fn main() -> anyhow::Result<()> {
           SyncAction::List => {
             cli::sync::list(&cli.host, cli.json).await?;
           }
-          SyncAction::Add { name, connection, remote_path, local_path, direction, filter } => {
-            cli::sync::add(&cli.host, cli.json, &name, &connection, &remote_path, &local_path, &direction, filter.as_deref()).await?;
+          SyncAction::Add {
+            name,
+            connection,
+            remote_path,
+            local_path,
+            direction,
+            filter,
+          } => {
+            cli::sync::add(
+              &cli.host,
+              cli.json,
+              &name,
+              &connection,
+              &remote_path,
+              &local_path,
+              &direction,
+              filter.as_deref(),
+            )
+            .await?;
           }
           SyncAction::Remove { id } => {
             cli::sync::remove(&cli.host, &id).await?;
@@ -747,11 +834,13 @@ fn open_external_url(url: String) -> Result<(), String> {
   // is allowed because the About-page email link routes through here
   // and the WebView itself has no mail handler — without this branch
   // the click would render "URL can't be shown" and blow away the app.
-  let scheme_ok = url.starts_with("https://")
-    || url.starts_with("http://")
-    || url.starts_with("mailto:");
+  let scheme_ok =
+    url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:");
   if !scheme_ok {
-    return Err(format!("only http(s) and mailto: URLs are allowed; got: {}", url));
+    return Err(format!(
+      "only http(s) and mailto: URLs are allowed; got: {}",
+      url
+    ));
   }
   let result = if cfg!(target_os = "linux") {
     std::process::Command::new("xdg-open").arg(&url).spawn()
@@ -759,9 +848,13 @@ fn open_external_url(url: String) -> Result<(), String> {
     std::process::Command::new("open").arg(&url).spawn()
   } else if cfg!(target_os = "windows") {
     // `start` is a cmd builtin — must go via cmd.exe.
-    std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn()
+    std::process::Command::new("cmd")
+      .args(["/C", "start", "", &url])
+      .spawn()
   } else {
     return Err("unsupported platform".to_string());
   };
-  result.map(|_| ()).map_err(|error| format!("spawn failed: {}", error))
+  result
+    .map(|_| ())
+    .map_err(|error| format!("spawn failed: {}", error))
 }

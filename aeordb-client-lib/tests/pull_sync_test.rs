@@ -1,20 +1,21 @@
 use std::sync::Arc;
 
+use axum::Router;
 use axum::extract::State as AxumState;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use axum::Router;
+use base64::Engine as _;
 use chrono::Utc;
 use tokio::sync::Mutex;
 
 use aeordb_client_lib::connections::{AuthType, RemoteConnection};
+use aeordb_client_lib::jwt_cache::JwtCache;
+use aeordb_client_lib::remote::chunk_hash;
 use aeordb_client_lib::state::StateStore;
 use aeordb_client_lib::sync::metadata::SyncMetadataStore;
-use aeordb_client_lib::sync::pull::pull_sync;
-use aeordb_client_lib::sync::relationships::{
-  DeletePropagation, SyncDirection, SyncRelationship,
-};
+use aeordb_client_lib::sync::pull::{PullResult, pull_sync};
+use aeordb_client_lib::sync::relationships::{DeletePropagation, SyncDirection, SyncRelationship};
 
 // ---------------------------------------------------------------------------
 // Mock server state and helpers
@@ -22,7 +23,7 @@ use aeordb_client_lib::sync::relationships::{
 
 #[derive(Clone)]
 struct MockServerState {
-  diff_response: Arc<Mutex<serde_json::Value>>,
+  diff_response: Arc<std::sync::Mutex<serde_json::Value>>,
   file_contents: Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>>,
   diff_call_count: Arc<Mutex<u64>>,
 }
@@ -30,13 +31,34 @@ struct MockServerState {
 impl MockServerState {
   fn new(diff_response: serde_json::Value) -> Self {
     Self {
-      diff_response: Arc::new(Mutex::new(diff_response)),
+      diff_response: Arc::new(std::sync::Mutex::new(diff_response)),
       file_contents: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
       diff_call_count: Arc::new(Mutex::new(0)),
     }
   }
 
   fn with_file(self, path: &str, content: &[u8]) -> Self {
+    let content_hash = blake3::hash(content).to_hex().to_string();
+    let chunk_hashes = chunks_for_content(content)
+      .into_iter()
+      .map(|(hash, _)| serde_json::Value::String(hash))
+      .collect::<Vec<_>>();
+
+    {
+      let mut response = self.diff_response.lock().unwrap();
+      for field in ["files_added", "files_modified"] {
+        if let Some(files) = response["changes"][field].as_array_mut() {
+          for file in files {
+            if file["path"].as_str() == Some(path) {
+              file["hash"] = serde_json::Value::String(content_hash.clone());
+              file["size"] = serde_json::json!(content.len() as u64);
+              file["chunk_hashes"] = serde_json::Value::Array(chunk_hashes.clone());
+            }
+          }
+        }
+      }
+    }
+
     let mut map = self.file_contents.lock().unwrap();
     map.insert(path.to_string(), content.to_vec());
     drop(map);
@@ -44,14 +66,54 @@ impl MockServerState {
   }
 }
 
-async fn handle_sync_diff(
-  AxumState(state): AxumState<MockServerState>,
-) -> impl IntoResponse {
+fn chunks_for_content(content: &[u8]) -> Vec<(String, Vec<u8>)> {
+  content
+    .chunks(262_144)
+    .map(|chunk| (chunk_hash("chunk:", chunk), chunk.to_vec()))
+    .collect()
+}
+
+async fn handle_sync_diff(AxumState(state): AxumState<MockServerState>) -> impl IntoResponse {
   let mut count = state.diff_call_count.lock().await;
   *count += 1;
 
-  let response = state.diff_response.lock().await;
+  let response = state.diff_response.lock().unwrap();
   (StatusCode::OK, axum::Json(response.clone()))
+}
+
+async fn handle_blob_config() -> impl IntoResponse {
+  axum::Json(serde_json::json!({
+    "hash_algorithm": "blake3",
+    "chunk_size": 262144,
+    "chunk_hash_prefix": "chunk:",
+  }))
+}
+
+async fn handle_sync_chunks(
+  AxumState(state): AxumState<MockServerState>,
+  axum::Json(body): axum::Json<serde_json::Value>,
+) -> impl IntoResponse {
+  let requested = body["hashes"]
+    .as_array()
+    .into_iter()
+    .flatten()
+    .filter_map(|value| value.as_str())
+    .collect::<std::collections::HashSet<_>>();
+
+  let contents = state.file_contents.lock().unwrap();
+  let mut chunks = Vec::new();
+  for content in contents.values() {
+    for (hash, bytes) in chunks_for_content(content) {
+      if requested.contains(hash.as_str()) {
+        chunks.push(serde_json::json!({
+          "hash": hash,
+          "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+        }));
+      }
+    }
+  }
+
+  axum::Json(serde_json::json!({ "chunks": chunks }))
 }
 
 async fn handle_download_file(
@@ -65,21 +127,17 @@ async fn handle_download_file(
   let contents = state.file_contents.lock().unwrap();
 
   match contents.get(remote_path) {
-    Some(data) => {
-      axum::response::Response::builder()
-        .status(StatusCode::OK)
-        .header("x-aeordb-path", remote_path)
-        .header("x-aeordb-size", data.len().to_string())
-        .header("content-type", "application/octet-stream")
-        .body(axum::body::Body::from(data.clone()))
-        .unwrap()
-    }
-    None => {
-      axum::response::Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .body(axum::body::Body::from("not found"))
-        .unwrap()
-    }
+    Some(data) => axum::response::Response::builder()
+      .status(StatusCode::OK)
+      .header("x-aeordb-path", remote_path)
+      .header("x-aeordb-size", data.len().to_string())
+      .header("content-type", "application/octet-stream")
+      .body(axum::body::Body::from(data.clone()))
+      .unwrap(),
+    None => axum::response::Response::builder()
+      .status(StatusCode::NOT_FOUND)
+      .body(axum::body::Body::from("not found"))
+      .unwrap(),
   }
 }
 
@@ -90,7 +148,9 @@ async fn handle_health() -> impl IntoResponse {
 /// Start a mock aeordb server, returning the base URL (e.g. "http://127.0.0.1:PORT").
 async fn start_mock_server(state: MockServerState) -> String {
   let app = Router::new()
+    .route("/blobs/config", get(handle_blob_config))
     .route("/sync/diff", post(handle_sync_diff))
+    .route("/sync/chunks", post(handle_sync_chunks))
     .route("/system/health", get(handle_health))
     .fallback(handle_download_file)
     .with_state(state);
@@ -103,7 +163,9 @@ async fn start_mock_server(state: MockServerState) -> String {
   let base_url = format!("http://{}", addr);
 
   tokio::spawn(async move {
-    axum::serve(listener, app).await.expect("mock server failed");
+    axum::serve(listener, app)
+      .await
+      .expect("mock server failed");
   });
 
   base_url
@@ -128,32 +190,50 @@ fn make_relationship(
 ) -> SyncRelationship {
   let now = Utc::now();
   SyncRelationship {
-    id:                   "test-rel-001".to_string(),
-    name:                 "test-pull".to_string(),
+    id: "test-rel-001".to_string(),
+    name: "test-pull".to_string(),
     remote_connection_id: "test-conn-001".to_string(),
-    remote_path:          remote_path.to_string(),
-    local_path:           local_path.to_string(),
-    direction:            SyncDirection::PullOnly,
+    remote_path: remote_path.to_string(),
+    local_path: local_path.to_string(),
+    direction: SyncDirection::PullOnly,
     filter,
     delete_propagation,
-    enabled:              true,
-    created_at:           now,
-    updated_at:           now,
+    enabled: true,
+    created_at: now,
+    updated_at: now,
   }
 }
 
 fn make_connection(base_url: &str) -> RemoteConnection {
   let now = Utc::now();
   RemoteConnection {
-    id:             "test-conn-001".to_string(),
-    name:           "test-remote".to_string(),
-    url:            base_url.to_string(),
-    auth_type:      AuthType::None,
-    api_key:        None,
+    id: "test-conn-001".to_string(),
+    name: "test-remote".to_string(),
+    url: base_url.to_string(),
+    auth_type: AuthType::None,
+    api_key: None,
     share_base_url: None,
-    created_at:     now,
-    updated_at:     now,
+    created_at: now,
+    updated_at: now,
   }
+}
+
+async fn pull_sync_for_test(
+  store: &StateStore,
+  connection: &RemoteConnection,
+  relationship: &SyncRelationship,
+) -> aeordb_client_lib::error::Result<PullResult> {
+  let http_client = reqwest::Client::new();
+  let jwt_cache = JwtCache::new();
+  pull_sync(
+    store,
+    connection,
+    relationship,
+    std::slice::from_ref(relationship),
+    &http_client,
+    &jwt_cache,
+  )
+  .await
 }
 
 fn make_empty_diff(root_hash: &str) -> serde_json::Value {
@@ -172,14 +252,19 @@ fn make_empty_diff(root_hash: &str) -> serde_json::Value {
 }
 
 fn make_diff_with_added_files(root_hash: &str, files: Vec<(&str, &str, u64)>) -> serde_json::Value {
-  let files_added: Vec<serde_json::Value> = files.iter()
+  let files_added: Vec<serde_json::Value> = files
+    .iter()
     .map(|(path, hash, size)| {
       serde_json::json!({
         "path": path,
         "hash": hash,
         "size": size,
         "content_type": "application/octet-stream",
-        "chunk_hashes": [],
+        "chunk_hashes": if *size == 0 {
+          Vec::<String>::new()
+        } else {
+          vec![format!("test-missing-chunk:{}", path)]
+        },
       })
     })
     .collect();
@@ -199,7 +284,8 @@ fn make_diff_with_added_files(root_hash: &str, files: Vec<(&str, &str, u64)>) ->
 }
 
 fn make_diff_with_deleted_files(root_hash: &str, paths: Vec<&str>) -> serde_json::Value {
-  let files_deleted: Vec<serde_json::Value> = paths.iter()
+  let files_deleted: Vec<serde_json::Value> = paths
+    .iter()
     .map(|path| serde_json::json!({ "path": path }))
     .collect();
 
@@ -244,7 +330,8 @@ async fn test_pull_downloads_new_files() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
+  let result = pull_sync_for_test(&store, &connection, &relationship)
+    .await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_pulled, 2);
@@ -274,20 +361,18 @@ async fn test_pull_downloads_nested_files() {
 
   let diff = make_diff_with_added_files(
     "nestedHash",
-    vec![
-      ("/docs/sub/deep/file.txt", "hash_deep", 8),
-    ],
+    vec![("/docs/sub/deep/file.txt", "hash_deep", 8)],
   );
 
-  let state = MockServerState::new(diff)
-    .with_file("/docs/sub/deep/file.txt", b"deep one");
+  let state = MockServerState::new(diff).with_file("/docs/sub/deep/file.txt", b"deep one");
 
   let base_url = start_mock_server(state).await;
   let connection = make_connection(&base_url);
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
+  let result = pull_sync_for_test(&store, &connection, &relationship)
+    .await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_pulled, 1);
@@ -306,25 +391,24 @@ async fn test_pull_saves_checkpoint() {
 
   let diff = make_diff_with_added_files(
     "checkpoint_root_hash_v1",
-    vec![
-      ("/docs/file.txt", "hash_file", 5),
-    ],
+    vec![("/docs/file.txt", "hash_file", 5)],
   );
 
-  let state = MockServerState::new(diff)
-    .with_file("/docs/file.txt", b"hello");
+  let state = MockServerState::new(diff).with_file("/docs/file.txt", b"hello");
 
   let base_url = start_mock_server(state).await;
   let connection = make_connection(&base_url);
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
+  pull_sync_for_test(&store, &connection, &relationship)
+    .await
     .expect("pull_sync failed");
 
   // Verify the checkpoint was saved with the remote root hash.
   let metadata_store = SyncMetadataStore::new(&store);
-  let checkpoint = metadata_store.get_checkpoint("test-rel-001")
+  let checkpoint = metadata_store
+    .get_checkpoint("test-rel-001")
     .expect("failed to get checkpoint")
     .expect("checkpoint should exist after pull");
 
@@ -339,33 +423,32 @@ async fn test_pull_saves_file_metadata() {
   let local_path = local_dir.path().to_string_lossy().to_string();
   let (_db_dir, db_path) = temp_database_path();
 
-  let diff = make_diff_with_added_files(
-    "metaHash",
-    vec![
-      ("/docs/tracked.txt", "hash_tracked", 7),
-    ],
-  );
+  let diff = make_diff_with_added_files("metaHash", vec![("/docs/tracked.txt", "hash_tracked", 7)]);
 
-  let state = MockServerState::new(diff)
-    .with_file("/docs/tracked.txt", b"tracked");
+  let state = MockServerState::new(diff).with_file("/docs/tracked.txt", b"tracked");
 
   let base_url = start_mock_server(state).await;
   let connection = make_connection(&base_url);
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
+  pull_sync_for_test(&store, &connection, &relationship)
+    .await
     .expect("pull_sync failed");
 
   // Verify file metadata was stored.
   let metadata_store = SyncMetadataStore::new(&store);
-  let file_meta = metadata_store.get_file_meta("test-rel-001", "/docs/tracked.txt")
+  let file_meta = metadata_store
+    .get_file_meta("test-rel-001", "/docs/tracked.txt")
     .expect("failed to get file meta")
     .expect("file meta should exist after pull");
 
   assert_eq!(file_meta.path, "/docs/tracked.txt");
   assert_eq!(file_meta.size, 7);
-  assert_eq!(file_meta.sync_status, aeordb_client_lib::sync::metadata::SyncStatus::Synced);
+  assert_eq!(
+    file_meta.sync_status,
+    aeordb_client_lib::sync::metadata::SyncStatus::Synced
+  );
 
   // The content hash should be a valid BLAKE3 hash of "tracked".
   let expected_hash = blake3::hash(b"tracked").to_hex().to_string();
@@ -404,11 +487,15 @@ async fn test_pull_respects_filter() {
   );
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
+  let result = pull_sync_for_test(&store, &connection, &relationship)
+    .await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_pulled, 1, "only the .pdf should be pulled");
-  assert_eq!(result.files_skipped, 2, "the .md and .png should be skipped");
+  assert_eq!(
+    result.files_skipped, 2,
+    "the .md and .png should be skipped"
+  );
 
   // Verify only the PDF exists locally.
   assert!(local_dir.path().join("report.pdf").exists());
@@ -443,16 +530,19 @@ async fn test_pull_handles_deletions() {
   // Pre-store metadata for the file so it can be cleaned up.
   let metadata_store = SyncMetadataStore::new(&store);
   let doomed_meta = aeordb_client_lib::sync::metadata::FileSyncMeta {
-    path:           "/docs/doomed.txt".to_string(),
-    content_hash:   "old_hash".to_string(),
-    size:           17,
-    modified_at:    1700000000000,
-    sync_status:    aeordb_client_lib::sync::metadata::SyncStatus::Synced,
+    path: "/docs/doomed.txt".to_string(),
+    content_hash: "old_hash".to_string(),
+    size: 17,
+    modified_at: 1700000000000,
+    sync_status: aeordb_client_lib::sync::metadata::SyncStatus::Synced,
     last_synced_at: 1700000000000,
   };
-  metadata_store.set_file_meta("test-rel-001", &doomed_meta).expect("failed to set meta");
+  metadata_store
+    .set_file_meta("test-rel-001", &doomed_meta)
+    .expect("failed to set meta");
 
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
+  let result = pull_sync_for_test(&store, &connection, &relationship)
+    .await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_deleted, 1);
@@ -462,9 +552,13 @@ async fn test_pull_handles_deletions() {
   assert!(!doomed_path.exists(), "doomed.txt should have been deleted");
 
   // Verify metadata was cleaned up.
-  let meta_after = metadata_store.get_file_meta("test-rel-001", "/docs/doomed.txt")
+  let meta_after = metadata_store
+    .get_file_meta("test-rel-001", "/docs/doomed.txt")
     .expect("failed to get meta");
-  assert!(meta_after.is_none(), "metadata should be deleted after remote deletion");
+  assert!(
+    meta_after.is_none(),
+    "metadata should be deleted after remote deletion"
+  );
 }
 
 #[tokio::test]
@@ -488,13 +582,20 @@ async fn test_pull_deletion_skipped_when_propagation_disabled() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
+  let result = pull_sync_for_test(&store, &connection, &relationship)
+    .await
     .expect("pull_sync failed");
 
-  assert_eq!(result.files_deleted, 0, "no files should be deleted when propagation is off");
+  assert_eq!(
+    result.files_deleted, 0,
+    "no files should be deleted when propagation is off"
+  );
 
   // Verify the file survived.
-  assert!(survivor_path.exists(), "file should still exist when delete propagation is disabled");
+  assert!(
+    survivor_path.exists(),
+    "file should still exist when delete propagation is disabled"
+  );
 }
 
 #[tokio::test]
@@ -511,7 +612,8 @@ async fn test_pull_empty_diff_saves_checkpoint() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
+  let result = pull_sync_for_test(&store, &connection, &relationship)
+    .await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_pulled, 0);
@@ -519,7 +621,8 @@ async fn test_pull_empty_diff_saves_checkpoint() {
 
   // Even with no changes, the checkpoint should be saved.
   let metadata_store = SyncMetadataStore::new(&store);
-  let checkpoint = metadata_store.get_checkpoint("test-rel-001")
+  let checkpoint = metadata_store
+    .get_checkpoint("test-rel-001")
     .expect("failed to get checkpoint")
     .expect("checkpoint should be saved even for empty diff");
 
@@ -545,8 +648,7 @@ async fn test_pull_handles_download_failure() {
     ],
   );
 
-  let state = MockServerState::new(diff)
-    .with_file("/docs/exists.txt", b"exists");
+  let state = MockServerState::new(diff).with_file("/docs/exists.txt", b"exists");
   // Note: /docs/missing.txt is NOT registered, so it will 404.
 
   let base_url = start_mock_server(state).await;
@@ -554,13 +656,17 @@ async fn test_pull_handles_download_failure() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
+  let result = pull_sync_for_test(&store, &connection, &relationship)
+    .await
     .expect("pull_sync should not fail entirely due to single file error");
 
   assert_eq!(result.files_pulled, 1, "the existing file should be pulled");
   assert_eq!(result.files_failed, 1, "the missing file should fail");
   assert_eq!(result.errors.len(), 1, "one error should be recorded");
-  assert!(result.errors[0].contains("missing.txt"), "error should reference the failing file");
+  assert!(
+    result.errors[0].contains("missing.txt"),
+    "error should reference the failing file"
+  );
 }
 
 #[tokio::test]
@@ -574,13 +680,19 @@ async fn test_pull_fails_when_server_unreachable() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await;
+  let result = pull_sync_for_test(&store, &connection, &relationship).await;
 
-  assert!(result.is_err(), "pull_sync should fail when server is unreachable");
+  assert!(
+    result.is_err(),
+    "pull_sync should fail when server is unreachable"
+  );
   let error_message = format!("{}", result.unwrap_err());
   assert!(
-    error_message.contains("sync/diff") || error_message.contains("Connection refused"),
-    "error should reference the sync/diff request or connection failure, got: {}",
+    error_message.contains("sync/diff")
+      || error_message.contains("blob_config")
+      || error_message.contains("/blobs/config")
+      || error_message.contains("Connection refused"),
+    "error should reference the remote request or connection failure, got: {}",
     error_message,
   );
 }
@@ -589,9 +701,11 @@ async fn test_pull_fails_when_server_unreachable() {
 async fn test_pull_handles_server_error_on_diff() {
   // Spin up a mock that returns 500 for /sync/diff.
   let app = Router::new()
-    .route("/sync/diff", post(|| async {
-      (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
-    }))
+    .route("/blobs/config", get(handle_blob_config))
+    .route(
+      "/sync/diff",
+      post(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "internal server error") }),
+    )
     .route("/system/health", get(|| async { "ok" }));
 
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -612,9 +726,12 @@ async fn test_pull_handles_server_error_on_diff() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await;
+  let result = pull_sync_for_test(&store, &connection, &relationship).await;
 
-  assert!(result.is_err(), "pull_sync should fail when server returns 500");
+  assert!(
+    result.is_err(),
+    "pull_sync should fail when server returns 500"
+  );
   let error_message = format!("{}", result.unwrap_err());
   assert!(
     error_message.contains("500"),
@@ -627,9 +744,11 @@ async fn test_pull_handles_server_error_on_diff() {
 async fn test_pull_handles_malformed_diff_response() {
   // Spin up a mock that returns invalid JSON for /sync/diff.
   let app = Router::new()
-    .route("/sync/diff", post(|| async {
-      (StatusCode::OK, "this is not json")
-    }))
+    .route("/blobs/config", get(handle_blob_config))
+    .route(
+      "/sync/diff",
+      post(|| async { (StatusCode::OK, "this is not json") }),
+    )
     .route("/system/health", get(|| async { "ok" }));
 
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -650,9 +769,12 @@ async fn test_pull_handles_malformed_diff_response() {
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await;
+  let result = pull_sync_for_test(&store, &connection, &relationship).await;
 
-  assert!(result.is_err(), "pull_sync should fail with malformed response");
+  assert!(
+    result.is_err(),
+    "pull_sync should fail with malformed response"
+  );
   let error_message = format!("{}", result.unwrap_err());
   assert!(
     error_message.contains("parse"),
@@ -670,24 +792,29 @@ async fn test_pull_creates_local_directory_if_missing() {
 
   assert!(!local_path.exists(), "local path should not exist yet");
 
-  let diff = make_diff_with_added_files(
-    "mkdirHash",
-    vec![("/docs/file.txt", "hash_file", 5)],
-  );
+  let diff = make_diff_with_added_files("mkdirHash", vec![("/docs/file.txt", "hash_file", 5)]);
 
-  let state = MockServerState::new(diff)
-    .with_file("/docs/file.txt", b"hello");
+  let state = MockServerState::new(diff).with_file("/docs/file.txt", b"hello");
 
   let base_url = start_mock_server(state).await;
   let connection = make_connection(&base_url);
-  let relationship = make_relationship(&local_path_str, "/docs/", None, DeletePropagation::default());
+  let relationship = make_relationship(
+    &local_path_str,
+    "/docs/",
+    None,
+    DeletePropagation::default(),
+  );
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
+  let result = pull_sync_for_test(&store, &connection, &relationship)
+    .await
     .expect("pull_sync should create missing directories");
 
   assert_eq!(result.files_pulled, 1);
-  assert!(local_path.exists(), "local directory should have been created");
+  assert!(
+    local_path.exists(),
+    "local directory should have been created"
+  );
   assert!(local_path.join("file.txt").exists());
 }
 
@@ -727,7 +854,8 @@ async fn test_pull_exclude_filter() {
   );
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
+  let result = pull_sync_for_test(&store, &connection, &relationship)
+    .await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_pulled, 1);
@@ -759,7 +887,8 @@ async fn test_pull_deletion_of_nonexistent_local_file() {
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
   // Should not panic or error -- just a no-op deletion.
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
+  let result = pull_sync_for_test(&store, &connection, &relationship)
+    .await
     .expect("pull_sync should handle deletion of nonexistent file gracefully");
 
   assert_eq!(result.files_deleted, 1);
@@ -795,19 +924,22 @@ async fn test_pull_modified_file_overwrites() {
     "chunk_hashes_needed": [],
   });
 
-  let state = MockServerState::new(diff_json)
-    .with_file("/docs/report.txt", b"new content");
+  let state = MockServerState::new(diff_json).with_file("/docs/report.txt", b"new content");
 
   let base_url = start_mock_server(state).await;
   let connection = make_connection(&base_url);
   let relationship = make_relationship(&local_path, "/docs/", None, DeletePropagation::default());
   let store = StateStore::open_or_create(&db_path).expect("failed to create state store");
 
-  let result = pull_sync(&store, &connection, &relationship, &reqwest::Client::new()).await
+  let result = pull_sync_for_test(&store, &connection, &relationship)
+    .await
     .expect("pull_sync failed");
 
   assert_eq!(result.files_pulled, 1);
 
   let updated_content = std::fs::read_to_string(&target_path).expect("failed to read");
-  assert_eq!(updated_content, "new content", "file should have been overwritten with new content");
+  assert_eq!(
+    updated_content, "new content",
+    "file should have been overwritten with new content"
+  );
 }

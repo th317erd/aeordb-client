@@ -14,15 +14,16 @@ fn temp_database_path() -> String {
 
 fn create_test_event(relationship_id: &str, event_type: &str, timestamp: i64) -> SyncEvent {
   SyncEvent {
-    id:                uuid::Uuid::new_v4().to_string(),
-    relationship_id:   relationship_id.to_string(),
+    id: uuid::Uuid::new_v4().to_string(),
+    relationship_id: relationship_id.to_string(),
     relationship_name: "test-relationship".to_string(),
-    event_type:        event_type.to_string(),
-    summary:           format!("{} event", event_type),
-    files_affected:    5,
+    event_type: event_type.to_string(),
+    summary: format!("{} event", event_type),
+    files_affected: 5,
     bytes_transferred: 1024,
-    duration_ms:       100,
-    errors:            Vec::new(),
+    duration_ms: 100,
+    errors: Vec::new(),
+    progress_percent: None,
     timestamp,
   }
 }
@@ -31,9 +32,9 @@ fn create_test_event(relationship_id: &str, event_type: &str, timestamp: i64) ->
 
 #[test]
 fn test_log_and_retrieve_single_event() {
-  let path  = temp_database_path();
+  let path = temp_database_path();
   let store = Arc::new(StateStore::open_or_create(&path).expect("failed to create"));
-  let log   = SyncActivityLog::new(store);
+  let log = SyncActivityLog::new(store);
 
   let event = create_test_event("rel-1", "push", 1000);
   log.log_event(&event).expect("failed to log event");
@@ -48,13 +49,13 @@ fn test_log_and_retrieve_single_event() {
 
 #[test]
 fn test_events_returned_newest_first() {
-  let path  = temp_database_path();
+  let path = temp_database_path();
   let store = Arc::new(StateStore::open_or_create(&path).expect("failed to create"));
-  let log   = SyncActivityLog::new(store);
+  let log = SyncActivityLog::new(store);
 
-  let event_old  = create_test_event("rel-1", "pull", 1000);
-  let event_mid  = create_test_event("rel-1", "push", 2000);
-  let event_new  = create_test_event("rel-1", "full_sync", 3000);
+  let event_old = create_test_event("rel-1", "pull", 1000);
+  let event_mid = create_test_event("rel-1", "push", 2000);
+  let event_new = create_test_event("rel-1", "full_sync", 3000);
 
   // Insert in random order.
   log.log_event(&event_mid).expect("failed to log");
@@ -70,9 +71,9 @@ fn test_events_returned_newest_first() {
 
 #[test]
 fn test_limit_restricts_returned_events() {
-  let path  = temp_database_path();
+  let path = temp_database_path();
   let store = Arc::new(StateStore::open_or_create(&path).expect("failed to create"));
-  let log   = SyncActivityLog::new(store);
+  let log = SyncActivityLog::new(store);
 
   for i in 0..10 {
     let event = create_test_event("rel-1", "push", 1000 + i);
@@ -90,9 +91,9 @@ fn test_limit_restricts_returned_events() {
 
 #[test]
 fn test_events_isolated_by_relationship() {
-  let path  = temp_database_path();
+  let path = temp_database_path();
   let store = Arc::new(StateStore::open_or_create(&path).expect("failed to create"));
-  let log   = SyncActivityLog::new(store);
+  let log = SyncActivityLog::new(store);
 
   let event_a = create_test_event("rel-a", "push", 1000);
   let event_b = create_test_event("rel-b", "pull", 2000);
@@ -111,9 +112,9 @@ fn test_events_isolated_by_relationship() {
 
 #[test]
 fn test_event_with_errors_roundtrips() {
-  let path  = temp_database_path();
+  let path = temp_database_path();
   let store = Arc::new(StateStore::open_or_create(&path).expect("failed to create"));
-  let log   = SyncActivityLog::new(store);
+  let log = SyncActivityLog::new(store);
 
   let mut event = create_test_event("rel-1", "error", 5000);
   event.errors = vec!["connection timeout".to_string(), "retry failed".to_string()];
@@ -129,9 +130,9 @@ fn test_event_with_errors_roundtrips() {
 
 #[test]
 fn test_all_event_types_stored() {
-  let path  = temp_database_path();
+  let path = temp_database_path();
   let store = Arc::new(StateStore::open_or_create(&path).expect("failed to create"));
-  let log   = SyncActivityLog::new(store);
+  let log = SyncActivityLog::new(store);
 
   for (i, event_type) in ["pull", "push", "full_sync", "error"].iter().enumerate() {
     let event = create_test_event("rel-1", event_type, 1000 + i as i64);
@@ -152,19 +153,21 @@ fn test_all_event_types_stored() {
 
 #[test]
 fn test_get_events_empty_relationship_returns_empty() {
-  let path  = temp_database_path();
+  let path = temp_database_path();
   let store = Arc::new(StateStore::open_or_create(&path).expect("failed to create"));
-  let log   = SyncActivityLog::new(store);
+  let log = SyncActivityLog::new(store);
 
-  let events = log.get_events("nonexistent-relationship", 50).expect("failed to get events");
+  let events = log
+    .get_events("nonexistent-relationship", 50)
+    .expect("failed to get events");
   assert!(events.is_empty());
 }
 
 #[test]
 fn test_limit_zero_returns_empty() {
-  let path  = temp_database_path();
+  let path = temp_database_path();
   let store = Arc::new(StateStore::open_or_create(&path).expect("failed to create"));
-  let log   = SyncActivityLog::new(store);
+  let log = SyncActivityLog::new(store);
 
   let event = create_test_event("rel-1", "push", 1000);
   log.log_event(&event).expect("failed to log");
@@ -175,9 +178,9 @@ fn test_limit_zero_returns_empty() {
 
 #[test]
 fn test_limit_exceeds_available_events() {
-  let path  = temp_database_path();
+  let path = temp_database_path();
   let store = Arc::new(StateStore::open_or_create(&path).expect("failed to create"));
-  let log   = SyncActivityLog::new(store);
+  let log = SyncActivityLog::new(store);
 
   let event = create_test_event("rel-1", "push", 1000);
   log.log_event(&event).expect("failed to log");
@@ -190,11 +193,12 @@ fn test_limit_exceeds_available_events() {
 
 #[test]
 fn test_log_error_creates_error_event() {
-  let path  = temp_database_path();
+  let path = temp_database_path();
   let store = Arc::new(StateStore::open_or_create(&path).expect("failed to create"));
-  let log   = SyncActivityLog::new(store);
+  let log = SyncActivityLog::new(store);
 
-  log.log_error("rel-1", "test-rel", "connection refused")
+  log
+    .log_error("rel-1", "test-rel", "connection refused")
     .expect("failed to log error");
 
   let events = log.get_events("rel-1", 50).expect("failed to get events");
@@ -208,10 +212,14 @@ fn test_log_error_creates_error_event() {
 
 #[test]
 fn test_directory_structure_includes_activity() {
-  let path  = temp_database_path();
+  let path = temp_database_path();
   let store = StateStore::open_or_create(&path).expect("failed to create");
 
-  assert!(store.exists("/sync/activity/").expect("exists check failed"));
+  assert!(
+    store
+      .exists("/sync/activity/")
+      .expect("exists check failed")
+  );
 }
 
 // --- Serialization roundtrip ---
@@ -219,7 +227,7 @@ fn test_directory_structure_includes_activity() {
 #[test]
 fn test_sync_event_serialization_roundtrip() {
   let event = create_test_event("rel-1", "push", 9999);
-  let json  = serde_json::to_string(&event).expect("failed to serialize");
+  let json = serde_json::to_string(&event).expect("failed to serialize");
   let deserialized: SyncEvent = serde_json::from_str(&json).expect("failed to deserialize");
 
   assert_eq!(deserialized.id, event.id);
@@ -237,9 +245,9 @@ fn test_sync_event_serialization_roundtrip() {
 
 #[test]
 fn test_multiple_events_same_timestamp_no_collision() {
-  let path  = temp_database_path();
+  let path = temp_database_path();
   let store = Arc::new(StateStore::open_or_create(&path).expect("failed to create"));
-  let log   = SyncActivityLog::new(store);
+  let log = SyncActivityLog::new(store);
 
   // Two different events at the same timestamp should not collide
   // because the filename includes a short UUID.

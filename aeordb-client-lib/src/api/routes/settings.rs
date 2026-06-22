@@ -10,20 +10,20 @@ use crate::server::AppState;
 #[derive(Serialize)]
 pub struct SettingsResponse {
   pub sync_interval_seconds: u64,
-  pub auto_start_sync:       bool,
-  pub auto_start_system:     bool,
-  pub client_name:           Option<String>,
-  pub config_dir:            String,
-  pub data_dir:              String,
+  pub auto_start_sync: bool,
+  pub auto_start_system: bool,
+  pub client_name: Option<String>,
+  pub config_dir: String,
+  pub data_dir: String,
 }
 
 /// Partial update request. All fields are optional.
 #[derive(Deserialize)]
 pub struct UpdateSettingsRequest {
   pub sync_interval_seconds: Option<u64>,
-  pub auto_start_sync:       Option<bool>,
-  pub auto_start_system:     Option<bool>,
-  pub client_name:           Option<String>,
+  pub auto_start_sync: Option<bool>,
+  pub auto_start_system: Option<bool>,
+  pub client_name: Option<String>,
 }
 
 pub async fn get_settings(
@@ -33,12 +33,14 @@ pub async fn get_settings(
 
   Ok(Json(SettingsResponse {
     sync_interval_seconds: config.settings.sync_interval_seconds,
-    auto_start_sync:       config.settings.auto_start_sync,
-    auto_start_system:     config.settings.auto_start_system,
-    client_name:           config.settings.client_name
-                                .or_else(|| Some(gethostname::gethostname().to_string_lossy().to_string())),
-    config_dir:            state.config_dir.to_string_lossy().to_string(),
-    data_dir:              state.data_dir.to_string_lossy().to_string(),
+    auto_start_sync: config.settings.auto_start_sync,
+    auto_start_system: config.settings.auto_start_system,
+    client_name: config
+      .settings
+      .client_name
+      .or_else(|| Some(gethostname::gethostname().to_string_lossy().to_string())),
+    config_dir: state.config_dir.to_string_lossy().to_string(),
+    data_dir: state.data_dir.to_string_lossy().to_string(),
   }))
 }
 
@@ -55,24 +57,27 @@ pub async fn update_settings(
     }
   }
 
-  state.config_store.update(|config| {
-    if let Some(interval) = request.sync_interval_seconds {
-      config.settings.sync_interval_seconds = interval;
-    }
-    if let Some(auto_start) = request.auto_start_sync {
-      config.settings.auto_start_sync = auto_start;
-    }
-    if let Some(ref client_name) = request.client_name {
-      if client_name.is_empty() {
-        config.settings.client_name = None;
-      } else {
-        config.settings.client_name = Some(client_name.clone());
+  state
+    .config_store
+    .update(|config| {
+      if let Some(interval) = request.sync_interval_seconds {
+        config.settings.sync_interval_seconds = interval;
       }
-    }
-    if let Some(auto_start_system) = request.auto_start_system {
-      config.settings.auto_start_system = auto_start_system;
-    }
-  }).await?;
+      if let Some(auto_start) = request.auto_start_sync {
+        config.settings.auto_start_sync = auto_start;
+      }
+      if let Some(ref client_name) = request.client_name {
+        if client_name.is_empty() {
+          config.settings.client_name = None;
+        } else {
+          config.settings.client_name = Some(client_name.clone());
+        }
+      }
+      if let Some(auto_start_system) = request.auto_start_system {
+        config.settings.auto_start_system = auto_start_system;
+      }
+    })
+    .await?;
 
   // Signal the autostart listener (owned by main.rs's Tauri thread) so
   // it can flip the OS-level autostart entry via tauri-plugin-autostart.
@@ -89,11 +94,13 @@ pub async fn update_settings(
 
   Ok(Json(SettingsResponse {
     sync_interval_seconds: config.settings.sync_interval_seconds,
-    auto_start_sync:       config.settings.auto_start_sync,
-    auto_start_system:     config.settings.auto_start_system,
-    client_name:           config.settings.client_name
-                                .or_else(|| Some(gethostname::gethostname().to_string_lossy().to_string())),
-    config_dir:            state.config_dir.to_string_lossy().to_string(),
-    data_dir:              state.data_dir.to_string_lossy().to_string(),
+    auto_start_sync: config.settings.auto_start_sync,
+    auto_start_system: config.settings.auto_start_system,
+    client_name: config
+      .settings
+      .client_name
+      .or_else(|| Some(gethostname::gethostname().to_string_lossy().to_string())),
+    config_dir: state.config_dir.to_string_lossy().to_string(),
+    data_dir: state.data_dir.to_string_lossy().to_string(),
   }))
 }

@@ -31,39 +31,39 @@ impl Default for DeletePropagation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncRelationship {
-  pub id:                   String,
-  pub name:                 String,
+  pub id: String,
+  pub name: String,
   pub remote_connection_id: String,
-  pub remote_path:          String,
-  pub local_path:           String,
-  pub direction:            SyncDirection,
-  pub filter:               Option<String>,
-  pub delete_propagation:   DeletePropagation,
-  pub enabled:              bool,
-  pub created_at:           DateTime<Utc>,
-  pub updated_at:           DateTime<Utc>,
+  pub remote_path: String,
+  pub local_path: String,
+  pub direction: SyncDirection,
+  pub filter: Option<String>,
+  pub delete_propagation: DeletePropagation,
+  pub enabled: bool,
+  pub created_at: DateTime<Utc>,
+  pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateSyncRelationshipRequest {
-  pub name:                 String,
+  pub name: String,
   pub remote_connection_id: String,
-  pub remote_path:          String,
-  pub local_path:           String,
-  pub direction:            SyncDirection,
-  pub filter:               Option<String>,
-  pub delete_propagation:   Option<DeletePropagation>,
+  pub remote_path: String,
+  pub local_path: String,
+  pub direction: SyncDirection,
+  pub filter: Option<String>,
+  pub delete_propagation: Option<DeletePropagation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateSyncRelationshipRequest {
-  pub name:               Option<String>,
-  pub remote_path:        Option<String>,
-  pub local_path:         Option<String>,
-  pub direction:          Option<SyncDirection>,
-  pub filter:             Option<String>,
+  pub name: Option<String>,
+  pub remote_path: Option<String>,
+  pub local_path: Option<String>,
+  pub direction: Option<SyncDirection>,
+  pub filter: Option<String>,
   pub delete_propagation: Option<DeletePropagation>,
-  pub enabled:            Option<bool>,
+  pub enabled: Option<bool>,
 }
 
 /// Manages sync relationships, persisted in the YAML config file.
@@ -79,27 +79,34 @@ impl<'a> RelationshipManager<'a> {
   pub async fn create(&self, request: CreateSyncRelationshipRequest) -> Result<SyncRelationship> {
     // Validate that the referenced connection exists
     let connection_manager = ConnectionManager::new(self.config);
-    if connection_manager.get(&request.remote_connection_id).await?.is_none() {
-      return Err(ClientError::BadRequest(
-        format!("connection not found: {}", request.remote_connection_id),
-      ));
+    if connection_manager
+      .get(&request.remote_connection_id)
+      .await?
+      .is_none()
+    {
+      return Err(ClientError::BadRequest(format!(
+        "connection not found: {}",
+        request.remote_connection_id
+      )));
     }
 
     // Validate local path exists or can be created
     let local_path = std::path::Path::new(&request.local_path);
     if !local_path.exists() {
       std::fs::create_dir_all(local_path).map_err(|error| {
-        ClientError::Configuration(
-          format!("cannot create local path '{}': {}", request.local_path, error),
-        )
+        ClientError::Configuration(format!(
+          "cannot create local path '{}': {}",
+          request.local_path, error
+        ))
       })?;
       tracing::info!("created local sync directory: {}", request.local_path);
     }
 
     if !local_path.is_dir() {
-      return Err(ClientError::Configuration(
-        format!("local path is not a directory: {}", request.local_path),
-      ));
+      return Err(ClientError::Configuration(format!(
+        "local path is not a directory: {}",
+        request.local_path
+      )));
     }
 
     // Normalize remote path: ensure leading slash, ensure trailing slash
@@ -107,23 +114,26 @@ impl<'a> RelationshipManager<'a> {
 
     let now = Utc::now();
     let relationship = SyncRelationship {
-      id:                   Uuid::new_v4().to_string(),
-      name:                 request.name,
+      id: Uuid::new_v4().to_string(),
+      name: request.name,
       remote_connection_id: request.remote_connection_id,
       remote_path,
-      local_path:           request.local_path,
-      direction:            request.direction,
-      filter:               request.filter,
-      delete_propagation:   request.delete_propagation.unwrap_or_default(),
-      enabled:              true,
-      created_at:           now,
-      updated_at:           now,
+      local_path: request.local_path,
+      direction: request.direction,
+      filter: request.filter,
+      delete_propagation: request.delete_propagation.unwrap_or_default(),
+      enabled: true,
+      created_at: now,
+      updated_at: now,
     };
 
     let new_relationship = relationship.clone();
-    self.config.update(|config| {
-      config.relationships.push(new_relationship);
-    }).await?;
+    self
+      .config
+      .update(|config| {
+        config.relationships.push(new_relationship);
+      })
+      .await?;
 
     tracing::info!(
       "created sync relationship '{}' ({}) -- {} {} <-> {}",
@@ -146,67 +156,95 @@ impl<'a> RelationshipManager<'a> {
 
   pub async fn get(&self, id: &str) -> Result<Option<SyncRelationship>> {
     let config = self.config.get().await?;
-    Ok(config.relationships.into_iter().find(|relationship| relationship.id == id))
+    Ok(
+      config
+        .relationships
+        .into_iter()
+        .find(|relationship| relationship.id == id),
+    )
   }
 
-  pub async fn update(&self, id: &str, request: UpdateSyncRelationshipRequest) -> Result<SyncRelationship> {
+  pub async fn update(
+    &self,
+    id: &str,
+    request: UpdateSyncRelationshipRequest,
+  ) -> Result<SyncRelationship> {
     let mut updated_relationship = None;
 
-    self.config.update(|config| {
-      let Some(relationship) = config.relationships.iter_mut().find(|r| r.id == id) else {
-        return;
-      };
+    self
+      .config
+      .update(|config| {
+        let Some(relationship) = config.relationships.iter_mut().find(|r| r.id == id) else {
+          return;
+        };
 
-      if let Some(name) = request.name {
-        relationship.name = name;
-      }
-      if let Some(remote_path) = request.remote_path {
-        relationship.remote_path = crate::sync::relationships::normalize_remote_path(&remote_path);
-      }
-      if let Some(local_path) = request.local_path {
-        relationship.local_path = local_path;
-      }
-      if let Some(direction) = request.direction {
-        relationship.direction = direction;
-      }
-      if let Some(ref filter) = request.filter {
-        relationship.filter = if filter.is_empty() { None } else { Some(filter.clone()) };
-      }
-      if let Some(delete_propagation) = request.delete_propagation {
-        relationship.delete_propagation = delete_propagation;
-      }
-      if let Some(enabled) = request.enabled {
-        relationship.enabled = enabled;
-      }
+        if let Some(name) = request.name {
+          relationship.name = name;
+        }
+        if let Some(remote_path) = request.remote_path {
+          relationship.remote_path =
+            crate::sync::relationships::normalize_remote_path(&remote_path);
+        }
+        if let Some(local_path) = request.local_path {
+          relationship.local_path = local_path;
+        }
+        if let Some(direction) = request.direction {
+          relationship.direction = direction;
+        }
+        if let Some(ref filter) = request.filter {
+          relationship.filter = if filter.is_empty() {
+            None
+          } else {
+            Some(filter.clone())
+          };
+        }
+        if let Some(delete_propagation) = request.delete_propagation {
+          relationship.delete_propagation = delete_propagation;
+        }
+        if let Some(enabled) = request.enabled {
+          relationship.enabled = enabled;
+        }
 
-      relationship.updated_at = Utc::now();
-      updated_relationship = Some(relationship.clone());
-    }).await?;
+        relationship.updated_at = Utc::now();
+        updated_relationship = Some(relationship.clone());
+      })
+      .await?;
 
     match updated_relationship {
       Some(relationship) => {
-        tracing::info!("updated sync relationship '{}' ({})", relationship.name, relationship.id);
+        tracing::info!(
+          "updated sync relationship '{}' ({})",
+          relationship.name,
+          relationship.id
+        );
         Ok(relationship)
       }
-      None => Err(ClientError::NotFound(
-        format!("sync relationship not found: {}", id),
-      )),
+      None => Err(ClientError::NotFound(format!(
+        "sync relationship not found: {}",
+        id
+      ))),
     }
   }
 
   pub async fn delete(&self, id: &str) -> Result<()> {
     let mut found = false;
 
-    self.config.update(|config| {
-      let before = config.relationships.len();
-      config.relationships.retain(|relationship| relationship.id != id);
-      found = config.relationships.len() < before;
-    }).await?;
+    self
+      .config
+      .update(|config| {
+        let before = config.relationships.len();
+        config
+          .relationships
+          .retain(|relationship| relationship.id != id);
+        found = config.relationships.len() < before;
+      })
+      .await?;
 
     if !found {
-      return Err(ClientError::NotFound(
-        format!("sync relationship not found: {}", id),
-      ));
+      return Err(ClientError::NotFound(format!(
+        "sync relationship not found: {}",
+        id
+      )));
     }
 
     tracing::info!("deleted sync relationship {}", id);
@@ -214,19 +252,37 @@ impl<'a> RelationshipManager<'a> {
   }
 
   pub async fn enable(&self, id: &str) -> Result<SyncRelationship> {
-    self.update(id, UpdateSyncRelationshipRequest {
-      name: None, remote_path: None, local_path: None,
-      direction: None, filter: None,
-      delete_propagation: None, enabled: Some(true),
-    }).await
+    self
+      .update(
+        id,
+        UpdateSyncRelationshipRequest {
+          name: None,
+          remote_path: None,
+          local_path: None,
+          direction: None,
+          filter: None,
+          delete_propagation: None,
+          enabled: Some(true),
+        },
+      )
+      .await
   }
 
   pub async fn disable(&self, id: &str) -> Result<SyncRelationship> {
-    self.update(id, UpdateSyncRelationshipRequest {
-      name: None, remote_path: None, local_path: None,
-      direction: None, filter: None,
-      delete_propagation: None, enabled: Some(false),
-    }).await
+    self
+      .update(
+        id,
+        UpdateSyncRelationshipRequest {
+          name: None,
+          remote_path: None,
+          local_path: None,
+          direction: None,
+          filter: None,
+          delete_propagation: None,
+          enabled: Some(false),
+        },
+      )
+      .await
   }
 }
 

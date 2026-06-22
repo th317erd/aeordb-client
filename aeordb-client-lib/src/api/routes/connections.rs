@@ -4,11 +4,11 @@ use axum::response::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::connections::{
-  ConnectionManager, ConnectionTestResult, CreateConnectionRequest,
-  RemoteConnection, UpdateConnectionRequest,
+  ConnectionManager, ConnectionTestResult, CreateConnectionRequest, RemoteConnection,
+  UpdateConnectionRequest,
 };
 use crate::error::ClientError;
-use crate::remote::{RemoteClient, ENTRY_TYPE_DIRECTORY};
+use crate::remote::{ENTRY_TYPE_DIRECTORY, RemoteClient};
 use crate::server::AppState;
 
 pub async fn list_connections(
@@ -43,7 +43,9 @@ pub async fn create_connection(
   Json(request): Json<CreateConnectionRequest>,
 ) -> Result<(StatusCode, Json<RemoteConnection>), ClientError> {
   let manager = ConnectionManager::new(&state.config_store);
-  manager.create(request).await
+  manager
+    .create(request)
+    .await
     .map(|connection| (StatusCode::CREATED, Json(connection)))
 }
 
@@ -55,7 +57,10 @@ pub async fn get_connection(
 
   match manager.get(&id).await? {
     Some(connection) => Ok(Json(connection)),
-    None => Err(ClientError::NotFound(format!("connection not found: {}", id))),
+    None => Err(ClientError::NotFound(format!(
+      "connection not found: {}",
+      id
+    ))),
   }
 }
 
@@ -113,11 +118,17 @@ pub async fn portal_url(
   Query(query): Query<PortalUrlQuery>,
 ) -> Result<Json<PortalUrlResponse>, ClientError> {
   let manager = ConnectionManager::new(&state.config_store);
-  let connection = manager.get(&id).await?
+  let connection = manager
+    .get(&id)
+    .await?
     .ok_or_else(|| ClientError::NotFound(format!("connection not found: {}", id)))?;
 
   let path = query.path.unwrap_or_else(|| "/".to_string());
-  let normalized = if path.starts_with('/') { path } else { format!("/{}", path) };
+  let normalized = if path.starts_with('/') {
+    path
+  } else {
+    format!("/{}", path)
+  };
 
   let jwt_slot = state.jwt_cache.slot_for(&id);
   let client = RemoteClient::from_connection_cached(&connection, &state.http_client, jwt_slot);
@@ -127,13 +138,13 @@ pub async fn portal_url(
 
 #[derive(Debug, Serialize)]
 pub struct BrowseEntry {
-  pub name:      String,
+  pub name: String,
   pub full_path: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct BrowseResponse {
-  pub path:    String,
+  pub path: String,
   pub entries: Vec<BrowseEntry>,
 }
 
@@ -148,31 +159,51 @@ pub async fn browse_remote(
   Query(query): Query<BrowseQuery>,
 ) -> Result<Json<BrowseResponse>, ClientError> {
   let manager = ConnectionManager::new(&state.config_store);
-  let connection = manager.get(&id).await?
+  let connection = manager
+    .get(&id)
+    .await?
     .ok_or_else(|| ClientError::NotFound(format!("connection not found: {}", id)))?;
 
   let raw_path = query.path.unwrap_or_else(|| "/".to_string());
-  let normalized = if raw_path.starts_with('/') { raw_path.clone() } else { format!("/{}", raw_path) };
+  let normalized = if raw_path.starts_with('/') {
+    raw_path.clone()
+  } else {
+    format!("/{}", raw_path)
+  };
   let trimmed = normalized.trim_end_matches('/');
-  let path_for_request = if trimmed.is_empty() { "/".to_string() } else { format!("{}/", trimmed) };
+  let path_for_request = if trimmed.is_empty() {
+    "/".to_string()
+  } else {
+    format!("{}/", trimmed)
+  };
   let is_root = trimmed.is_empty();
 
   let jwt_slot = state.jwt_cache.slot_for(&id);
   let client = RemoteClient::from_connection_cached(&connection, &state.http_client, jwt_slot);
 
-  let items = client.list_directory(&path_for_request).await
+  let items = client
+    .list_directory(&path_for_request)
+    .await
     .map_err(|error| ClientError::BadGateway(error.to_string()))?;
 
-  let entries = items.into_iter()
+  let entries = items
+    .into_iter()
     .filter(|entry| entry.entry_type == ENTRY_TYPE_DIRECTORY)
     .map(|entry| {
       let full = format!("{}/{}", trimmed, entry.name);
-      BrowseEntry { name: entry.name, full_path: full }
+      BrowseEntry {
+        name: entry.name,
+        full_path: full,
+      }
     })
     .collect();
 
   Ok(Json(BrowseResponse {
-    path: if is_root { "/".to_string() } else { trimmed.to_string() },
+    path: if is_root {
+      "/".to_string()
+    } else {
+      trimmed.to_string()
+    },
     entries,
   }))
 }
@@ -191,7 +222,9 @@ pub async fn proxy_remote(
   axum::extract::RawQuery(query): axum::extract::RawQuery,
 ) -> Result<axum::response::Response, ClientError> {
   let manager = ConnectionManager::new(&state.config_store);
-  let connection = manager.get(&id).await?
+  let connection = manager
+    .get(&id)
+    .await?
     .ok_or_else(|| ClientError::NotFound(format!("connection not found: {}", id)))?;
 
   let jwt_slot = state.jwt_cache.slot_for(&id);
@@ -206,16 +239,21 @@ pub async fn proxy_remote(
   // authed_send adds the cached JWT + retries once on 401 with a
   // freshly-minted token. Shared with every RemoteClient method so
   // the retry semantics are identical across the codebase.
-  let upstream = client.authed_send(|| state.http_client.get(&url)).await
+  let upstream = client
+    .authed_send(|| state.http_client.get(&url))
+    .await
     .map_err(|error| ClientError::BadGateway(format!("proxy fetch failed: {}", error)))?;
 
   let status = upstream.status();
-  let content_type = upstream.headers()
+  let content_type = upstream
+    .headers()
     .get(axum::http::header::CONTENT_TYPE)
     .and_then(|v| v.to_str().ok())
     .unwrap_or("application/octet-stream")
     .to_string();
-  let body = upstream.bytes().await
+  let body = upstream
+    .bytes()
+    .await
     .map_err(|error| ClientError::BadGateway(format!("proxy read failed: {}", error)))?;
 
   let mut response = axum::response::Response::builder()

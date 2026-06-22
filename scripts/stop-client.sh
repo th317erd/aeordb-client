@@ -18,7 +18,7 @@ fi
 
 # API didn't work — find the process and SIGTERM it
 echo "API shutdown failed or timed out. Sending SIGTERM..."
-PIDS=$(pgrep -f 'aeordb-client' 2>/dev/null || true)
+PIDS=$(pgrep -f '(^|/|[[:space:]])(target/debug/)?aeordb-client([[:space:]]|$)' 2>/dev/null || true)
 if [ -z "$PIDS" ]; then
   echo "No aeordb-client process found."
   exit 0
@@ -31,7 +31,7 @@ done
 
 # Wait for graceful exit
 for i in $(seq 1 10); do
-  if ! pgrep -f 'aeordb-client' >/dev/null 2>&1; then
+  if ! pgrep -f '(^|/|[[:space:]])(target/debug/)?aeordb-client([[:space:]]|$)' >/dev/null 2>&1; then
     echo "Client stopped."
     exit 0
   fi
@@ -39,5 +39,5 @@ for i in $(seq 1 10); do
 done
 
 echo "WARNING: Client still running after 10s. NOT sending SIGKILL — investigate manually."
-echo "  Remaining PIDs: $(pgrep -f 'aeordb-client' 2>/dev/null || echo 'none')"
+echo "  Remaining PIDs: $(pgrep -f '(^|/|[[:space:]])(target/debug/)?aeordb-client([[:space:]]|$)' 2>/dev/null || echo 'none')"
 exit 1

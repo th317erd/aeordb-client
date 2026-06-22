@@ -1,7 +1,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use aeordb::engine::{DirectoryOps, RequestContext, StorageEngine};
+use aeordb::engine::{
+  BufferedFile, DirectoryOps, JsonMergeFilePatch, MergeDepth, RequestContext, StorageEngine,
+  load_lifecycle_config, save_lifecycle_config,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -20,7 +23,7 @@ pub struct StateStore {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientIdentity {
-  pub id:   String,
+  pub id: String,
   pub name: String,
 }
 
@@ -59,16 +62,19 @@ impl StateStore {
           // This is the only case where we recreate.
           tracing::warn!(
             "state database at {} cannot be opened ({}), backing up and creating fresh",
-            database_path, error,
+            database_path,
+            error,
           );
           Self::backup_and_recreate(database_path)?
         }
       }
     } else {
-      StorageEngine::create(database_path)
-        .map_err(|error| ClientError::Configuration(
-          format!("failed to create state database at {}: {}", database_path, error),
-        ))?
+      StorageEngine::create(database_path).map_err(|error| {
+        ClientError::Configuration(format!(
+          "failed to create state database at {}: {}",
+          database_path, error
+        ))
+      })?
     };
 
     let engine = Arc::new(engine);
@@ -115,18 +121,24 @@ impl StateStore {
     let ops = DirectoryOps::new(&self.engine);
     let ctx = RequestContext::system();
 
-    ops
-      .ensure_root_directory(&ctx)
-      .map_err(|error| ClientError::Configuration(
-        format!("failed to initialize state database root: {}", error),
-      ))?;
+    ops.ensure_root_directory(&ctx).map_err(|error| {
+      ClientError::Configuration(format!(
+        "failed to initialize state database root: {}",
+        error
+      ))
+    })?;
 
-    self.ensure_directory_structure()
+    self.ensure_directory_structure()?;
+    self.disable_snapshot_writes()
   }
 
   /// Back up a corrupted database file and create a fresh one.
   fn backup_and_recreate(database_path: &str) -> Result<StorageEngine> {
-    let backup_path = format!("{}.corrupt.{}", database_path, chrono::Utc::now().timestamp());
+    let backup_path = format!(
+      "{}.corrupt.{}",
+      database_path,
+      chrono::Utc::now().timestamp()
+    );
 
     if let Err(error) = std::fs::rename(database_path, &backup_path) {
       tracing::error!("failed to back up corrupted database: {}", error);
@@ -136,10 +148,12 @@ impl StateStore {
       tracing::info!("corrupted database backed up to {}", backup_path);
     }
 
-    StorageEngine::create(database_path)
-      .map_err(|error| ClientError::Configuration(
-        format!("failed to recreate state database at {}: {}", database_path, error),
+    StorageEngine::create(database_path).map_err(|error| {
+      ClientError::Configuration(format!(
+        "failed to recreate state database at {}: {}",
+        database_path, error
       ))
+    })
   }
 
   /// Create a DirectoryOps handle for this store.
@@ -153,8 +167,11 @@ impl StateStore {
       "/client/",
       "/sync/",
       "/sync/state/",
+      "/sync/migrations/",
       "/sync/conflicts/",
       "/sync/activity/",
+      "/sync/files-index/",
+      "/sync/files-v2/",
       "/settings/",
     ];
 
@@ -165,6 +182,28 @@ impl StateStore {
       }
     }
 
+    Ok(())
+  }
+
+  /// The client state database is operational metadata, not user content.
+  /// Snapshots make this DB grow quickly under heavy sync activity while adding
+  /// little value, so keep new snapshot writes disabled while preserving any
+  /// existing retention policy.
+  fn disable_snapshot_writes(&self) -> Result<()> {
+    let mut config = load_lifecycle_config(&self.engine);
+    if !config.snapshot_writes_enabled {
+      return Ok(());
+    }
+
+    config.snapshot_writes_enabled = false;
+    save_lifecycle_config(&self.engine, &config).map_err(|error| {
+      ClientError::Configuration(format!(
+        "failed to disable snapshots for state database: {}",
+        error
+      ))
+    })?;
+
+    tracing::info!("disabled snapshot writes for local state database");
     Ok(())
   }
 
@@ -186,7 +225,7 @@ impl StateStore {
     }
 
     let identity = ClientIdentity {
-      id:   Uuid::new_v4().to_string(),
+      id: Uuid::new_v4().to_string(),
       name: hostname(),
     };
 
@@ -194,7 +233,11 @@ impl StateStore {
       tracing::error!("failed to persist client identity: {}", error);
       // Return the identity anyway — it'll work for this session
     } else {
-      tracing::info!("generated client identity: {} ({})", identity.id, identity.name);
+      tracing::info!(
+        "generated client identity: {} ({})",
+        identity.id,
+        identity.name
+      );
     }
 
     Ok(identity)
@@ -202,14 +245,98 @@ impl StateStore {
 
   /// Store a JSON-serializable value at a path in the local database.
   pub fn store_json<T: Serialize>(&self, path: &str, value: &T) -> Result<()> {
-    let ctx  = RequestContext::system();
+    let ctx = RequestContext::system();
     let data = serde_json::to_vec_pretty(value)?;
 
-    self.ops()
+    self
+      .ops()
       .store_file_buffered(&ctx, path, &data, Some("application/json"))
-      .map_err(|error| ClientError::Server(
-        format!("failed to store {} in state database: {}", path, error),
-      ))?;
+      .map_err(|error| {
+        ClientError::Server(format!(
+          "failed to store {} in state database: {}",
+          path, error
+        ))
+      })?;
+
+    Ok(())
+  }
+
+  /// Store multiple small JSON files in one embedded AeorDB batch.
+  pub fn store_json_values_batch(&self, files: Vec<(String, serde_json::Value)>) -> Result<()> {
+    if files.is_empty() {
+      return Ok(());
+    }
+
+    let ctx = RequestContext::system();
+    let mut buffered = Vec::with_capacity(files.len());
+    for (path, value) in files {
+      buffered.push(BufferedFile {
+        path,
+        data: serde_json::to_vec_pretty(&value)?,
+        content_type: Some("application/json".to_string()),
+      });
+    }
+
+    self
+      .ops()
+      .store_files_buffered_batch(&ctx, buffered)
+      .map_err(|error| {
+        ClientError::Server(format!(
+          "failed to store JSON batch in state database: {}",
+          error
+        ))
+      })?;
+
+    Ok(())
+  }
+
+  /// Apply JSON merge patches to multiple small JSON files in one embedded
+  /// AeorDB batch.
+  pub fn merge_json_files_batch(
+    &self,
+    patches: Vec<(String, serde_json::Value, MergeDepth)>,
+  ) -> Result<()> {
+    if patches.is_empty() {
+      return Ok(());
+    }
+
+    let ctx = RequestContext::system();
+    let patches = patches
+      .into_iter()
+      .map(|(path, patch, depth)| JsonMergeFilePatch { path, patch, depth })
+      .collect();
+
+    self
+      .ops()
+      .merge_json_files_batch(&ctx, patches)
+      .map_err(|error| {
+        ClientError::Server(format!(
+          "failed to merge JSON batch in state database: {}",
+          error
+        ))
+      })?;
+
+    Ok(())
+  }
+
+  /// Apply a JSON merge patch to one small JSON file.
+  pub fn merge_json_file(
+    &self,
+    path: &str,
+    patch: serde_json::Value,
+    depth: MergeDepth,
+  ) -> Result<()> {
+    let ctx = RequestContext::system();
+
+    self
+      .ops()
+      .merge_json_file(&ctx, path, patch, depth)
+      .map_err(|error| {
+        ClientError::Server(format!(
+          "failed to merge {} in state database: {}",
+          path, error
+        ))
+      })?;
 
     Ok(())
   }
@@ -222,15 +349,13 @@ impl StateStore {
     }
 
     match self.ops().read_file_buffered(path) {
-      Ok(data) => {
-        match serde_json::from_slice(&data) {
-          Ok(value) => Ok(Some(value)),
-          Err(error) => {
-            tracing::warn!("corrupt JSON at {}: {}", path, error);
-            Ok(None)
-          }
+      Ok(data) => match serde_json::from_slice(&data) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) => {
+          tracing::warn!("corrupt JSON at {}: {}", path, error);
+          Ok(None)
         }
-      }
+      },
       Err(error) => {
         tracing::warn!("failed to read {} from state database: {}", path, error);
         Ok(None)
@@ -243,11 +368,12 @@ impl StateStore {
   pub fn delete(&self, path: &str) -> Result<()> {
     let ctx = RequestContext::system();
 
-    self.ops()
-      .delete_file(&ctx, path)
-      .map_err(|error| ClientError::Server(
-        format!("failed to delete {} from state database: {}", path, error),
-      ))?;
+    self.ops().delete_file(&ctx, path).map_err(|error| {
+      ClientError::Server(format!(
+        "failed to delete {} from state database: {}",
+        path, error
+      ))
+    })?;
 
     Ok(())
   }
@@ -255,11 +381,12 @@ impl StateStore {
   /// Check if a path exists in the local database.
   /// Returns false on any error (treats corruption as "not found").
   pub fn exists(&self, path: &str) -> Result<bool> {
-    self.ops()
-      .exists(path)
-      .map_err(|error| ClientError::Server(
-        format!("failed to check existence of {} in state database: {}", path, error),
+    self.ops().exists(path).map_err(|error| {
+      ClientError::Server(format!(
+        "failed to check existence of {} in state database: {}",
+        path, error
       ))
+    })
   }
 
   /// List entries in a directory.
@@ -278,10 +405,25 @@ impl StateStore {
   pub fn engine(&self) -> &Arc<StorageEngine> {
     &self.engine
   }
+
+  /// Start embedded AeorDB maintenance that the HTTP server normally owns.
+  ///
+  /// The client uses AeorDB as an embedded local state database, so it must
+  /// also run the hot-tail flush timer. Without it, low-traffic desktop runs
+  /// can leave the hot tail stale until process shutdown; an unclean exit then
+  /// forces a full WAL rebuild on the next launch.
+  pub fn start_maintenance_tasks(&self) {
+    aeordb::server::spawn_hot_buffer_flush_timer(self.engine.clone(), None);
+  }
+
+  /// Flush and close the embedded AeorDB state database cleanly.
+  pub fn shutdown(&self) -> Result<()> {
+    self.engine.shutdown().map_err(|error| {
+      ClientError::Server(format!("failed to shut down state database: {}", error))
+    })
+  }
 }
 
 fn hostname() -> String {
-  gethostname::gethostname()
-    .to_string_lossy()
-    .to_string()
+  gethostname::gethostname().to_string_lossy().to_string()
 }

@@ -15,11 +15,11 @@ use crate::api::routes::events;
 use crate::api::routes::files;
 use crate::api::routes::preferences as preferences_routes;
 use crate::api::routes::settings;
-use crate::api::routes::update as update_routes;
 use crate::api::routes::shares;
 use crate::api::routes::status::get_status;
 use crate::api::routes::sync;
 use crate::api::routes::system;
+use crate::api::routes::update as update_routes;
 use crate::config::{ConfigStore, default_config_path, default_data_path};
 use crate::error::{ClientError, Result};
 use crate::health::{HealthMap, new_health_map, start_health_pinger};
@@ -37,41 +37,44 @@ use crate::update::{SharedUpdateInfo, new_state as new_update_state};
 #[derive(Clone, Debug)]
 pub struct ServerEvent {
   pub event_name: String,
-  pub data:       String,
+  pub data: String,
 }
 
 impl ServerEvent {
   pub fn new(event_name: impl Into<String>, data: impl Into<String>) -> Self {
-    Self { event_name: event_name.into(), data: data.into() }
+    Self {
+      event_name: event_name.into(),
+      data: data.into(),
+    }
   }
 }
 
 #[derive(Clone)]
 pub struct AppState {
-  pub started_at:      Instant,
-  pub state_store:     Arc<StateStore>,
-  pub config_store:    Arc<ConfigStore>,
-  pub sync_runner:     SyncRunner,
-  pub http_client:     reqwest::Client,
+  pub started_at: Instant,
+  pub state_store: Arc<StateStore>,
+  pub config_store: Arc<ConfigStore>,
+  pub sync_runner: SyncRunner,
+  pub http_client: reqwest::Client,
   pub shutdown_signal: Option<Arc<Notify>>,
-  pub event_tx:        broadcast::Sender<ServerEvent>,
-  pub config_dir:      PathBuf,
-  pub data_dir:        PathBuf,
-  pub health_map:      HealthMap,
-  pub preferences:     Arc<PreferencesStore>,
+  pub event_tx: broadcast::Sender<ServerEvent>,
+  pub config_dir: PathBuf,
+  pub data_dir: PathBuf,
+  pub health_map: HealthMap,
+  pub preferences: Arc<PreferencesStore>,
 
   /// Process-wide JWT cache, keyed by connection_id. RemoteClient
   /// instances pull their JWT slot from here so the token minted by
   /// the first request survives until the next 401 — instead of every
   /// handler creating a fresh client and hitting POST /auth/token.
   /// See `crate::jwt_cache` for the why.
-  pub jwt_cache:       JwtCache,
+  pub jwt_cache: JwtCache,
 
   /// Cached snapshot of the most recent `/api/version` poll. Populated
   /// by `crate::update::check_once` (kicked off at startup and by
   /// POST /api/v1/update/check); read by GET /api/v1/update/status and
   /// POST /api/v1/update/apply.
-  pub update_info:     SharedUpdateInfo,
+  pub update_info: SharedUpdateInfo,
 
   /// Desired auto-start state. Written by `PATCH /api/v1/settings`
   /// (auto_start_system field); read by main.rs's autostart listener
@@ -80,23 +83,23 @@ pub struct AppState {
   /// Notified after `autostart_enabled` changes. The listener thread
   /// wakes, reads the latest desired state, and applies it via the
   /// plugin.
-  pub autostart_signal:  Arc<Notify>,
+  pub autostart_signal: Arc<Notify>,
 }
 
 pub struct ServerConfig {
-  pub host:        String,
-  pub port:        u16,
+  pub host: String,
+  pub port: u16,
   pub config_path: PathBuf,
-  pub data_path:   PathBuf,
+  pub data_path: PathBuf,
 }
 
 impl Default for ServerConfig {
   fn default() -> Self {
     Self {
-      host:        "127.0.0.1".to_string(),
-      port:        9400,
+      host: "127.0.0.1".to_string(),
+      port: 9400,
       config_path: default_config_path(),
-      data_path:   default_data_path(),
+      data_path: default_data_path(),
     }
   }
 }
@@ -104,18 +107,38 @@ impl Default for ServerConfig {
 pub fn build_router(state: AppState) -> Router {
   let api_routes = Router::new()
     .route("/status", get(get_status))
-    .route("/connections", get(connections::list_connections).post(connections::create_connection))
-    .route("/connections/{id}", get(connections::get_connection).patch(connections::update_connection).delete(connections::delete_connection))
+    .route(
+      "/connections",
+      get(connections::list_connections).post(connections::create_connection),
+    )
+    .route(
+      "/connections/{id}",
+      get(connections::get_connection)
+        .patch(connections::update_connection)
+        .delete(connections::delete_connection),
+    )
     .route("/connections/{id}/test", post(connections::test_connection))
     .route("/connections/{id}/browse", get(connections::browse_remote))
     .route("/connections/{id}/portal-url", get(connections::portal_url))
-    .route("/connections/{id}/proxy/{*path}", get(connections::proxy_remote))
+    .route(
+      "/connections/{id}/proxy/{*path}",
+      get(connections::proxy_remote),
+    )
     .route("/health/connections", get(connections::list_health))
-    .route("/sync", get(sync::list_relationships).post(sync::create_relationship))
-    .route("/sync/{id}", get(sync::get_relationship).patch(sync::update_relationship).delete(sync::delete_relationship))
+    .route(
+      "/sync",
+      get(sync::list_relationships).post(sync::create_relationship),
+    )
+    .route(
+      "/sync/{id}",
+      get(sync::get_relationship)
+        .patch(sync::update_relationship)
+        .delete(sync::delete_relationship),
+    )
     .route("/sync/{id}/enable", post(sync::enable_relationship))
     .route("/sync/{id}/disable", post(sync::disable_relationship))
     .route("/sync/{id}/activity", get(sync::get_sync_activity))
+    .route("/sync/{id}/file-events", get(events::relationship_file_events))
     .route("/sync/{id}/trigger", post(sync::trigger_sync))
     .route("/sync/{id}/force-resync", post(sync::force_resync))
     .route("/sync/{id}/start", post(sync::start_sync))
@@ -124,46 +147,102 @@ pub fn build_router(state: AppState) -> Router {
     .route("/sync/pause-all", post(sync::pause_all_sync))
     .route("/sync/resume-all", post(sync::resume_all_sync))
     .route("/conflicts", get(conflicts::list_conflicts))
-    .route("/conflicts/resolve", post(conflicts::resolve_conflict_handler))
-    .route("/conflicts/dismiss", post(conflicts::dismiss_conflict_handler))
-    .route("/conflicts/dismiss-all", post(conflicts::dismiss_all_conflicts))
+    .route(
+      "/conflicts/resolve",
+      post(conflicts::resolve_conflict_handler),
+    )
+    .route(
+      "/conflicts/dismiss",
+      post(conflicts::dismiss_conflict_handler),
+    )
+    .route(
+      "/conflicts/dismiss-all",
+      post(conflicts::dismiss_all_conflicts),
+    )
     .route("/browse/{relationship_id}", get(files::browse))
     .route("/browse/{relationship_id}/{*path}", get(files::browse))
-    .route("/browse/{relationship_id}/deleted", get(files::list_deleted))
-    .route("/files/{relationship_id}/{*path}", get(files::serve_file).put(files::upload_file).delete(files::delete_file))
+    .route(
+      "/browse/{relationship_id}/deleted",
+      get(files::list_deleted),
+    )
+    .route(
+      "/files/{relationship_id}/{*path}",
+      get(files::serve_file)
+        .put(files::upload_file)
+        .delete(files::delete_file),
+    )
     .route("/files/{relationship_id}/open", post(files::open_locally))
     .route("/files/{relationship_id}/rename", post(files::rename_file))
-    .route("/files/{relationship_id}/restore", post(files::restore_deleted))
+    .route(
+      "/files/{relationship_id}/restore",
+      post(files::restore_deleted),
+    )
     .route("/files/{relationship_id}/copy", post(files::copy_files))
-    .route("/files/{relationship_id}/symlink", post(files::create_symlink))
-    .route("/versions/{relationship_id}/history/{*path}", get(files::version_history))
-    .route("/snapshots/{relationship_id}", get(files::list_snapshots).post(files::create_snapshot))
-    .route("/snapshots/{relationship_id}/{snapshot_id}/restore", post(files::restore_from_snapshot))
-    .route("/shares/{relationship_id}", get(shares::get_shares).post(shares::share).delete(shares::unshare))
-    .route("/shares/{relationship_id}/users", get(shares::get_shareable_users))
-    .route("/shares/{relationship_id}/groups", get(shares::get_shareable_groups))
-    .route("/shares/{relationship_id}/link", post(shares::create_share_link))
-    .route("/shares/{relationship_id}/links", get(shares::get_share_links))
-    .route("/shares/{relationship_id}/links/{key_id}", delete(shares::revoke_share_link))
-    .route("/settings", get(settings::get_settings).patch(settings::update_settings))
-    .route("/preferences", get(preferences_routes::get_preferences).patch(preferences_routes::patch_preferences))
+    .route(
+      "/files/{relationship_id}/symlink",
+      post(files::create_symlink),
+    )
+    .route(
+      "/versions/{relationship_id}/history/{*path}",
+      get(files::version_history),
+    )
+    .route(
+      "/snapshots/{relationship_id}",
+      get(files::list_snapshots).post(files::create_snapshot),
+    )
+    .route(
+      "/snapshots/{relationship_id}/{snapshot_id}/restore",
+      post(files::restore_from_snapshot),
+    )
+    .route(
+      "/shares/{relationship_id}",
+      get(shares::get_shares)
+        .post(shares::share)
+        .delete(shares::unshare),
+    )
+    .route(
+      "/shares/{relationship_id}/users",
+      get(shares::get_shareable_users),
+    )
+    .route(
+      "/shares/{relationship_id}/groups",
+      get(shares::get_shareable_groups),
+    )
+    .route(
+      "/shares/{relationship_id}/link",
+      post(shares::create_share_link),
+    )
+    .route(
+      "/shares/{relationship_id}/links",
+      get(shares::get_share_links),
+    )
+    .route(
+      "/shares/{relationship_id}/links/{key_id}",
+      delete(shares::revoke_share_link),
+    )
+    .route(
+      "/settings",
+      get(settings::get_settings).patch(settings::update_settings),
+    )
+    .route(
+      "/preferences",
+      get(preferences_routes::get_preferences).patch(preferences_routes::patch_preferences),
+    )
     .route("/update/status", get(update_routes::update_status))
-    .route("/update/check",  post(update_routes::update_check))
-    .route("/update/apply",  post(update_routes::update_apply))
+    .route("/update/check", post(update_routes::update_check))
+    .route("/update/apply", post(update_routes::update_apply))
     .route("/open-folder", post(system::open_folder))
     .route("/pick-directory", post(system::pick_directory))
     .route("/shutdown", post(system::shutdown))
     .route("/events", get(events::event_stream));
 
-  Router::new()
-    .nest("/api/v1", api_routes)
-    .with_state(state)
+  Router::new().nest("/api/v1", api_routes).with_state(state)
 }
 
 pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
   let data_path_str = config.data_path.to_string_lossy().to_string();
-  let state_store   = StateStore::open_or_create(&data_path_str)?;
-  let identity      = state_store.get_or_create_identity()?;
+  let state_store = StateStore::open_or_create(&data_path_str)?;
+  let identity = state_store.get_or_create_identity()?;
 
   tracing::info!("client identity: {} ({})", identity.id, identity.name);
 
@@ -176,10 +255,10 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
 
   let (event_tx, _) = broadcast::channel(256);
 
-  let state_store  = Arc::new(state_store);
+  let state_store = Arc::new(state_store);
   let config_store = Arc::new(config_store);
-  let jwt_cache    = JwtCache::new();
-  let sync_runner  = SyncRunner::new(
+  let jwt_cache = JwtCache::new();
+  let sync_runner = SyncRunner::new(
     state_store.clone(),
     config_store.clone(),
     http_client.clone(),
@@ -187,10 +266,14 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
     jwt_cache.clone(),
   );
 
-  let config_dir = config.config_path.parent()
+  let config_dir = config
+    .config_path
+    .parent()
     .unwrap_or_else(|| std::path::Path::new("."))
     .to_path_buf();
-  let data_dir = config.data_path.parent()
+  let data_dir = config
+    .data_path
+    .parent()
     .unwrap_or_else(|| std::path::Path::new("."))
     .to_path_buf();
 
@@ -205,10 +288,10 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
   // from the persisted config once a runtime is available, then ticks
   // the signal to force the listener to reconcile against the OS.
   let autostart_enabled = Arc::new(AtomicBool::new(false));
-  let autostart_signal  = Arc::new(Notify::new());
+  let autostart_signal = Arc::new(Notify::new());
 
   Ok(AppState {
-    started_at:      Instant::now(),
+    started_at: Instant::now(),
     state_store,
     config_store,
     sync_runner,
@@ -227,7 +310,8 @@ pub fn create_app_state(config: &ServerConfig) -> Result<AppState> {
 }
 
 pub async fn start_server(config: ServerConfig) -> Result<()> {
-  let state    = create_app_state(&config)?;
+  let state = create_app_state(&config)?;
+  state.state_store.start_maintenance_tasks();
   let _health_handle = start_health_pinger(
     state.config_store.clone(),
     state.event_tx.clone(),
@@ -246,17 +330,17 @@ pub async fn start_server(config: ServerConfig) -> Result<()> {
     });
   }
 
-  let router   = build_router(state);
-  let address  = format!("{}:{}", config.host, config.port);
-  let listener = TcpListener::bind(&address).await.map_err(|error| {
-    ClientError::Server(format!("failed to bind to {}: {}", address, error))
-  })?;
+  let router = build_router(state);
+  let address = format!("{}:{}", config.host, config.port);
+  let listener = TcpListener::bind(&address)
+    .await
+    .map_err(|error| ClientError::Server(format!("failed to bind to {}: {}", address, error)))?;
 
   tracing::info!("aeordb-client listening on {}", address);
 
-  axum::serve(listener, router).await.map_err(|error| {
-    ClientError::Server(format!("server error: {}", error))
-  })?;
+  axum::serve(listener, router)
+    .await
+    .map_err(|error| ClientError::Server(format!("server error: {}", error)))?;
 
   Ok(())
 }
@@ -266,7 +350,8 @@ pub async fn start_server(config: ServerConfig) -> Result<()> {
 pub async fn start_server_with_handle(
   config: ServerConfig,
 ) -> Result<(SocketAddr, tokio::task::JoinHandle<Result<()>>)> {
-  let state    = create_app_state(&config)?;
+  let state = create_app_state(&config)?;
+  state.state_store.start_maintenance_tasks();
   let _health_handle = start_health_pinger(
     state.config_store.clone(),
     state.event_tx.clone(),
@@ -281,22 +366,22 @@ pub async fn start_server_with_handle(
     });
   }
 
-  let router   = build_router(state);
-  let address  = format!("{}:{}", config.host, config.port);
-  let listener = TcpListener::bind(&address).await.map_err(|error| {
-    ClientError::Server(format!("failed to bind to {}: {}", address, error))
-  })?;
+  let router = build_router(state);
+  let address = format!("{}:{}", config.host, config.port);
+  let listener = TcpListener::bind(&address)
+    .await
+    .map_err(|error| ClientError::Server(format!("failed to bind to {}: {}", address, error)))?;
 
-  let bound_address = listener.local_addr().map_err(|error| {
-    ClientError::Server(format!("failed to get local address: {}", error))
-  })?;
+  let bound_address = listener
+    .local_addr()
+    .map_err(|error| ClientError::Server(format!("failed to get local address: {}", error)))?;
 
   tracing::info!("aeordb-client listening on {}", bound_address);
 
   let handle = tokio::spawn(async move {
-    axum::serve(listener, router).await.map_err(|error| {
-      ClientError::Server(format!("server error: {}", error))
-    })?;
+    axum::serve(listener, router)
+      .await
+      .map_err(|error| ClientError::Server(format!("server error: {}", error)))?;
 
     Ok(())
   });

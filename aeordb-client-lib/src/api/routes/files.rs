@@ -1,10 +1,13 @@
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{Json, Response};
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio_util::io::ReaderStream;
 
 use crate::connections::ConnectionManager;
 use crate::error::ClientError;
@@ -19,32 +22,32 @@ use crate::sync::relationships::{RelationshipManager, SyncRelationship};
 
 #[derive(Debug, Serialize)]
 pub struct BrowseResponse {
-  pub relationship_id:   String,
+  pub relationship_id: String,
   pub relationship_name: String,
-  pub remote_path:       String,
-  pub local_path:        String,
-  pub entries:           Vec<BrowseEntry>,
-  pub total:             Option<u64>,
-  pub limit:             Option<u64>,
-  pub offset:            Option<u64>,
+  pub remote_path: String,
+  pub local_path: String,
+  pub entries: Vec<BrowseEntry>,
+  pub total: Option<u64>,
+  pub limit: Option<u64>,
+  pub offset: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct BrowseQuery {
-  pub limit:  Option<u64>,
+  pub limit: Option<u64>,
   pub offset: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct BrowseEntry {
-  pub name:         String,
-  pub entry_type:   u8,
-  pub size:         u64,
+  pub name: String,
+  pub entry_type: u8,
+  pub size: u64,
   pub content_type: Option<String>,
-  pub created_at:   i64,
-  pub updated_at:   i64,
-  pub sync_status:  String,
-  pub has_local:    bool,
+  pub created_at: i64,
+  pub updated_at: i64,
+  pub sync_status: String,
+  pub has_local: bool,
   pub effective_permissions: Option<String>,
 }
 
@@ -80,15 +83,20 @@ async fn load_relationship_client(
 ) -> Result<(SyncRelationship, RemoteClient), ClientError> {
   let relationship_manager = RelationshipManager::new(&state.config_store);
   let relationship = relationship_manager
-    .get(relationship_id).await?
+    .get(relationship_id)
+    .await?
     .ok_or_else(|| ClientError::NotFound(format!("relationship not found: {}", relationship_id)))?;
 
   let connection_manager = ConnectionManager::new(&state.config_store);
   let connection = connection_manager
-    .get(&relationship.remote_connection_id).await?
-    .ok_or_else(|| ClientError::NotFound(
-      format!("connection not found: {}", relationship.remote_connection_id),
-    ))?;
+    .get(&relationship.remote_connection_id)
+    .await?
+    .ok_or_else(|| {
+      ClientError::NotFound(format!(
+        "connection not found: {}",
+        relationship.remote_connection_id
+      ))
+    })?;
 
   let jwt_slot = state.jwt_cache.slot_for(&relationship.remote_connection_id);
   let client = RemoteClient::from_connection_cached(&connection, &state.http_client, jwt_slot);
@@ -137,26 +145,183 @@ fn guess_content_type(path: &str) -> &'static str {
   let extension = path.rsplit('.').next().unwrap_or("");
   match extension.to_ascii_lowercase().as_str() {
     "html" | "htm" => "text/html",
-    "css"          => "text/css",
-    "js"           => "application/javascript",
-    "json"         => "application/json",
-    "xml"          => "application/xml",
-    "txt"          => "text/plain",
-    "md"           => "text/markdown",
-    "csv"          => "text/csv",
-    "pdf"          => "application/pdf",
-    "png"          => "image/png",
+    "css" => "text/css",
+    "js" => "application/javascript",
+    "json" => "application/json",
+    "xml" => "application/xml",
+    "txt" => "text/plain",
+    "md" => "text/markdown",
+    "csv" => "text/csv",
+    "pdf" => "application/pdf",
+    "png" => "image/png",
     "jpg" | "jpeg" => "image/jpeg",
-    "gif"          => "image/gif",
-    "svg"          => "image/svg+xml",
-    "webp"         => "image/webp",
-    "zip"          => "application/zip",
-    "gz" | "gzip"  => "application/gzip",
-    "tar"          => "application/x-tar",
+    "gif" => "image/gif",
+    "svg" => "image/svg+xml",
+    "webp" => "image/webp",
+    "mp4" | "m4v" => "video/mp4",
+    "webm" => "video/webm",
+    "ogv" | "ogg" => "video/ogg",
+    "mov" => "video/quicktime",
+    "avi" => "video/x-msvideo",
+    "mkv" => "video/x-matroska",
+    "mp3" => "audio/mpeg",
+    "wav" => "audio/wav",
+    "flac" => "audio/flac",
+    "aac" => "audio/aac",
+    "m4a" => "audio/mp4",
+    "zip" => "application/zip",
+    "gz" | "gzip" => "application/gzip",
+    "tar" => "application/x-tar",
     "yaml" | "yml" => "application/yaml",
-    "toml"         => "application/toml",
-    "wasm"         => "application/wasm",
-    _              => "application/octet-stream",
+    "toml" => "application/toml",
+    "wasm" => "application/wasm",
+    _ => "application/octet-stream",
+  }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ByteRange {
+  start: u64,
+  end: u64,
+}
+
+impl ByteRange {
+  fn len(self) -> u64 {
+    self.end.saturating_sub(self.start) + 1
+  }
+}
+
+fn parse_byte_range(
+  range_header: Option<&HeaderValue>,
+  file_len: u64,
+) -> Result<Option<ByteRange>, ()> {
+  let Some(range_header) = range_header else {
+    return Ok(None);
+  };
+  let Ok(range_value) = range_header.to_str() else {
+    return Err(());
+  };
+
+  let Some(spec) = range_value.trim().strip_prefix("bytes=") else {
+    // Unknown range units should be ignored rather than failed.
+    return Ok(None);
+  };
+
+  if file_len == 0 || spec.contains(',') {
+    return Err(());
+  }
+
+  let Some((start_raw, end_raw)) = spec.split_once('-') else {
+    return Err(());
+  };
+
+  let range = if start_raw.is_empty() {
+    let suffix_len = end_raw.parse::<u64>().map_err(|_| ())?;
+    if suffix_len == 0 {
+      return Err(());
+    }
+    let start = file_len.saturating_sub(suffix_len);
+    ByteRange {
+      start,
+      end: file_len - 1,
+    }
+  } else {
+    let start = start_raw.parse::<u64>().map_err(|_| ())?;
+    if start >= file_len {
+      return Err(());
+    }
+
+    let end = if end_raw.is_empty() {
+      file_len - 1
+    } else {
+      end_raw.parse::<u64>().map_err(|_| ())?.min(file_len - 1)
+    };
+
+    if end < start {
+      return Err(());
+    }
+
+    ByteRange { start, end }
+  };
+
+  Ok(Some(range))
+}
+
+fn last_modified_millis(modified: Option<SystemTime>) -> Option<String> {
+  let modified = modified?;
+  modified
+    .duration_since(SystemTime::UNIX_EPOCH)
+    .ok()
+    .map(|duration| duration.as_millis().to_string())
+}
+
+async fn serve_local_file(
+  local_path: &Path,
+  relative_path: &str,
+  request_headers: &HeaderMap,
+) -> Result<Response, ClientError> {
+  let mut file = tokio::fs::File::open(local_path)
+    .await
+    .map_err(|error| ClientError::Server(error.to_string()))?;
+  let metadata = file
+    .metadata()
+    .await
+    .map_err(|error| ClientError::Server(error.to_string()))?;
+  let file_len = metadata.len();
+  let content_type = guess_content_type(relative_path);
+  let modified_ms = last_modified_millis(metadata.modified().ok());
+
+  let range = match parse_byte_range(request_headers.get(header::RANGE), file_len) {
+    Ok(range) => range,
+    Err(()) => {
+      let mut response_builder = Response::builder()
+        .status(StatusCode::RANGE_NOT_SATISFIABLE)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_RANGE, format!("bytes */{}", file_len))
+        .header(header::CONTENT_LENGTH, "0");
+      if let Some(modified_ms) = modified_ms {
+        response_builder = response_builder.header("x-aeordb-updated", modified_ms);
+      }
+      return response_builder
+        .body(Body::empty())
+        .map_err(|error| ClientError::Server(error.to_string()));
+    }
+  };
+
+  let mut response_builder = Response::builder()
+    .header(header::CONTENT_TYPE, content_type)
+    .header(header::ACCEPT_RANGES, "bytes")
+    .header("x-aeordb-size", file_len.to_string());
+  if let Some(modified_ms) = modified_ms {
+    response_builder = response_builder.header("x-aeordb-updated", modified_ms);
+  }
+
+  if let Some(range) = range {
+    file
+      .seek(std::io::SeekFrom::Start(range.start))
+      .await
+      .map_err(|error| ClientError::Server(error.to_string()))?;
+    let stream = ReaderStream::new(file.take(range.len()));
+    response_builder = response_builder
+      .status(StatusCode::PARTIAL_CONTENT)
+      .header(
+        header::CONTENT_RANGE,
+        format!("bytes {}-{}/{}", range.start, range.end, file_len),
+      )
+      .header(header::CONTENT_LENGTH, range.len().to_string());
+
+    response_builder
+      .body(Body::from_stream(stream))
+      .map_err(|error| ClientError::Server(error.to_string()))
+  } else {
+    let stream = ReaderStream::new(file);
+    response_builder = response_builder
+      .status(StatusCode::OK)
+      .header(header::CONTENT_LENGTH, file_len.to_string());
+
+    response_builder
+      .body(Body::from_stream(stream))
+      .map_err(|error| ClientError::Server(error.to_string()))
   }
 }
 
@@ -180,7 +345,7 @@ fn guess_content_type(path: &str) -> &'static str {
 
 /// Compute the full remote path for a relative path within a relationship.
 fn compute_remote_path(relationship: &SyncRelationship, relative_path: &str) -> String {
-  let base     = relationship.remote_path.trim_end_matches('/');
+  let base = relationship.remote_path.trim_end_matches('/');
   let relative = relative_path.trim_start_matches('/');
   if relative.is_empty() {
     format!("{}/", base)
@@ -193,7 +358,8 @@ fn compute_remote_path(relationship: &SyncRelationship, relative_path: &str) -> 
 /// Used by handlers whose request body has a `paths: Vec<String>` field
 /// (e.g. copy).
 fn compute_remote_paths(relationship: &SyncRelationship, relative_paths: &[String]) -> Vec<String> {
-  relative_paths.iter()
+  relative_paths
+    .iter()
     .map(|p| compute_remote_path(relationship, p))
     .collect()
 }
@@ -212,7 +378,11 @@ fn strip_remote_prefix(relationship: &SyncRelationship, abs_path: &str) -> Strin
   }
   if let Some(rest) = abs_path.strip_prefix(base) {
     // rest is "" if the path == base, otherwise starts with "/".
-    if rest.is_empty() { "/".to_string() } else { rest.to_string() }
+    if rest.is_empty() {
+      "/".to_string()
+    } else {
+      rest.to_string()
+    }
   } else {
     abs_path.to_string()
   }
@@ -263,7 +433,7 @@ fn strip_paths_in_json(relationship: &SyncRelationship, value: &mut serde_json::
 
 /// Compute the local subdirectory path string for a relative path within a relationship.
 fn compute_local_subpath(relationship: &SyncRelationship, relative_path: &str) -> String {
-  let base     = relationship.local_path.trim_end_matches('/');
+  let base = relationship.local_path.trim_end_matches('/');
   let relative = relative_path.trim_start_matches('/');
   if relative.is_empty() {
     format!("{}/", base)
@@ -290,8 +460,7 @@ fn compute_local_subpath(relationship: &SyncRelationship, relative_path: &str) -
 ///   4. not_synced     → no metadata for any descendant. Fall back to
 ///                       the directory's own disk presence: a folder
 ///                       that exists locally with no per-file metadata
-///                       (the typical post-force-resync state) reads
-///                       as "synced enough" rather than uniformly gray;
+///                       reads as "synced enough" rather than uniformly gray;
 ///                       a folder that doesn't exist locally reads as
 ///                       genuinely not synced.
 ///
@@ -308,11 +477,11 @@ fn folder_rollup_status(
   // named "/Pictures/FamilyArchive".
   let prefix = format!("{}/", dir_remote_path.trim_end_matches('/'));
 
-  let mut saw_any   = false;
+  let mut saw_any = false;
   let mut any_error = false;
-  let mut any_push  = false;
-  let mut any_pull  = false;
-  let mut all_synced = true;  // optimistic; flipped when we see a non-synced child
+  let mut any_push = false;
+  let mut any_pull = false;
+  let mut all_synced = true; // optimistic; flipped when we see a non-synced child
 
   for meta in all_metas {
     if !meta.path.starts_with(&prefix) {
@@ -320,21 +489,42 @@ fn folder_rollup_status(
     }
     saw_any = true;
     match meta.sync_status {
-      SyncStatus::Synced      => {},
-      SyncStatus::PendingPush => { any_push = true;  all_synced = false; },
-      SyncStatus::PendingPull => { any_pull = true;  all_synced = false; },
-      SyncStatus::Error       => { any_error = true; all_synced = false; },
+      SyncStatus::Synced => {}
+      SyncStatus::PendingPush => {
+        any_push = true;
+        all_synced = false;
+      }
+      SyncStatus::PendingPull => {
+        any_pull = true;
+        all_synced = false;
+      }
+      SyncStatus::Error => {
+        any_error = true;
+        all_synced = false;
+      }
     }
   }
 
-  if any_error  { return "error".to_string(); }
-  if any_push   { return "pending_push".to_string(); }
-  if any_pull   { return "pending_pull".to_string(); }
-  if saw_any && all_synced { return "synced".to_string(); }
+  if any_error {
+    return "error".to_string();
+  }
+  if any_push {
+    return "pending_push".to_string();
+  }
+  if any_pull {
+    return "pending_pull".to_string();
+  }
+  if saw_any && all_synced {
+    return "synced".to_string();
+  }
 
   // No descendant metadata at all. Fall back to the directory's disk
   // presence — same semantics as the per-file fallback above.
-  if dir_has_local { "synced".to_string() } else { "not_synced".to_string() }
+  if dir_has_local {
+    "synced".to_string()
+  } else {
+    "not_synced".to_string()
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -405,11 +595,10 @@ pub async fn browse(
     // at some prior point and there's nothing pending against it; if
     // it doesn't exist it really hasn't been synced.
     //
-    // Why this fallback matters: `clear_relationship_state()` (force-
-    // resync) wipes the per-file metadata but deliberately leaves the
-    // local files in place. Without the fallback every browse after a
-    // force-resync reports "not_synced" for every file that's actually
-    // already on disk and correctly content-identical to the remote.
+    // Why this fallback matters: older or repaired state may be missing
+    // per-file metadata while the local file still exists. Without the
+    // fallback those files render as "not_synced" even when they are already
+    // on disk and content-identical to the remote.
     //
     // For DIRECTORIES, the sync_status is a rollup of all descendants'
     // statuses (see folder_rollup_status below) — there's no per-
@@ -420,22 +609,28 @@ pub async fn browse(
     } else {
       match metadata_store.get_file_meta(relationship_id, &entry_remote_path) {
         Ok(Some(meta)) => match meta.sync_status {
-          SyncStatus::Synced      => "synced".to_string(),
+          SyncStatus::Synced => "synced".to_string(),
           SyncStatus::PendingPush => "pending_push".to_string(),
           SyncStatus::PendingPull => "pending_pull".to_string(),
-          SyncStatus::Error       => "error".to_string(),
+          SyncStatus::Error => "error".to_string(),
         },
-        _ => if has_local { "synced".to_string() } else { "not_synced".to_string() },
+        _ => {
+          if has_local {
+            "synced".to_string()
+          } else {
+            "not_synced".to_string()
+          }
+        }
       }
     };
 
     entries.push(BrowseEntry {
-      name:         entry.name,
-      entry_type:   entry.entry_type,
-      size:         entry.size,
+      name: entry.name,
+      entry_type: entry.entry_type,
+      size: entry.size,
       content_type: entry.content_type,
-      created_at:   entry.created_at,
-      updated_at:   entry.updated_at,
+      created_at: entry.created_at,
+      updated_at: entry.updated_at,
       sync_status,
       has_local,
       effective_permissions: entry.effective_permissions,
@@ -443,14 +638,14 @@ pub async fn browse(
   }
 
   Ok(Json(BrowseResponse {
-    relationship_id:   relationship_id.clone(),
+    relationship_id: relationship_id.clone(),
     relationship_name: relationship.name.clone(),
     remote_path,
-    local_path:        local_subpath,
+    local_path: local_subpath,
     entries,
-    total:             listing.total,
-    limit:             listing.limit,
-    offset:            listing.offset,
+    total: listing.total,
+    limit: listing.limit,
+    offset: listing.offset,
   }))
 }
 
@@ -458,7 +653,7 @@ pub async fn browse(
 #[derive(Debug, Deserialize)]
 pub struct BrowseParams {
   pub relationship_id: String,
-  pub path:            Option<String>,
+  pub path: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +665,7 @@ pub async fn serve_file(
   State(state): State<AppState>,
   AxumPath((relationship_id, relative_path)): AxumPath<(String, String)>,
   Query(query): Query<ServeQuery>,
+  headers: HeaderMap,
 ) -> Result<Response, ClientError> {
   let (relationship, remote_client) = load_relationship_client(&state, &relationship_id).await?;
 
@@ -488,19 +684,7 @@ pub async fn serve_file(
   // Serve from local if we can (and not forced to remote)
   if !force_remote && local_exists {
     tracing::info!("serving local file: {}", local_path.display());
-    let bytes = tokio::fs::read(&local_path)
-      .await
-      .map_err(|error| ClientError::Server(error.to_string()))?;
-
-    let content_type = guess_content_type(&relative_path);
-
-    let response = Response::builder()
-      .status(StatusCode::OK)
-      .header(header::CONTENT_TYPE, content_type)
-      .body(Body::from(bytes))
-      .map_err(|error| ClientError::Server(error.to_string()))?;
-
-    return Ok(response);
+    return serve_local_file(&local_path, &relative_path, &headers).await;
   }
 
   // Proxy from remote
@@ -508,9 +692,16 @@ pub async fn serve_file(
   tracing::info!("serving remote file: {}", remote_path);
 
   let (resp, metadata) = remote_client
-    .download_file(&remote_path)
+    .download_file_with_range(
+      &remote_path,
+      headers
+        .get(header::RANGE)
+        .and_then(|value| value.to_str().ok()),
+    )
     .await
     .map_err(|error| ClientError::BadGateway(error.to_string()))?;
+  let status = resp.status();
+  let upstream_headers = resp.headers().clone();
 
   let content_type = metadata
     .content_type
@@ -522,11 +713,21 @@ pub async fn serve_file(
   let body = Body::from_stream(stream);
 
   let response = Response::builder()
-    .status(StatusCode::OK)
+    .status(status)
     .header(header::CONTENT_TYPE, content_type)
+    .header(header::ACCEPT_RANGES, "bytes")
+    .header("x-aeordb-size", metadata.size.to_string())
     .body(body)
     .map_err(|error| ClientError::Server(error.to_string()))?;
 
+  let mut response = response;
+  for header_name in [header::CONTENT_LENGTH, header::CONTENT_RANGE] {
+    if let Some(header_value) = upstream_headers.get(&header_name) {
+      response
+        .headers_mut()
+        .insert(header_name, header_value.clone());
+    }
+  }
   Ok(response)
 }
 
@@ -552,7 +753,11 @@ pub async fn upload_file(
   tracing::info!("uploading to remote: {}", remote_path);
 
   remote_client
-    .upload_file(&remote_path, reqwest::Body::from(body.to_vec()), content_type.as_deref())
+    .upload_file(
+      &remote_path,
+      reqwest::Body::from(body.to_vec()),
+      content_type.as_deref(),
+    )
     .await
     .map_err(|error| ClientError::BadGateway(error.to_string()))?;
 
@@ -598,13 +803,17 @@ pub async fn open_locally(
 ) -> Result<Json<serde_json::Value>, ClientError> {
   let relationship_manager = RelationshipManager::new(&state.config_store);
   let relationship = relationship_manager
-    .get(&relationship_id).await?
+    .get(&relationship_id)
+    .await?
     .ok_or_else(|| ClientError::NotFound(format!("relationship not found: {}", relationship_id)))?;
 
   let local_path = safe_local_path(&relationship, &request.path)?;
 
   if !local_path.exists() {
-    return Err(ClientError::NotFound(format!("file not found locally: {}", request.path)));
+    return Err(ClientError::NotFound(format!(
+      "file not found locally: {}",
+      request.path
+    )));
   }
 
   open::that(&local_path)
@@ -620,7 +829,7 @@ pub async fn open_locally(
 #[derive(Debug, Deserialize)]
 pub struct RenameRequest {
   pub from: String,
-  pub to:   String,
+  pub to: String,
 }
 
 /// POST /api/v1/files/{relationship_id}/rename — rename/move a file on the remote.
@@ -631,7 +840,9 @@ pub async fn rename_file(
 ) -> Result<Json<serde_json::Value>, ClientError> {
   let (_, remote_client) = load_relationship_client(&state, &relationship_id).await?;
 
-  remote_client.rename_file(&request.from, &request.to).await
+  remote_client
+    .rename_file(&request.from, &request.to)
+    .await
     .map_err(|error| ClientError::BadGateway(error.to_string()))?;
 
   tracing::info!("renamed {} to {}", request.from, request.to);
@@ -654,7 +865,9 @@ pub async fn rename_file(
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
-pub struct DeletedQuery { pub path: Option<String> }
+pub struct DeletedQuery {
+  pub path: Option<String>,
+}
 
 /// GET /api/v1/browse/{relationship_id}/deleted?path=…
 pub async fn list_deleted(
@@ -671,7 +884,9 @@ pub async fn list_deleted(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct RestoreRequest { pub path: String }
+pub struct RestoreRequest {
+  pub path: String,
+}
 
 /// POST /api/v1/files/{relationship_id}/restore — body: {path}
 /// `path` is relationship-relative.
@@ -709,7 +924,9 @@ pub async fn list_snapshots(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateSnapshotRequest { pub name: String }
+pub struct CreateSnapshotRequest {
+  pub name: String,
+}
 
 /// POST /api/v1/snapshots/{relationship_id} — body: {name}
 pub async fn create_snapshot(
@@ -722,7 +939,9 @@ pub async fn create_snapshot(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct RestoreFromSnapshotRequest { pub path: String }
+pub struct RestoreFromSnapshotRequest {
+  pub path: String,
+}
 
 /// POST /api/v1/snapshots/{relationship_id}/{snapshot_id}/restore — body: {path}
 pub async fn restore_from_snapshot(
@@ -732,12 +951,15 @@ pub async fn restore_from_snapshot(
 ) -> Result<Json<serde_json::Value>, ClientError> {
   let (rel, client) = load_relationship_client(&state, &relationship_id).await?;
   let remote_path = compute_remote_path(&rel, &req.path);
-  client.restore_from_snapshot(&snapshot_id, &remote_path).await.map(Json)
+  client
+    .restore_from_snapshot(&snapshot_id, &remote_path)
+    .await
+    .map(Json)
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CopyRequest {
-  pub paths:       Vec<String>,
+  pub paths: Vec<String>,
   pub destination: String,
 }
 
@@ -756,7 +978,7 @@ pub async fn copy_files(
 
 #[derive(Debug, Deserialize)]
 pub struct SymlinkRequest {
-  pub path:   String,
+  pub path: String,
   pub target: String,
 }
 
@@ -770,6 +992,8 @@ pub async fn create_symlink(
 ) -> Result<Json<serde_json::Value>, ClientError> {
   let (rel, client) = load_relationship_client(&state, &relationship_id).await?;
   let remote_path = compute_remote_path(&rel, &req.path);
-  client.create_symlink_via_header(&remote_path, &req.target).await?;
+  client
+    .create_symlink_via_header(&remote_path, &req.target)
+    .await?;
   Ok(Json(serde_json::json!({ "ok": true })))
 }

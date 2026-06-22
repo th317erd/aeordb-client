@@ -18,15 +18,20 @@ async fn load_connection_and_client(
 ) -> Result<(RemoteClient, crate::connections::RemoteConnection), ClientError> {
   let relationship_manager = RelationshipManager::new(&state.config_store);
   let relationship = relationship_manager
-    .get(relationship_id).await?
+    .get(relationship_id)
+    .await?
     .ok_or_else(|| ClientError::NotFound(format!("relationship not found: {}", relationship_id)))?;
 
   let connection_manager = ConnectionManager::new(&state.config_store);
   let connection = connection_manager
-    .get(&relationship.remote_connection_id).await?
-    .ok_or_else(|| ClientError::NotFound(
-      format!("connection not found: {}", relationship.remote_connection_id),
-    ))?;
+    .get(&relationship.remote_connection_id)
+    .await?
+    .ok_or_else(|| {
+      ClientError::NotFound(format!(
+        "connection not found: {}",
+        relationship.remote_connection_id
+      ))
+    })?;
 
   let client = RemoteClient::from_connection(&connection, &state.http_client);
   Ok((client, connection))
@@ -53,8 +58,7 @@ pub async fn get_shares(
   let (client, _) = load_connection_and_client(&state, &relationship_id).await?;
   let path = query.path.as_deref().unwrap_or("/");
 
-  let result = client.get_shares(path).await
-    .map_err(|e| ClientError::BadGateway(e.to_string()))?;
+  let result = client.get_shares(path).await?;
 
   Ok(Json(result))
 }
@@ -70,8 +74,7 @@ pub async fn share(
 ) -> Result<Json<serde_json::Value>, ClientError> {
   let (client, _) = load_connection_and_client(&state, &relationship_id).await?;
 
-  let result = client.share(&body).await
-    .map_err(|e| ClientError::BadGateway(e.to_string()))?;
+  let result = client.share(&body).await?;
 
   Ok(Json(result))
 }
@@ -87,8 +90,7 @@ pub async fn unshare(
 ) -> Result<Json<serde_json::Value>, ClientError> {
   let (client, _) = load_connection_and_client(&state, &relationship_id).await?;
 
-  let result = client.unshare(&body).await
-    .map_err(|e| ClientError::BadGateway(e.to_string()))?;
+  let result = client.unshare(&body).await?;
 
   Ok(Json(result))
 }
@@ -103,8 +105,7 @@ pub async fn get_shareable_users(
 ) -> Result<Json<serde_json::Value>, ClientError> {
   let (client, _) = load_connection_and_client(&state, &relationship_id).await?;
 
-  let result = client.get_shareable_users().await
-    .map_err(|e| ClientError::BadGateway(e.to_string()))?;
+  let result = client.get_shareable_users().await?;
 
   Ok(Json(result))
 }
@@ -119,8 +120,7 @@ pub async fn get_shareable_groups(
 ) -> Result<Json<serde_json::Value>, ClientError> {
   let (client, _) = load_connection_and_client(&state, &relationship_id).await?;
 
-  let result = client.get_shareable_groups().await
-    .map_err(|e| ClientError::BadGateway(e.to_string()))?;
+  let result = client.get_shareable_groups().await?;
 
   Ok(Json(result))
 }
@@ -143,8 +143,7 @@ pub async fn create_share_link(
     obj.insert("base_url".to_string(), serde_json::Value::String(share_url));
   }
 
-  let result = client.create_share_link(&body).await
-    .map_err(|e| ClientError::BadGateway(e.to_string()))?;
+  let result = client.create_share_link(&body).await?;
 
   Ok(Json(result))
 }
@@ -161,8 +160,7 @@ pub async fn get_share_links(
   let (client, _) = load_connection_and_client(&state, &relationship_id).await?;
   let path = query.path.as_deref().unwrap_or("/");
 
-  let result = client.get_share_links(path).await
-    .map_err(|e| ClientError::BadGateway(e.to_string()))?;
+  let result = client.get_share_links(path).await?;
 
   Ok(Json(result))
 }
@@ -177,8 +175,7 @@ pub async fn revoke_share_link(
 ) -> Result<Json<serde_json::Value>, ClientError> {
   let (client, _) = load_connection_and_client(&state, &relationship_id).await?;
 
-  let result = client.revoke_share_link(&key_id).await
-    .map_err(|e| ClientError::BadGateway(e.to_string()))?;
+  let result = client.revoke_share_link(&key_id).await?;
 
   Ok(Json(result))
 }

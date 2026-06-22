@@ -6,7 +6,7 @@ use anyhow::Result;
 
 /// Helper: make a GET request and return the JSON body.
 pub async fn api_get(host: &str, path: &str) -> Result<serde_json::Value> {
-  let url      = format!("{}{}", host, path);
+  let url = format!("{}{}", host, path);
   let response = reqwest::get(&url).await?;
 
   if !response.status().is_success() {
@@ -20,9 +20,13 @@ pub async fn api_get(host: &str, path: &str) -> Result<serde_json::Value> {
 }
 
 /// Helper: make a POST request with JSON body.
-pub async fn api_post(host: &str, path: &str, body: &serde_json::Value) -> Result<serde_json::Value> {
-  let url      = format!("{}{}", host, path);
-  let client   = reqwest::Client::new();
+pub async fn api_post(
+  host: &str,
+  path: &str,
+  body: &serde_json::Value,
+) -> Result<serde_json::Value> {
+  let url = format!("{}{}", host, path);
+  let client = reqwest::Client::new();
   let response = client.post(&url).json(body).send().await?;
 
   if !response.status().is_success() {
@@ -37,8 +41,8 @@ pub async fn api_post(host: &str, path: &str, body: &serde_json::Value) -> Resul
 
 /// Helper: make a DELETE request.
 pub async fn api_delete(host: &str, path: &str) -> Result<()> {
-  let url      = format!("{}{}", host, path);
-  let client   = reqwest::Client::new();
+  let url = format!("{}{}", host, path);
+  let client = reqwest::Client::new();
   let response = client.delete(&url).send().await?;
 
   if !response.status().is_success() {
@@ -52,9 +56,16 @@ pub async fn api_delete(host: &str, path: &str) -> Result<()> {
 }
 
 /// Helper: print JSON or formatted output.
-pub fn print_output(json_mode: bool, value: &serde_json::Value, formatter: impl FnOnce(&serde_json::Value)) {
+pub fn print_output(
+  json_mode: bool,
+  value: &serde_json::Value,
+  formatter: impl FnOnce(&serde_json::Value),
+) {
   if json_mode {
-    println!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
+    println!(
+      "{}",
+      serde_json::to_string_pretty(value).unwrap_or_default()
+    );
   } else {
     formatter(value);
   }

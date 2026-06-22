@@ -19,12 +19,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast};
 use tokio::task::JoinHandle;
 
-use crate::connections::ConnectionManager;
 use crate::config::ConfigStore;
+use crate::connections::ConnectionManager;
 use crate::server::ServerEvent;
 
 const PING_INTERVAL: Duration = Duration::from_secs(10);
@@ -32,7 +32,7 @@ const PING_INTERVAL: Duration = Duration::from_secs(10);
 /// Public health status for a connection. `Unknown` is the bootstrap
 /// state before the first ping completes — we don't broadcast it; the
 /// first real flip is always to either `Up` or `Down`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HealthStatus {
   Unknown,
@@ -43,12 +43,12 @@ pub enum HealthStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct HealthSnapshot {
   pub connection_id: String,
-  pub status:        HealthStatus,
+  pub status: HealthStatus,
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub latency_ms:    Option<u64>,
+  pub latency_ms: Option<u64>,
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub message:       Option<String>,
-  pub checked_at:    i64, // unix millis
+  pub message: Option<String>,
+  pub checked_at: i64, // unix millis
 }
 
 /// Shared map of `connection_id -> HealthSnapshot`. The pinger task
@@ -63,15 +63,13 @@ pub fn new_health_map() -> HealthMap {
 /// it for shutdown; in practice we let it run for the process lifetime.
 pub fn start_health_pinger(
   config_store: Arc<ConfigStore>,
-  event_tx:     broadcast::Sender<ServerEvent>,
-  health_map:   HealthMap,
+  event_tx: broadcast::Sender<ServerEvent>,
+  health_map: HealthMap,
 ) -> JoinHandle<()> {
   tokio::spawn(async move {
     let mut interval = tokio::time::interval(PING_INTERVAL);
-    // Skip the immediate first tick — that one always fires synchronously
-    // on the first await. We want the first real ping to happen after the
-    // first delay so the server has finished booting other components.
-    interval.tick().await;
+
+    tick(&config_store, &event_tx, &health_map).await;
 
     loop {
       interval.tick().await;
@@ -82,12 +80,12 @@ pub fn start_health_pinger(
 
 async fn tick(
   config_store: &Arc<ConfigStore>,
-  event_tx:     &broadcast::Sender<ServerEvent>,
-  health_map:   &HealthMap,
+  event_tx: &broadcast::Sender<ServerEvent>,
+  health_map: &HealthMap,
 ) {
   let manager = ConnectionManager::new(config_store);
   let connections = match manager.list().await {
-    Ok(c)  => c,
+    Ok(c) => c,
     Err(e) => {
       tracing::warn!("health pinger: failed to list connections: {}", e);
       return;
@@ -111,16 +109,15 @@ async fn tick(
 
   // Drop entries for connections that no longer exist (e.g. user deleted
   // one between ticks).
-  let current_ids: std::collections::HashSet<&str> = connections.iter()
-    .map(|c| c.id.as_str())
-    .collect();
+  let current_ids: std::collections::HashSet<&str> =
+    connections.iter().map(|c| c.id.as_str()).collect();
   map.retain(|id, _| current_ids.contains(id.as_str()));
 
   for (id, result) in results {
     let (status, latency_ms, message) = match result {
       Ok(test) => {
         if test.success {
-          (HealthStatus::Up,   test.latency_ms, None)
+          (HealthStatus::Up, test.latency_ms, None)
         } else {
           (HealthStatus::Down, test.latency_ms, Some(test.message))
         }

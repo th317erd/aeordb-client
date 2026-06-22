@@ -16,11 +16,11 @@ pub enum AuthType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteConnection {
-  pub id:         String,
-  pub name:       String,
-  pub url:        String,
-  pub auth_type:  AuthType,
-  pub api_key:    Option<String>,
+  pub id: String,
+  pub name: String,
+  pub url: String,
+  pub auth_type: AuthType,
+  pub api_key: Option<String>,
   #[serde(default)]
   pub share_base_url: Option<String>,
   pub created_at: DateTime<Utc>,
@@ -37,7 +37,9 @@ impl RemoteConnection {
   /// The base URL to use when generating share links.
   /// Falls back to the connection URL if no explicit share domain is set.
   pub fn effective_share_url(&self) -> String {
-    let raw = self.share_base_url.as_deref()
+    let raw = self
+      .share_base_url
+      .as_deref()
       .filter(|s| !s.is_empty())
       .unwrap_or(&self.url);
     normalize_url(raw)
@@ -79,20 +81,40 @@ fn is_same_host_https_upgrade(base_url: &reqwest::Url, target: &reqwest::Url) ->
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateConnectionRequest {
-  pub name:      String,
-  pub url:       String,
+  pub name: String,
+  pub url: String,
   pub auth_type: AuthType,
-  pub api_key:   Option<String>,
+  pub api_key: Option<String>,
   pub share_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateConnectionRequest {
-  pub name:      Option<String>,
-  pub url:       Option<String>,
+  pub name: Option<String>,
+  pub url: Option<String>,
   pub auth_type: Option<AuthType>,
-  pub api_key:   Option<String>,
-  pub share_base_url: Option<String>,
+  #[serde(
+    default,
+    deserialize_with = "deserialize_nullable_field",
+    skip_serializing_if = "Option::is_none"
+  )]
+  pub api_key: Option<Option<String>>,
+  #[serde(
+    default,
+    deserialize_with = "deserialize_nullable_field",
+    skip_serializing_if = "Option::is_none"
+  )]
+  pub share_base_url: Option<Option<String>>,
+}
+
+fn deserialize_nullable_field<'de, D, T>(
+  deserializer: D,
+) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+  D: serde::Deserializer<'de>,
+  T: Deserialize<'de>,
+{
+  Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,22 +140,29 @@ impl<'a> ConnectionManager<'a> {
     let url = normalize_url(&request.url);
 
     let connection = RemoteConnection {
-      id:         Uuid::new_v4().to_string(),
-      name:       request.name,
+      id: Uuid::new_v4().to_string(),
+      name: request.name,
       url,
-      auth_type:  request.auth_type,
-      api_key:    request.api_key,
+      auth_type: request.auth_type,
+      api_key: request.api_key,
       share_base_url: request.share_base_url,
       created_at: now,
       updated_at: now,
     };
 
     let new_connection = connection.clone();
-    self.config.update(|config| {
-      config.connections.push(new_connection);
-    }).await?;
+    self
+      .config
+      .update(|config| {
+        config.connections.push(new_connection);
+      })
+      .await?;
 
-    tracing::info!("created connection '{}' ({})", connection.name, connection.id);
+    tracing::info!(
+      "created connection '{}' ({})",
+      connection.name,
+      connection.id
+    );
     Ok(connection)
   }
 
@@ -149,66 +178,111 @@ impl<'a> ConnectionManager<'a> {
 
   pub async fn get(&self, id: &str) -> Result<Option<RemoteConnection>> {
     let config = self.config.get().await?;
-    Ok(config.connections.into_iter()
-      .find(|connection| connection.id == id)
-      .map(|mut connection| {
-        connection.url = normalize_url(&connection.url);
-        connection
-      }))
+    Ok(
+      config
+        .connections
+        .into_iter()
+        .find(|connection| connection.id == id)
+        .map(|mut connection| {
+          connection.url = normalize_url(&connection.url);
+          connection
+        }),
+    )
   }
 
-  pub async fn update(&self, id: &str, request: UpdateConnectionRequest) -> Result<RemoteConnection> {
+  pub async fn update(
+    &self,
+    id: &str,
+    request: UpdateConnectionRequest,
+  ) -> Result<RemoteConnection> {
     let mut updated_connection = None;
 
-    self.config.update(|config| {
-      let Some(connection) = config.connections.iter_mut().find(|c| c.id == id) else {
-        return;
-      };
+    self
+      .config
+      .update(|config| {
+        let Some(connection) = config.connections.iter_mut().find(|c| c.id == id) else {
+          return;
+        };
 
-      if let Some(name) = request.name {
-        connection.name = name;
-      }
-      if let Some(url) = request.url {
-        connection.url = normalize_url(&url);
-      }
-      if let Some(auth_type) = request.auth_type {
-        connection.auth_type = auth_type;
-      }
-      if let Some(api_key) = request.api_key {
-        connection.api_key = Some(api_key);
-      }
-      if let Some(share_base_url) = request.share_base_url {
-        connection.share_base_url = Some(share_base_url).filter(|s| !s.is_empty());
-      }
+        if let Some(name) = request.name {
+          connection.name = name;
+        }
+        if let Some(url) = request.url {
+          connection.url = normalize_url(&url);
+        }
+        if let Some(auth_type) = request.auth_type {
+          connection.auth_type = auth_type;
+          if connection.auth_type == AuthType::None {
+            connection.api_key = None;
+          }
+        }
+        if let Some(api_key) = request.api_key {
+          connection.api_key = api_key.filter(|s| !s.is_empty());
+          connection.auth_type = if connection.api_key.is_some() {
+            AuthType::ApiKey
+          } else {
+            AuthType::None
+          };
+        }
+        if let Some(share_base_url) = request.share_base_url {
+          connection.share_base_url = share_base_url.filter(|s| !s.is_empty());
+        }
 
-      connection.updated_at = Utc::now();
-      updated_connection = Some(connection.clone());
-    }).await?;
+        connection.updated_at = Utc::now();
+        updated_connection = Some(connection.clone());
+      })
+      .await?;
 
     match updated_connection {
       Some(connection) => {
-        tracing::info!("updated connection '{}' ({})", connection.name, connection.id);
+        tracing::info!(
+          "updated connection '{}' ({})",
+          connection.name,
+          connection.id
+        );
         Ok(connection)
       }
-      None => Err(ClientError::NotFound(
-        format!("connection not found: {}", id),
-      )),
+      None => Err(ClientError::NotFound(format!(
+        "connection not found: {}",
+        id
+      ))),
     }
   }
 
   pub async fn delete(&self, id: &str) -> Result<()> {
     let mut found = false;
+    let mut matching_relationships = 0usize;
 
-    self.config.update(|config| {
-      let before = config.connections.len();
-      config.connections.retain(|connection| connection.id != id);
-      found = config.connections.len() < before;
-    }).await?;
+    self
+      .config
+      .update(|config| {
+        matching_relationships = config
+          .relationships
+          .iter()
+          .filter(|relationship| relationship.remote_connection_id == id)
+          .count();
+        if matching_relationships > 0 {
+          return;
+        }
+
+        let before = config.connections.len();
+        config.connections.retain(|connection| connection.id != id);
+        found = config.connections.len() < before;
+      })
+      .await?;
+
+    if matching_relationships > 0 {
+      return Err(ClientError::BadRequest(format!(
+        "connection cannot be deleted while sync relationships are still configured against it ({} configured); delete those syncs first",
+        matching_relationships
+      )));
+    }
 
     if !found {
-      return Err(ClientError::NotFound(
-        format!("connection not found: {}", id),
-      ));
+      return Err(ClientError::NotFound(format!(
+        "connection not found: {}",
+        id
+      )));
     }
 
     tracing::info!("deleted connection {}", id);
@@ -217,13 +291,13 @@ impl<'a> ConnectionManager<'a> {
 
   /// Test connectivity to a remote aeordb instance.
   pub async fn test_connection(&self, id: &str) -> Result<ConnectionTestResult> {
-    let connection = self.get(id).await?
-      .ok_or_else(|| ClientError::NotFound(
-        format!("connection not found: {}", id),
-      ))?;
+    let connection = self
+      .get(id)
+      .await?
+      .ok_or_else(|| ClientError::NotFound(format!("connection not found: {}", id)))?;
 
     let health_url = format!("{}/system/health", connection.base_url());
-    let client     = reqwest::Client::new();
+    let client = reqwest::Client::new();
 
     let start = std::time::Instant::now();
     let mut request_builder = client.get(&health_url);
@@ -234,41 +308,34 @@ impl<'a> ConnectionManager<'a> {
       }
     }
 
-    match tokio::time::timeout(
-      std::time::Duration::from_secs(10),
-      request_builder.send(),
-    ).await {
+    match tokio::time::timeout(std::time::Duration::from_secs(10), request_builder.send()).await {
       Ok(Ok(response)) => {
         let latency = start.elapsed().as_millis() as u64;
 
         if response.status().is_success() {
           Ok(ConnectionTestResult {
-            success:    true,
-            message:    format!("connected (HTTP {})", response.status().as_u16()),
+            success: true,
+            message: format!("connected (HTTP {})", response.status().as_u16()),
             latency_ms: Some(latency),
           })
         } else {
           Ok(ConnectionTestResult {
-            success:    false,
-            message:    format!("server returned HTTP {}", response.status().as_u16()),
+            success: false,
+            message: format!("server returned HTTP {}", response.status().as_u16()),
             latency_ms: Some(latency),
           })
         }
       }
-      Ok(Err(error)) => {
-        Ok(ConnectionTestResult {
-          success:    false,
-          message:    format!("connection failed: {}", error),
-          latency_ms: None,
-        })
-      }
-      Err(_) => {
-        Ok(ConnectionTestResult {
-          success:    false,
-          message:    "connection timed out (10s)".to_string(),
-          latency_ms: None,
-        })
-      }
+      Ok(Err(error)) => Ok(ConnectionTestResult {
+        success: false,
+        message: format!("connection failed: {}", error),
+        latency_ms: None,
+      }),
+      Err(_) => Ok(ConnectionTestResult {
+        success: false,
+        message: "connection timed out (10s)".to_string(),
+        latency_ms: None,
+      }),
     }
   }
 }
@@ -294,11 +361,11 @@ impl<'a> ConnectionManager<'a> {
 /// left alone so we never silently send credentials somewhere new.
 pub async fn probe_and_upgrade_connection_urls(
   config_store: Arc<ConfigStore>,
-  jwt_cache:    crate::jwt_cache::JwtCache,
+  jwt_cache: crate::jwt_cache::JwtCache,
 ) {
   let manager = ConnectionManager::new(&config_store);
   let connections = match manager.list().await {
-    Ok(c)  => c,
+    Ok(c) => c,
     Err(e) => {
       tracing::warn!("URL upgrade probe: failed to list connections: {}", e);
       return;
@@ -312,7 +379,7 @@ pub async fn probe_and_upgrade_connection_urls(
     .redirect(reqwest::redirect::Policy::none())
     .build()
   {
-    Ok(c)  => c,
+    Ok(c) => c,
     Err(e) => {
       tracing::warn!("URL upgrade probe: failed to build HTTP client: {}", e);
       return;
@@ -331,7 +398,11 @@ pub async fn probe_and_upgrade_connection_urls(
     let resp = match probe_client.get(&probe_url).send().await {
       Ok(r) => r,
       Err(e) => {
-        tracing::debug!("URL upgrade probe: '{}' probe failed (likely offline): {}", conn.name, e);
+        tracing::debug!(
+          "URL upgrade probe: '{}' probe failed (likely offline): {}",
+          conn.name,
+          e
+        );
         continue;
       }
     };
@@ -341,11 +412,22 @@ pub async fn probe_and_upgrade_connection_urls(
       continue;
     }
 
-    let Some(location) = resp.headers().get(reqwest::header::LOCATION)
-      .and_then(|v| v.to_str().ok()) else { continue; };
-    let Ok(base_url)  = reqwest::Url::parse(&probe_url) else { continue; };
-    let Ok(target)    = base_url.join(location) else {
-      tracing::warn!("URL upgrade probe: '{}' redirect to unparseable Location '{}'", conn.name, location);
+    let Some(location) = resp
+      .headers()
+      .get(reqwest::header::LOCATION)
+      .and_then(|v| v.to_str().ok())
+    else {
+      continue;
+    };
+    let Ok(base_url) = reqwest::Url::parse(&probe_url) else {
+      continue;
+    };
+    let Ok(target) = base_url.join(location) else {
+      tracing::warn!(
+        "URL upgrade probe: '{}' redirect to unparseable Location '{}'",
+        conn.name,
+        location
+      );
       continue;
     };
 
@@ -357,7 +439,9 @@ pub async fn probe_and_upgrade_connection_urls(
       tracing::warn!(
         "URL upgrade probe: '{}' redirected from {} to {} (not a same-host http→https upgrade); \
          leaving connection URL unchanged",
-        conn.name, probe_url, target,
+        conn.name,
+        probe_url,
+        target,
       );
       continue;
     }
@@ -371,14 +455,17 @@ pub async fn probe_and_upgrade_connection_urls(
 
     tracing::info!(
       "URL upgrade probe: upgrading '{}' from {} to {} (engine returned {})",
-      conn.name, base, new_base, status,
+      conn.name,
+      base,
+      new_base,
+      status,
     );
 
     let update = UpdateConnectionRequest {
-      name:           None,
-      url:            Some(new_base),
-      auth_type:      None,
-      api_key:        None,
+      name: None,
+      url: Some(new_base),
+      auth_type: None,
+      api_key: None,
       share_base_url: None,
     };
     match manager.update(&conn.id, update).await {
@@ -392,7 +479,8 @@ pub async fn probe_and_upgrade_connection_urls(
       Err(e) => {
         tracing::warn!(
           "URL upgrade probe: failed to persist upgrade for '{}': {}",
-          conn.name, e,
+          conn.name,
+          e,
         );
       }
     }
@@ -413,12 +501,18 @@ mod tests {
   #[test]
   fn normalize_url_preserves_explicit_scheme() {
     assert_eq!(normalize_url("https://example.com"), "https://example.com");
-    assert_eq!(normalize_url("http://localhost:6830"), "http://localhost:6830");
+    assert_eq!(
+      normalize_url("http://localhost:6830"),
+      "http://localhost:6830"
+    );
   }
 
   #[test]
   fn normalize_url_strips_trailing_slashes_and_whitespace() {
-    assert_eq!(normalize_url("  http://example.com/  "), "http://example.com");
+    assert_eq!(
+      normalize_url("  http://example.com/  "),
+      "http://example.com"
+    );
     assert_eq!(normalize_url("localhost:6830///"), "http://localhost:6830");
   }
 
@@ -466,14 +560,14 @@ mod tests {
   #[test]
   fn base_url_normalizes_already_stored_value_without_scheme() {
     let connection = RemoteConnection {
-      id:             "1".to_string(),
-      name:           "test".to_string(),
-      url:            "localhost:6830".to_string(),
-      auth_type:      AuthType::None,
-      api_key:        None,
+      id: "1".to_string(),
+      name: "test".to_string(),
+      url: "localhost:6830".to_string(),
+      auth_type: AuthType::None,
+      api_key: None,
       share_base_url: None,
-      created_at:     Utc::now(),
-      updated_at:     Utc::now(),
+      created_at: Utc::now(),
+      updated_at: Utc::now(),
     };
     assert_eq!(connection.base_url(), "http://localhost:6830");
   }

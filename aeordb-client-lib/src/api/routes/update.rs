@@ -19,7 +19,11 @@ use crate::server::AppState;
 use crate::update;
 
 pub async fn update_status(State(state): State<AppState>) -> Json<update::UpdateInfo> {
-  let info = state.update_info.read().map(|g| g.clone()).unwrap_or_default();
+  let info = state
+    .update_info
+    .read()
+    .map(|g| g.clone())
+    .unwrap_or_default();
   Json(info)
 }
 
@@ -28,19 +32,25 @@ pub async fn update_check(
 ) -> Result<Json<update::UpdateInfo>, (StatusCode, String)> {
   let client = reqwest::Client::new();
   update::check_once(&client, &state.update_info).await;
-  let info = state.update_info.read().map(|g| g.clone()).unwrap_or_default();
+  let info = state
+    .update_info
+    .read()
+    .map(|g| g.clone())
+    .unwrap_or_default();
   Ok(Json(info))
 }
 
 /// NDJSON-streamed apply. Each line is a JSON `ProgressEvent`. After
 /// the stream closes the process exits 500ms later — the relauncher
 /// (already PID-polling) takes over from there.
-pub async fn update_apply(
-  State(state): State<AppState>,
-) -> Result<Response, (StatusCode, String)> {
+pub async fn update_apply(State(state): State<AppState>) -> Result<Response, (StatusCode, String)> {
   use axum::body::Body;
 
-  let info = state.update_info.read().map(|g| g.clone()).unwrap_or_default();
+  let info = state
+    .update_info
+    .read()
+    .map(|g| g.clone())
+    .unwrap_or_default();
   if !info.available {
     return Err((StatusCode::CONFLICT, "no update available".to_string()));
   }
@@ -50,7 +60,11 @@ pub async fn update_apply(
   tokio::spawn(async move {
     let result = update::apply_update(&info_for_task, Some(tx.clone())).await;
     if let Err(e) = result {
-      let _ = tx.send(update::ProgressEvent::Error { message: e.to_string() }).await;
+      let _ = tx
+        .send(update::ProgressEvent::Error {
+          message: e.to_string(),
+        })
+        .await;
     }
     // Drop the sender so the stream terminates, then give the last
     // line ~500ms to flush before we exit and the connection drops.
@@ -78,6 +92,11 @@ pub async fn update_apply(
     // bar reads as a hung update.
     .header("X-Accel-Buffering", "no")
     .body(body)
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("response build: {e}")))?;
+    .map_err(|e| {
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("response build: {e}"),
+      )
+    })?;
   Ok(response)
 }

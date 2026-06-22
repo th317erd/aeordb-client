@@ -33,6 +33,7 @@ class AeorConnections extends HTMLElement {
     this._state = new ReactiveState({
       connections: [],
       showAddForm: false,
+      editingId: null,
       selectedId: null,
     });
 
@@ -42,6 +43,7 @@ class AeorConnections extends HTMLElement {
     this._closePreview = this._closePreview.bind(this);
     this._onRowClick = this._onRowClick.bind(this);
     this._onTestClick = this._onTestClick.bind(this);
+    this._onEditClick = this._onEditClick.bind(this);
     this._onConfirmDelete = this._onConfirmDelete.bind(this);
   }
 
@@ -56,6 +58,7 @@ class AeorConnections extends HTMLElement {
 
   openAddForm() {
     this._state.showAddForm = true;
+    this._state.editingId = null;
   }
 
   _buildDOM() {
@@ -71,8 +74,8 @@ class AeorConnections extends HTMLElement {
         button.id('add-btn')
           .class('primary')
           .hidden.bindState(
-            (state) => state.showAddForm,
-            ['showAddForm'],
+            (state) => state.showAddForm || !!state.editingId,
+            ['showAddForm', 'editingId'],
           )
           .onClick(this._toggleAddForm)(
             'Add Connection',
@@ -86,34 +89,8 @@ class AeorConnections extends HTMLElement {
         ' page to choose which folders to mirror between that database and your local machine.',
       ),
 
-      // Add form panel — hidden until toggled
-      div.class('form-panel')
-        .hidden.bindState(
-          (state) => !state.showAddForm,
-          ['showAddForm'],
-        )(
-          h2('New Connection'),
-          div.class('form-row')(
-            label('Name'),
-            input.type('text').id('form-name').placeholder('My Server')(),
-          ),
-          div.class('form-row')(
-            label('URL'),
-            input.type('text').id('form-url').placeholder('http://localhost:6830')(),
-          ),
-          div.class('form-row')(
-            label('API Key (optional)'),
-            input.type('text').id('form-api-key').placeholder('aeor_...')(),
-          ),
-          div.class('form-row')(
-            label('Share Domain (optional)'),
-            input.type('text').id('form-share-url').placeholder('Defaults to connection URL')(),
-          ),
-          div.class('form-actions')(
-            button.class('primary').id('form-submit').onClick(this._submitForm)('Create'),
-            button.class('secondary').id('form-cancel').onClick(this._cancelForm)('Cancel'),
-          ),
-        ),
+      // Form container — add or edit form, rebuilt dynamically
+      div.id('form-container')(),
 
       // Connection list — table rebuilt reactively
       div.class('connections-list')(
@@ -162,13 +139,6 @@ class AeorConnections extends HTMLElement {
 
     this.appendChild(element);
 
-    // Clear the `.invalid` marker as soon as the user starts correcting
-    // a field, so the red ring disappears the instant the input registers.
-    for (const id of ['form-name', 'form-url', 'form-api-key', 'form-share-url']) {
-      const field = this.querySelector('#' + id);
-      if (field) field.addEventListener('input', () => field.classList.remove('invalid'));
-    }
-
     // Bind resize handle
     let resizeHandle = this.querySelector('.preview-resize-handle');
     let panel = this.querySelector('.connection-preview');
@@ -176,13 +146,107 @@ class AeorConnections extends HTMLElement {
       bindResizeHandle(resizeHandle, panel, { minHeight: 200, maxRatio: 0.85 });
 
     // Listen for connection list changes — rebuild table rows
-    this._state.on('connections', () => this._rebuildTableRows());
+    this._state.on('connections', () => {
+      this._rebuildTableRows();
+      this._rebuildFormContainer();
+    });
+    this._state.on('showAddForm', () => this._rebuildFormContainer());
+    this._state.on('editingId', () => this._rebuildFormContainer());
 
     // Listen for selectedId changes — manage dashboard element and row highlighting
     this._state.on('selectedId', (changedKeys, state) => {
       this._updateRowSelection(state.selectedId);
       this._updateDashboard(state.selectedId);
     });
+  }
+
+  _rebuildFormContainer() {
+    const container = this.querySelector('#form-container');
+    if (!container) return;
+
+    container.textContent = '';
+
+    if (this._state.showAddForm) {
+      container.appendChild(this._buildAddForm());
+    } else if (this._state.editingId) {
+      const form = this._buildEditForm();
+      if (form) container.appendChild(form);
+    }
+  }
+
+  _buildAddForm() {
+    const form = div.class('form-panel').context(this)(
+      h2('New Connection'),
+      div.class('form-row')(
+        label('Name'),
+        input.type('text').id('form-name').placeholder('My Server')(),
+      ),
+      div.class('form-row')(
+        label('URL'),
+        input.type('text').id('form-url').placeholder('http://localhost:6830')(),
+      ),
+      div.class('form-row')(
+        label('API Key (optional)'),
+        input.type('text').id('form-api-key').placeholder('aeor_...')(),
+      ),
+      div.class('form-row')(
+        label('Share Domain (optional)'),
+        input.type('text').id('form-share-url').placeholder('Defaults to connection URL')(),
+      ),
+      div.class('form-actions')(
+        button.class('primary').id('form-submit').onClick(this._submitForm)('Create'),
+        button.class('secondary').id('form-cancel').onClick(this._cancelForm)('Cancel'),
+      ),
+    ).build(document);
+
+    this._bindFormValidation(form);
+    return form;
+  }
+
+  _buildEditForm() {
+    const connection = this._state.connections.find((c) => c.id === this._state.editingId);
+    if (!connection) return null;
+
+    const form = div.class('form-panel').context(this)(
+      h2('Edit Connection'),
+      div.class('form-row')(
+        label('Name'),
+        input.type('text').id('form-name')(),
+      ),
+      div.class('form-row')(
+        label('URL'),
+        input.type('text').id('form-url')(),
+      ),
+      div.class('form-row')(
+        label('API Key (optional)'),
+        input.type('password').id('form-api-key').placeholder('aeor_...')(),
+      ),
+      div.class('form-row')(
+        label('Share Domain (optional)'),
+        input.type('text').id('form-share-url').placeholder('Defaults to connection URL')(),
+      ),
+      div.class('form-actions')(
+        button.class('primary').id('form-submit').onClick(this._submitForm)('Save Changes'),
+        button.class('secondary').id('form-cancel').onClick(this._cancelForm)('Cancel'),
+      ),
+    ).build(document);
+
+    form.querySelector('#form-name').value = connection.name || '';
+    form.querySelector('#form-url').value = connection.url || '';
+    form.querySelector('#form-api-key').value = connection.api_key || '';
+    form.querySelector('#form-share-url').value = connection.share_base_url || '';
+
+    this._bindFormValidation(form);
+    return form;
+  }
+
+  _bindFormValidation(form) {
+    // Clear the `.invalid` marker as soon as the user starts correcting
+    // a field, so the red ring disappears the instant the input registers.
+    for (const id of ['form-name', 'form-url', 'form-api-key', 'form-share-url']) {
+      const field = form.querySelector('#' + id);
+      if (field) field.addEventListener('input', () => field.classList.remove('invalid'));
+    }
   }
 
   _rebuildTableRows() {
@@ -205,6 +269,9 @@ class AeorConnections extends HTMLElement {
             button.class('secondary small test-btn')
               .dataId(connection.id)
               .onClick(this._onTestClick)('Test'),
+            button.class('secondary small edit-btn')
+              .dataId(connection.id)
+              .onClick(this._onEditClick)('Edit'),
             elements['aeor-confirm-button']
               .class('confirm-button-danger')
               .label('Delete')
@@ -261,12 +328,15 @@ class AeorConnections extends HTMLElement {
 
   _toggleAddForm() {
     this._state.showAddForm = !this._state.showAddForm;
-    if (this._state.showAddForm)
+    if (this._state.showAddForm) {
+      this._state.editingId = null;
       this._state.selectedId = null;
+    }
   }
 
   _cancelForm() {
     this._state.showAddForm = false;
+    this._state.editingId = null;
   }
 
   _closePreview() {
@@ -274,7 +344,7 @@ class AeorConnections extends HTMLElement {
   }
 
   _onRowClick(event) {
-    if (event.target.closest('button')) return;
+    if (event.target.closest('button') || event.target.closest('aeor-confirm-button')) return;
     let row = event.target.closest('.connection-row');
     if (!row) return;
 
@@ -286,6 +356,14 @@ class AeorConnections extends HTMLElement {
     event.stopPropagation();
     let id = event.target.closest('[data-id]').dataset.id;
     this._testConnection(id);
+  }
+
+  _onEditClick(event) {
+    event.stopPropagation();
+    let id = event.target.closest('[data-id]').dataset.id;
+    this._state.editingId = id;
+    this._state.showAddForm = false;
+    this._state.selectedId = null;
   }
 
   _onConfirmDelete(event) {
@@ -305,6 +383,15 @@ class AeorConnections extends HTMLElement {
   }
 
   async _submitForm() {
+    if (this._state.editingId) {
+      await this._submitEdit();
+      return;
+    }
+
+    await this._submitCreate();
+  }
+
+  async _submitCreate() {
     const nameEl     = this.querySelector('#form-name');
     const urlEl      = this.querySelector('#form-url');
     const apiKeyEl   = this.querySelector('#form-api-key');
@@ -353,6 +440,51 @@ class AeorConnections extends HTMLElement {
     }
   }
 
+  async _submitEdit() {
+    const nameEl     = this.querySelector('#form-name');
+    const urlEl      = this.querySelector('#form-url');
+    const apiKeyEl   = this.querySelector('#form-api-key');
+    const shareUrlEl = this.querySelector('#form-share-url');
+
+    if (!nameEl || !urlEl || !this._state.editingId) return;
+
+    const name     = nameEl.value.trim();
+    const url      = urlEl.value.trim();
+    const apiKey   = apiKeyEl ? apiKeyEl.value.trim() : '';
+    const shareUrl = shareUrlEl ? shareUrlEl.value.trim() : '';
+
+    const missing = [];
+    if (!name) { nameEl.classList.add('invalid'); missing.push('Name'); }
+    if (!url)  { urlEl.classList.add('invalid'); missing.push('URL'); }
+    if (missing.length) {
+      const which = missing.length === 1 ? missing[0] : missing.join(' and ');
+      window.aeorToast?.(`${which} ${missing.length === 1 ? 'is' : 'are'} required.`, 'error');
+      (missing[0] === 'Name' ? nameEl : urlEl).focus();
+      return;
+    }
+
+    const body = {
+      name,
+      url,
+      auth_type: apiKey ? 'api_key' : 'none',
+      api_key: apiKey || null,
+      share_base_url: shareUrl || null,
+    };
+
+    try {
+      const response = await fetch(`/api/v1/connections/${this._state.editingId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+      this._state.editingId = null;
+      await this._fetchConnections();
+    } catch (error) {
+      window.aeorToast?.(`Failed to update connection: ${error.message}`, 'error');
+    }
+  }
+
   async _testConnection(id) {
     try {
       let response = await fetch(`/api/v1/connections/${id}/test`, { method: 'POST' });
@@ -367,15 +499,70 @@ class AeorConnections extends HTMLElement {
     }
   }
 
+  async _responseError(response) {
+    const fallback = `Request failed: ${response.status}`;
+
+    try {
+      const body = await response.json();
+      const error = new Error(body?.error || fallback);
+      error.category = body?.category;
+      return error;
+    } catch (_) {
+      return new Error(fallback);
+    }
+  }
+
+  async _syncsUsingConnection(id) {
+    const response = await fetch('/api/v1/sync');
+    if (!response.ok) throw await this._responseError(response);
+
+    const relationships = await response.json();
+    if (!Array.isArray(relationships)) return [];
+
+    return relationships.filter((relationship) => relationship?.remote_connection_id === id);
+  }
+
   async _deleteConnection(id) {
+    const connection = this._state.connections.find((item) => item.id === id);
+    const name = connection?.name || id;
+
+    let syncs = [];
+    try {
+      syncs = await this._syncsUsingConnection(id);
+    } catch (error) {
+      console.error('Failed to check connection sync usage:', error);
+      window.aeorToast?.(
+        `Could not verify whether "${name}" is used by syncs. Connection was not deleted.`,
+        'warning',
+      );
+      return;
+    }
+
+    if (syncs.length > 0) {
+      const syncNoun = syncs.length === 1 ? 'sync is' : 'syncs are';
+      const target = syncs.length === 1 ? 'that sync' : 'those syncs';
+      window.aeorToast?.(
+        `Cannot delete "${name}" because ${syncs.length} ${syncNoun} still set up against it. Delete ${target} first.`,
+        'warning',
+      );
+      return;
+    }
+
     try {
       let response = await fetch(`/api/v1/connections/${id}`, { method: 'DELETE' });
-      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+      if (!response.ok) throw await this._responseError(response);
       if (this._state.selectedId === id)
         this._state.selectedId = null;
       await this._fetchConnections();
+      window.aeorToast?.(`Successfully deleted connection "${name}".`, 'success');
     } catch (error) {
-      window.aeorToast(`Failed to delete connection: ${error.message}`, 'error');
+      const usesSync = error.category === 'bad_request' && error.message.includes('sync relationships');
+      window.aeorToast?.(
+        usesSync
+          ? `Cannot delete "${name}" while syncs are still set up against it. Delete those syncs first.`
+          : `Failed to delete connection: ${error.message}`,
+        usesSync ? 'warning' : 'error',
+      );
     }
   }
 }

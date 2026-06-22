@@ -2,13 +2,15 @@ use aeordb_client_lib::server::{ServerConfig, start_server_with_handle};
 use serde::{Deserialize, Serialize};
 
 fn test_config() -> ServerConfig {
-  let temp_dir = tempfile::tempdir().expect("failed to create temp dir").keep();
+  let temp_dir = tempfile::tempdir()
+    .expect("failed to create temp dir")
+    .keep();
   let data_path = temp_dir.join("test-state.aeordb");
   let config_path = temp_dir.join("config.yaml");
 
   ServerConfig {
-    host:        "127.0.0.1".to_string(),
-    port:        0,
+    host: "127.0.0.1".to_string(),
+    port: 0,
     config_path,
     data_path,
   }
@@ -17,10 +19,10 @@ fn test_config() -> ServerConfig {
 #[derive(Debug, Deserialize)]
 struct SettingsResponse {
   sync_interval_seconds: u64,
-  auto_start_sync:       bool,
-  client_name:           Option<String>,
-  config_dir:            String,
-  data_dir:              String,
+  auto_start_sync: bool,
+  client_name: Option<String>,
+  config_dir: String,
+  data_dir: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -28,9 +30,9 @@ struct UpdateSettings {
   #[serde(skip_serializing_if = "Option::is_none")]
   sync_interval_seconds: Option<u64>,
   #[serde(skip_serializing_if = "Option::is_none")]
-  auto_start_sync:       Option<bool>,
+  auto_start_sync: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
-  client_name:           Option<String>,
+  client_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,7 +49,7 @@ async fn test_get_settings_returns_defaults() {
     .await
     .expect("failed to start server");
 
-  let url      = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
   let response = reqwest::get(&url).await.expect("request failed");
 
   assert_eq!(response.status(), 200);
@@ -64,14 +66,24 @@ async fn test_get_settings_returns_defaults() {
 #[tokio::test]
 async fn test_get_settings_includes_directory_paths() {
   let config = test_config();
-  let expected_config_dir = config.config_path.parent().unwrap().to_string_lossy().to_string();
-  let expected_data_dir   = config.data_path.parent().unwrap().to_string_lossy().to_string();
+  let expected_config_dir = config
+    .config_path
+    .parent()
+    .unwrap()
+    .to_string_lossy()
+    .to_string();
+  let expected_data_dir = config
+    .data_path
+    .parent()
+    .unwrap()
+    .to_string_lossy()
+    .to_string();
 
   let (address, _handle) = start_server_with_handle(config)
     .await
     .expect("failed to start server");
 
-  let url      = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
   let response = reqwest::get(&url).await.expect("request failed");
   let body: SettingsResponse = response.json().await.expect("failed to parse");
 
@@ -89,13 +101,14 @@ async fn test_patch_settings_update_sync_interval() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
-  let response = client.patch(&url)
+  let response = client
+    .patch(&url)
     .json(&UpdateSettings {
       sync_interval_seconds: Some(120),
-      auto_start_sync:       None,
-      client_name:           None,
+      auto_start_sync: None,
+      client_name: None,
     })
     .send()
     .await
@@ -119,13 +132,14 @@ async fn test_patch_settings_update_auto_start() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
-  let response = client.patch(&url)
+  let response = client
+    .patch(&url)
     .json(&UpdateSettings {
       sync_interval_seconds: None,
-      auto_start_sync:       Some(false),
-      client_name:           None,
+      auto_start_sync: Some(false),
+      client_name: None,
     })
     .send()
     .await
@@ -146,13 +160,14 @@ async fn test_patch_settings_update_client_name() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
-  let response = client.patch(&url)
+  let response = client
+    .patch(&url)
     .json(&UpdateSettings {
       sync_interval_seconds: None,
-      auto_start_sync:       None,
-      client_name:           Some("my-workstation".to_string()),
+      auto_start_sync: None,
+      client_name: Some("my-workstation".to_string()),
     })
     .send()
     .await
@@ -172,25 +187,27 @@ async fn test_patch_settings_clear_client_name() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
   // First set a name.
-  client.patch(&url)
+  client
+    .patch(&url)
     .json(&UpdateSettings {
       sync_interval_seconds: None,
-      auto_start_sync:       None,
-      client_name:           Some("my-workstation".to_string()),
+      auto_start_sync: None,
+      client_name: Some("my-workstation".to_string()),
     })
     .send()
     .await
     .expect("request failed");
 
   // Now clear it.
-  let response = client.patch(&url)
+  let response = client
+    .patch(&url)
     .json(&UpdateSettings {
       sync_interval_seconds: None,
-      auto_start_sync:       None,
-      client_name:           Some(String::new()),
+      auto_start_sync: None,
+      client_name: Some(String::new()),
     })
     .send()
     .await
@@ -211,13 +228,14 @@ async fn test_patch_settings_update_all_fields() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
-  let response = client.patch(&url)
+  let response = client
+    .patch(&url)
     .json(&UpdateSettings {
       sync_interval_seconds: Some(300),
-      auto_start_sync:       Some(false),
-      client_name:           Some("test-box".to_string()),
+      auto_start_sync: Some(false),
+      client_name: Some("test-box".to_string()),
     })
     .send()
     .await
@@ -239,14 +257,15 @@ async fn test_patch_settings_persists_across_get() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
   // Update settings.
-  client.patch(&url)
+  client
+    .patch(&url)
     .json(&UpdateSettings {
       sync_interval_seconds: Some(45),
-      auto_start_sync:       Some(false),
-      client_name:           Some("persistent-test".to_string()),
+      auto_start_sync: Some(false),
+      client_name: Some("persistent-test".to_string()),
     })
     .send()
     .await
@@ -268,9 +287,10 @@ async fn test_patch_settings_empty_body_is_noop() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
-  let response = client.patch(&url)
+  let response = client
+    .patch(&url)
     .json(&serde_json::json!({}))
     .send()
     .await
@@ -296,13 +316,14 @@ async fn test_patch_settings_rejects_sync_interval_too_low() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
-  let response = client.patch(&url)
+  let response = client
+    .patch(&url)
     .json(&UpdateSettings {
       sync_interval_seconds: Some(5),
-      auto_start_sync:       None,
-      client_name:           None,
+      auto_start_sync: None,
+      client_name: None,
     })
     .send()
     .await
@@ -322,13 +343,14 @@ async fn test_patch_settings_rejects_sync_interval_too_high() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
-  let response = client.patch(&url)
+  let response = client
+    .patch(&url)
     .json(&UpdateSettings {
       sync_interval_seconds: Some(7200),
-      auto_start_sync:       None,
-      client_name:           None,
+      auto_start_sync: None,
+      client_name: None,
     })
     .send()
     .await
@@ -348,13 +370,14 @@ async fn test_patch_settings_boundary_min_interval() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
-  let response = client.patch(&url)
+  let response = client
+    .patch(&url)
     .json(&UpdateSettings {
       sync_interval_seconds: Some(10),
-      auto_start_sync:       None,
-      client_name:           None,
+      auto_start_sync: None,
+      client_name: None,
     })
     .send()
     .await
@@ -374,13 +397,14 @@ async fn test_patch_settings_boundary_max_interval() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
-  let response = client.patch(&url)
+  let response = client
+    .patch(&url)
     .json(&UpdateSettings {
       sync_interval_seconds: Some(3600),
-      auto_start_sync:       None,
-      client_name:           None,
+      auto_start_sync: None,
+      client_name: None,
     })
     .send()
     .await
@@ -400,9 +424,10 @@ async fn test_patch_settings_invalid_json_returns_error() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
-  let response = client.patch(&url)
+  let response = client
+    .patch(&url)
     .header("Content-Type", "application/json")
     .body("not valid json")
     .send()
@@ -421,9 +446,10 @@ async fn test_patch_settings_wrong_content_type_returns_error() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
-  let response = client.patch(&url)
+  let response = client
+    .patch(&url)
     .header("Content-Type", "text/plain")
     .body("{}")
     .send()
@@ -442,14 +468,15 @@ async fn test_patch_settings_rejected_value_does_not_persist() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
   // Try to set an invalid interval.
-  let response = client.patch(&url)
+  let response = client
+    .patch(&url)
     .json(&UpdateSettings {
       sync_interval_seconds: Some(1),
-      auto_start_sync:       None,
-      client_name:           None,
+      auto_start_sync: None,
+      client_name: None,
     })
     .send()
     .await
@@ -472,9 +499,10 @@ async fn test_settings_post_returns_method_not_allowed() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
-  let response = client.post(&url)
+  let response = client
+    .post(&url)
     .json(&serde_json::json!({}))
     .send()
     .await
@@ -491,12 +519,9 @@ async fn test_settings_delete_returns_method_not_allowed() {
     .expect("failed to start server");
 
   let client = reqwest::Client::new();
-  let url    = format!("http://{}/api/v1/settings", address);
+  let url = format!("http://{}/api/v1/settings", address);
 
-  let response = client.delete(&url)
-    .send()
-    .await
-    .expect("request failed");
+  let response = client.delete(&url).send().await.expect("request failed");
 
   assert_eq!(response.status(), 405);
 }

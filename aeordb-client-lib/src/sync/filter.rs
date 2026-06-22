@@ -46,7 +46,7 @@ pub fn matches_filter(filename: &str, filter: Option<&str>) -> bool {
     _ => return true,
   };
 
-  let patterns       = parse_filter(filter_str);
+  let patterns = parse_filter(filter_str);
   let includes: Vec<_> = patterns.iter().filter(|p| !p.exclude).collect();
   let excludes: Vec<_> = patterns.iter().filter(|p| p.exclude).collect();
 
@@ -59,9 +59,9 @@ pub fn matches_filter(filename: &str, filter: Option<&str>) -> bool {
 
   // If there are include patterns, file must match at least one
   if !includes.is_empty() {
-    return includes.iter().any(|include| {
-      glob_match::glob_match(&include.pattern, filename)
-    });
+    return includes
+      .iter()
+      .any(|include| glob_match::glob_match(&include.pattern, filename));
   }
 
   // Only exclude patterns exist, and none matched — file passes

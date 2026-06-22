@@ -45,13 +45,19 @@ impl JwtCache {
   /// the next.
   pub fn slot_for(&self, connection_id: &str) -> JwtSlot {
     // Fast path: read lock, slot already exists.
-    if let Some(slot) = self.slots.read().expect("jwt cache poisoned").get(connection_id) {
+    if let Some(slot) = self
+      .slots
+      .read()
+      .expect("jwt cache poisoned")
+      .get(connection_id)
+    {
       return slot.clone();
     }
     // Slow path: upgrade to write lock, double-check (another caller may
     // have inserted while we were upgrading), insert if still missing.
     let mut guard = self.slots.write().expect("jwt cache poisoned");
-    guard.entry(connection_id.to_string())
+    guard
+      .entry(connection_id.to_string())
       .or_insert_with(|| Arc::new(Mutex::new(None)))
       .clone()
   }

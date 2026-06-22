@@ -2,11 +2,8 @@ use axum::extract::State;
 use axum::response::Json;
 use serde::Deserialize;
 
-use aeordb::engine::{
-  list_conflicts_typed,
-  RequestContext,
-};
-use aeordb::engine::conflict_store::{resolve_conflict, dismiss_conflict};
+use aeordb::engine::conflict_store::{dismiss_conflict, resolve_conflict};
+use aeordb::engine::{RequestContext, list_conflicts_typed};
 
 use crate::error::ClientError;
 use crate::server::AppState;
@@ -33,7 +30,8 @@ pub async fn list_conflicts(
     .map_err(|error| ClientError::Server(error.to_string()))?;
 
   // Convert to JSON-serializable format
-  let json_conflicts: Vec<serde_json::Value> = conflicts.iter()
+  let json_conflicts: Vec<serde_json::Value> = conflicts
+    .iter()
     .map(|conflict| {
       serde_json::json!({
         "path":          conflict.path,
@@ -67,12 +65,13 @@ pub async fn resolve_conflict_handler(
   Json(request): Json<ResolveRequest>,
 ) -> Result<Json<serde_json::Value>, ClientError> {
   if request.pick != "winner" && request.pick != "loser" {
-    return Err(ClientError::BadRequest(
-      format!("invalid pick value '{}': must be 'winner' or 'loser'", request.pick),
-    ));
+    return Err(ClientError::BadRequest(format!(
+      "invalid pick value '{}': must be 'winner' or 'loser'",
+      request.pick
+    )));
   }
 
-  let ctx          = RequestContext::system();
+  let ctx = RequestContext::system();
   let conflict_path = &request.path;
 
   resolve_conflict(
@@ -80,7 +79,8 @@ pub async fn resolve_conflict_handler(
     &ctx,
     conflict_path,
     &request.pick,
-  ).map_err(|error| {
+  )
+  .map_err(|error| {
     let msg = error.to_string();
     if msg.contains("not found") || msg.contains("No conflict") {
       ClientError::NotFound(msg)
@@ -101,14 +101,10 @@ pub async fn dismiss_conflict_handler(
   State(state): State<AppState>,
   Json(request): Json<DismissRequest>,
 ) -> Result<Json<serde_json::Value>, ClientError> {
-  let ctx          = RequestContext::system();
+  let ctx = RequestContext::system();
   let conflict_path = &request.path;
 
-  dismiss_conflict(
-    &state.state_store.engine(),
-    &ctx,
-    conflict_path,
-  ).map_err(|error| {
+  dismiss_conflict(&state.state_store.engine(), &ctx, conflict_path).map_err(|error| {
     let msg = error.to_string();
     if msg.contains("not found") || msg.contains("No conflict") {
       ClientError::NotFound(msg)

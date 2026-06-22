@@ -11,9 +11,7 @@ use crate::server::AppState;
 ///
 /// Returns the current per-installation preferences as JSON. Schema is
 /// defined by `crate::preferences::UserPreferences`.
-pub async fn get_preferences(
-  State(state): State<AppState>,
-) -> Json<UserPreferences> {
+pub async fn get_preferences(State(state): State<AppState>) -> Json<UserPreferences> {
   Json(state.preferences.get().await)
 }
 
@@ -34,7 +32,8 @@ pub async fn patch_preferences(
   // Content-Type discipline. Reject anything else explicitly so a
   // future overload (e.g. wholesale-replace via application/json)
   // doesn't silently land in this handler.
-  let content_type = headers.get(header::CONTENT_TYPE)
+  let content_type = headers
+    .get(header::CONTENT_TYPE)
     .and_then(|v| v.to_str().ok())
     .unwrap_or("");
   if !content_type.starts_with("application/merge-patch+json") {

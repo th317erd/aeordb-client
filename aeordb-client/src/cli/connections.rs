@@ -31,7 +31,13 @@ pub async fn list(host: &str, json_mode: bool) -> Result<()> {
   Ok(())
 }
 
-pub async fn add(host: &str, json_mode: bool, name: &str, url: &str, api_key: Option<&str>) -> Result<()> {
+pub async fn add(
+  host: &str,
+  json_mode: bool,
+  name: &str,
+  url: &str,
+  api_key: Option<&str>,
+) -> Result<()> {
   let auth_type = if api_key.is_some() { "api_key" } else { "none" };
 
   let body = serde_json::json!({
@@ -60,7 +66,12 @@ pub async fn remove(host: &str, id: &str) -> Result<()> {
 }
 
 pub async fn test(host: &str, json_mode: bool, id: &str) -> Result<()> {
-  let value = api_post(host, &format!("/api/v1/connections/{}/test", id), &serde_json::json!({})).await?;
+  let value = api_post(
+    host,
+    &format!("/api/v1/connections/{}/test", id),
+    &serde_json::json!({}),
+  )
+  .await?;
 
   print_output(json_mode, &value, |v| {
     let success = v["success"].as_bool().unwrap_or(false);

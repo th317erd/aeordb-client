@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 /// A coalesced filesystem change event.
 #[derive(Debug, Clone)]
 pub struct FsChange {
-  pub path:       PathBuf,
+  pub path: PathBuf,
   pub change_type: FsChangeType,
 }
 
@@ -58,8 +58,8 @@ pub fn start_fs_watcher(
   watcher.watch(watch_path, RecursiveMode::Recursive)?;
 
   // Spawn the coalescing task
-  let debounce   = Duration::from_millis(config.debounce_ms);
-  let max_wait   = Duration::from_millis(config.max_wait_ms);
+  let debounce = Duration::from_millis(config.debounce_ms);
+  let max_wait = Duration::from_millis(config.max_wait_ms);
 
   tokio::spawn(async move {
     // Keep the watcher alive — dropping it stops watching
@@ -106,12 +106,12 @@ pub fn start_fs_watcher(
 
       // Flush logic: flush if debounce window expired or max wait exceeded
       if !pending.is_empty() {
-        let now          = Instant::now();
+        let now = Instant::now();
         let oldest_event = pending.values().map(|(_, t)| *t).min().unwrap_or(now);
         let newest_event = pending.values().map(|(_, t)| *t).max().unwrap_or(now);
 
         let debounce_expired = now.duration_since(newest_event) >= debounce;
-        let max_wait_hit     = now.duration_since(oldest_event) >= max_wait;
+        let max_wait_hit = now.duration_since(oldest_event) >= max_wait;
 
         if debounce_expired || max_wait_hit {
           for (path, (change_type, _)) in pending.drain() {

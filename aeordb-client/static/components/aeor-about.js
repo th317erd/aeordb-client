@@ -141,7 +141,7 @@ class AeorAbout extends HTMLElement {
           h2('Updates'),
           div.class('about-update-row')(
             aeorConfirmButton
-              .class('about-update-btn')
+              .class('about-update-btn confirm-button-progress')
               .confirmedText('Updating…')
               .duration('1000')
               .label.bindState(
@@ -253,7 +253,6 @@ class AeorAbout extends HTMLElement {
    */
   async _handleUpdateConfirm(event) {
     const target = event.currentTarget;
-    const inner  = target.querySelector('.aeor-confirm-btn');
     // Hide the "Version X.Y.Z is available." status line — it goes
     // stale the moment we commit to the apply.
     const statusEl = target.parentElement?.querySelector('.about-update-status');
@@ -265,10 +264,10 @@ class AeorAbout extends HTMLElement {
     target.classList.add('applying');
     target.setAttribute('label', 'Updating…');
     target.disabled = true;
-    if (inner) inner.style.setProperty('--progress', '0%');
+    target.progress = 0;
 
     const setProgress = (pct) => {
-      if (inner) inner.style.setProperty('--progress', `${Math.max(0, Math.min(100, pct))}%`);
+      target.progress = Math.max(0, Math.min(100, pct));
     };
     const fmtMB = (b) => (b / (1024 * 1024)).toFixed(1);
 

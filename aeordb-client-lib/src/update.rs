@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const DEFAULT_VERSION_ENDPOINT: &str = "https://aeordb.com/api/version";
-const DEFAULT_DOWNLOAD_BASE:    &str = "https://aeordb.com/downloads/";
+const DEFAULT_DOWNLOAD_BASE: &str = "https://aeordb.com/downloads/";
 
 /// Loopback-test override. When set, replaces the version endpoint and
 /// the download base URL prefix. Format: a single base URL — both
@@ -40,13 +40,13 @@ const DEFAULT_DOWNLOAD_BASE:    &str = "https://aeordb.com/downloads/";
 fn version_endpoint() -> String {
   match std::env::var("AEORDB_UPDATE_ENDPOINT") {
     Ok(base) if !base.is_empty() => format!("{}/api/version", base.trim_end_matches('/')),
-    _                            => DEFAULT_VERSION_ENDPOINT.to_string(),
+    _ => DEFAULT_VERSION_ENDPOINT.to_string(),
   }
 }
 fn download_base() -> String {
   match std::env::var("AEORDB_UPDATE_ENDPOINT") {
     Ok(base) if !base.is_empty() => format!("{}/downloads/", base.trim_end_matches('/')),
-    _                            => DEFAULT_DOWNLOAD_BASE.to_string(),
+    _ => DEFAULT_DOWNLOAD_BASE.to_string(),
   }
 }
 
@@ -101,14 +101,17 @@ pub struct UpdateInfo {
 /// wire if they controlled aeordb-www).
 #[derive(Debug, Deserialize)]
 struct SignedManifest {
-  #[serde(default)] version:   Option<String>,
-  #[serde(default)] platforms: std::collections::BTreeMap<String, SignedPlatformEntry>,
+  #[serde(default)]
+  version: Option<String>,
+  #[serde(default)]
+  platforms: std::collections::BTreeMap<String, SignedPlatformEntry>,
 }
 
 #[derive(Debug, Deserialize)]
 struct SignedPlatformEntry {
-  file:   String,
-  #[serde(default)] size:   Option<i64>,
+  file: String,
+  #[serde(default)]
+  size: Option<i64>,
   sha256: String,
 }
 
@@ -127,8 +130,8 @@ pub fn new_state() -> SharedUpdateInfo {
 /// recognize — the server will respond 404 and the client will treat
 /// that as "no update."
 pub fn current_platform_key() -> String {
-  let os   = std::env::consts::OS;     // "linux" | "macos" | "windows"
-  let arch = std::env::consts::ARCH;   // "x86_64" | "aarch64" | ...
+  let os = std::env::consts::OS; // "linux" | "macos" | "windows"
+  let arch = std::env::consts::ARCH; // "x86_64" | "aarch64" | ...
   format!("{os}-{arch}")
 }
 
@@ -141,27 +144,39 @@ pub async fn check_once(client: &reqwest::Client, state: &SharedUpdateInfo) {
     // Preserve current_version + platform across writes (they're
     // process-static; check_inner doesn't bother re-stamping them).
     let current = guard.current_version.clone();
-    let plat    = guard.platform.clone();
+    let plat = guard.platform.clone();
     *guard = info;
-    if guard.current_version.is_empty() { guard.current_version = current; }
-    if guard.platform.is_empty()        { guard.platform        = plat;    }
+    if guard.current_version.is_empty() {
+      guard.current_version = current;
+    }
+    if guard.platform.is_empty() {
+      guard.platform = plat;
+    }
   }
 }
 
 async fn check_inner(client: &reqwest::Client) -> UpdateInfo {
   let current_version = env!("CARGO_PKG_VERSION").to_string();
-  let os   = std::env::consts::OS;
+  let os = std::env::consts::OS;
   let arch = std::env::consts::ARCH;
   let platform = format!("{os}-{arch}");
   let url = format!("{}?os={os}&arch={arch}", version_endpoint());
 
-  let resp = match client.get(&url).timeout(Duration::from_secs(10)).send().await {
+  let resp = match client
+    .get(&url)
+    .timeout(Duration::from_secs(10))
+    .send()
+    .await
+  {
     Ok(r) => r,
-    Err(e) => return UpdateInfo {
-      current_version, platform,
-      error: Some(format!("network: {e}")),
-      ..Default::default()
-    },
+    Err(e) => {
+      return UpdateInfo {
+        current_version,
+        platform,
+        error: Some(format!("network: {e}")),
+        ..Default::default()
+      };
+    }
   };
 
   let status = resp.status().as_u16();
@@ -170,14 +185,16 @@ async fn check_inner(client: &reqwest::Client) -> UpdateInfo {
     404 | 503 => {
       tracing::debug!("update check: server returned {status} (no update available)");
       return UpdateInfo {
-        current_version, platform,
+        current_version,
+        platform,
         last_checked: Some(Utc::now()),
         ..Default::default()
       };
     }
     other => {
       return UpdateInfo {
-        current_version, platform,
+        current_version,
+        platform,
         error: Some(format!("server returned {other}")),
         ..Default::default()
       };
@@ -186,27 +203,39 @@ async fn check_inner(client: &reqwest::Client) -> UpdateInfo {
 
   #[derive(Deserialize)]
   struct VersionResponse {
-    version:           String,
-    #[serde(default)] released_at:       Option<DateTime<Utc>>,
-    #[serde(default)] release_notes_url: Option<String>,
-    #[serde(default)] platform:          Option<String>,
-    #[serde(default)] download_url:      Option<String>,
-    #[serde(default)] size:              Option<i64>,
-    #[serde(default)] sha256:            Option<String>,
+    version: String,
+    #[serde(default)]
+    released_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    release_notes_url: Option<String>,
+    #[serde(default)]
+    platform: Option<String>,
+    #[serde(default)]
+    download_url: Option<String>,
+    #[serde(default)]
+    size: Option<i64>,
+    #[serde(default)]
+    sha256: Option<String>,
     // Required for any apply path. If absent, we treat the result as
     // "no update" — better to silently skip than to install something
     // we can't authenticate.
-    #[serde(default)] signed_manifest:   Option<serde_json::Value>,
-    #[serde(default)] key_id:            Option<String>,
-    #[serde(default)] signature:         Option<String>,
+    #[serde(default)]
+    signed_manifest: Option<serde_json::Value>,
+    #[serde(default)]
+    key_id: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
   }
   let body: VersionResponse = match resp.json().await {
     Ok(b) => b,
-    Err(e) => return UpdateInfo {
-      current_version, platform,
-      error: Some(format!("parse: {e}")),
-      ..Default::default()
-    },
+    Err(e) => {
+      return UpdateInfo {
+        current_version,
+        platform,
+        error: Some(format!("parse: {e}")),
+        ..Default::default()
+      };
+    }
   };
 
   let _ = body.released_at; // unused — UI shows last_checked instead
@@ -238,8 +267,8 @@ async fn check_inner(client: &reqwest::Client) -> UpdateInfo {
     last_checked: Some(Utc::now()),
     error,
     signed_manifest: body.signed_manifest,
-    key_id:          body.key_id,
-    signature:       body.signature,
+    key_id: body.key_id,
+    signature: body.signature,
   }
 }
 
@@ -253,21 +282,19 @@ async fn check_inner(client: &reqwest::Client) -> UpdateInfo {
 ///     top-level `version` field (server tried to advertise A but
 ///     ship B)
 fn verify_manifest_signature(
-  signed_manifest:   Option<&serde_json::Value>,
-  key_id:            Option<&str>,
-  signature_b64:     Option<&str>,
+  signed_manifest: Option<&serde_json::Value>,
+  key_id: Option<&str>,
+  signature_b64: Option<&str>,
   announced_version: &str,
 ) -> Result<()> {
-  let signed_manifest = signed_manifest
-    .ok_or_else(|| anyhow!("response lacks signed_manifest"))?;
-  let key_id = key_id
-    .ok_or_else(|| anyhow!("response lacks key_id"))?;
-  let signature_b64 = signature_b64
-    .ok_or_else(|| anyhow!("response lacks signature"))?;
+  let signed_manifest = signed_manifest.ok_or_else(|| anyhow!("response lacks signed_manifest"))?;
+  let key_id = key_id.ok_or_else(|| anyhow!("response lacks key_id"))?;
+  let signature_b64 = signature_b64.ok_or_else(|| anyhow!("response lacks signature"))?;
 
   // Locate the trusted public key.
   let trust_store = crate::security::sig::effective_trust_store();
-  let key_bytes = trust_store.iter()
+  let key_bytes = trust_store
+    .iter()
     .find(|(id, _)| id.as_str() == key_id)
     .map(|(_, bytes)| *bytes)
     .ok_or_else(|| anyhow!("unknown key_id: {}", key_id))?;
@@ -277,19 +304,24 @@ fn verify_manifest_signature(
   // JCS-canonicalize the envelope. Both this code path AND the signer
   // on the aeordb-www side use `json_canon::to_string` on the SAME
   // serde_json shape, so the canonical bytes are byte-identical.
-  let canonical = json_canon::to_string(signed_manifest)
-    .map_err(|e| anyhow!("canonicalize envelope: {}", e))?;
+  let canonical =
+    json_canon::to_string(signed_manifest).map_err(|e| anyhow!("canonicalize envelope: {}", e))?;
 
-  let sig_bytes = base64::engine::general_purpose::STANDARD.decode(signature_b64)
+  let sig_bytes = base64::engine::general_purpose::STANDARD
+    .decode(signature_b64)
     .map_err(|e| anyhow!("decode signature: {}", e))?;
   if sig_bytes.len() != 64 {
-    bail!("signature wrong length: expected 64, got {}", sig_bytes.len());
+    bail!(
+      "signature wrong length: expected 64, got {}",
+      sig_bytes.len()
+    );
   }
   let mut sig_arr = [0u8; 64];
   sig_arr.copy_from_slice(&sig_bytes);
   let signature = Signature::from_bytes(&sig_arr);
 
-  verifying_key.verify(canonical.as_bytes(), &signature)
+  verifying_key
+    .verify(canonical.as_bytes(), &signature)
     .map_err(|_| anyhow!("ed25519 verification failed"))?;
 
   // Cross-check: the envelope's `version` must match the response's
@@ -300,7 +332,7 @@ fn verify_manifest_signature(
   match envelope.version.as_deref() {
     Some(v) if v == announced_version => Ok(()),
     Some(v) => bail!("envelope version {} != announced {}", v, announced_version),
-    None    => bail!("envelope lacks version field"),
+    None => bail!("envelope lacks version field"),
   }
 }
 
@@ -318,7 +350,7 @@ fn is_newer(remote: &str, current: &str) -> bool {
   };
   match (parse(remote), parse(current)) {
     (Some(r), Some(c)) => r > c,
-    _                  => remote > current,
+    _ => remote > current,
   }
 }
 
@@ -336,11 +368,16 @@ fn is_newer(remote: &str, current: &str) -> bool {
 pub enum ProgressEvent {
   /// Bytes downloaded so far. `total` is 0 when Content-Length is
   /// absent (HTTP/1.1 chunked responses without a known length).
-  Downloading { bytes: u64, total: u64 },
+  Downloading {
+    bytes: u64,
+    total: u64,
+  },
   Verifying,
   Staging,
   Complete,
-  Error { message: String },
+  Error {
+    message: String,
+  },
 }
 
 /// Download → verify sha256 → stage relauncher → return.
@@ -365,32 +402,39 @@ pub async fn apply_update(
   // (a plugin or compromised dependency editing AppState.update_info
   // wouldn't pass this second check unless it also produced a valid
   // ed25519 forgery, which it can't without the offline key).
-  let announced_version = info.latest_version.as_deref()
+  let announced_version = info
+    .latest_version
+    .as_deref()
     .ok_or_else(|| anyhow!("no latest_version in update info"))?;
   verify_manifest_signature(
     info.signed_manifest.as_ref(),
     info.key_id.as_deref(),
     info.signature.as_deref(),
     announced_version,
-  ).context("manifest signature verify failed at apply time")?;
+  )
+  .context("manifest signature verify failed at apply time")?;
 
   // Read the trusted file + sha256 OUT OF THE SIGNED ENVELOPE, not
   // from `info.download_url` / `info.sha256`. The convenience fields
   // are advisory; only the signed envelope is binding.
   let envelope: SignedManifest = serde_json::from_value(
-    info.signed_manifest.clone()
+    info
+      .signed_manifest
+      .clone()
       .ok_or_else(|| anyhow!("apply requires signed_manifest"))?,
-  ).context("parse signed envelope")?;
+  )
+  .context("parse signed envelope")?;
   let platform_key = current_platform_key();
-  let entry = envelope.platforms.get(&platform_key)
+  let entry = envelope
+    .platforms
+    .get(&platform_key)
     .ok_or_else(|| anyhow!("signed envelope has no entry for platform {}", platform_key))?;
   let download_url_owned = format!("{}{}", download_base(), entry.file);
   let download_url = download_url_owned.as_str();
   let expected_sha = Some(entry.sha256.clone());
   let _ = info.download_url; // intentionally unused — see comment above
 
-  let current_exe = std::env::current_exe()
-    .context("failed to determine current exe path")?;
+  let current_exe = std::env::current_exe().context("failed to determine current exe path")?;
   let pid = std::process::id();
 
   // Stage the artifact next to the current exe so the rename is a
@@ -400,7 +444,8 @@ pub async fn apply_update(
   let stage_dir: PathBuf = if cfg!(target_os = "macos") {
     std::env::temp_dir()
   } else {
-    current_exe.parent()
+    current_exe
+      .parent()
       .ok_or_else(|| anyhow!("current_exe has no parent"))?
       .to_path_buf()
   };
@@ -413,10 +458,13 @@ pub async fn apply_update(
   };
   let staged_path = stage_dir.join(&staged_name);
 
-  download_to(download_url, &staged_path, progress.clone()).await
+  download_to(download_url, &staged_path, progress.clone())
+    .await
     .with_context(|| format!("download {download_url} -> {}", staged_path.display()))?;
 
-  if let Some(tx) = &progress { let _ = tx.send(ProgressEvent::Verifying).await; }
+  if let Some(tx) = &progress {
+    let _ = tx.send(ProgressEvent::Verifying).await;
+  }
   if let Some(sha) = &expected_sha {
     verify_sha256(&staged_path, sha)
       .with_context(|| format!("sha256 verify failed for {}", staged_path.display()))?;
@@ -434,9 +482,13 @@ pub async fn apply_update(
     std::fs::set_permissions(&staged_path, perms)?;
   }
 
-  if let Some(tx) = &progress { let _ = tx.send(ProgressEvent::Staging).await; }
+  if let Some(tx) = &progress {
+    let _ = tx.send(ProgressEvent::Staging).await;
+  }
   spawn_relauncher(pid, &current_exe, &staged_path)?;
-  if let Some(tx) = &progress { let _ = tx.send(ProgressEvent::Complete).await; }
+  if let Some(tx) = &progress {
+    let _ = tx.send(ProgressEvent::Complete).await;
+  }
   Ok(())
 }
 
@@ -453,7 +505,9 @@ async fn download_to(
     bail!("download returned {}", resp.status());
   }
   let total = resp.content_length().unwrap_or(0);
-  if let Some(parent) = dest.parent() { std::fs::create_dir_all(parent)?; }
+  if let Some(parent) = dest.parent() {
+    std::fs::create_dir_all(parent)?;
+  }
   let mut file = std::fs::File::create(dest)?;
   use std::io::Write;
   let mut downloaded: u64 = 0;
@@ -462,21 +516,33 @@ async fn download_to(
   let mut last_emit = std::time::Instant::now();
   // Send the initial 0/total so the UI knows the total ASAP.
   if let Some(tx) = &progress {
-    let _ = tx.send(ProgressEvent::Downloading { bytes: 0, total }).await;
+    let _ = tx
+      .send(ProgressEvent::Downloading { bytes: 0, total })
+      .await;
   }
   while let Some(chunk) = resp.chunk().await? {
     file.write_all(&chunk)?;
     downloaded += chunk.len() as u64;
     if let Some(tx) = &progress {
       if last_emit.elapsed() >= std::time::Duration::from_millis(100) {
-        let _ = tx.send(ProgressEvent::Downloading { bytes: downloaded, total }).await;
+        let _ = tx
+          .send(ProgressEvent::Downloading {
+            bytes: downloaded,
+            total,
+          })
+          .await;
         last_emit = std::time::Instant::now();
       }
     }
   }
   file.flush()?;
   if let Some(tx) = &progress {
-    let _ = tx.send(ProgressEvent::Downloading { bytes: downloaded, total }).await;
+    let _ = tx
+      .send(ProgressEvent::Downloading {
+        bytes: downloaded,
+        total,
+      })
+      .await;
   }
   Ok(())
 }
@@ -522,8 +588,12 @@ fn spawn_relauncher(pid: u32, current_exe: &Path, staged: &Path) -> Result<()> {
 #[cfg(target_os = "macos")]
 fn spawn_relauncher(pid: u32, current_exe: &Path, staged: &Path) -> Result<()> {
   // Walk up from <app>/Contents/MacOS/aeordb-client to find the .app root.
-  let app_root = find_macos_app_root(current_exe)
-    .ok_or_else(|| anyhow!("could not locate .app bundle from {}", current_exe.display()))?;
+  let app_root = find_macos_app_root(current_exe).ok_or_else(|| {
+    anyhow!(
+      "could not locate .app bundle from {}",
+      current_exe.display()
+    )
+  })?;
   // The staged .zip contains a single top-level .app — unzip into a
   // temp dir, then ditto-replace the live app bundle.
   let extract_dir = std::env::temp_dir().join("aeordb-client-update-extract");
@@ -573,7 +643,7 @@ fn spawn_relauncher(pid: u32, current_exe: &Path, staged: &Path) -> Result<()> {
   // of the way (Windows allows renaming a running .exe), moves staged
   // exe into place, launches it. Cleans up the .old.exe on exit.
   let current_str = current_exe.to_string_lossy().replace('\'', "''");
-  let staged_str  = staged.to_string_lossy().replace('\'', "''");
+  let staged_str = staged.to_string_lossy().replace('\'', "''");
   let script = format!(
     "$pid_ = {pid}; \
      while (Get-Process -Id $pid_ -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; \
@@ -592,8 +662,10 @@ fn spawn_relauncher(pid: u32, current_exe: &Path, staged: &Path) -> Result<()> {
   use std::os::windows::process::CommandExt;
   std::process::Command::new("powershell")
     .arg("-NoProfile")
-    .arg("-WindowStyle").arg("Hidden")
-    .arg("-Command").arg(&script)
+    .arg("-WindowStyle")
+    .arg("Hidden")
+    .arg("-Command")
+    .arg(&script)
     .creation_flags(0x08000000)
     .stdin(std::process::Stdio::null())
     .stdout(std::process::Stdio::null())
@@ -648,30 +720,42 @@ pub fn cleanup_after_relaunch() {}
 pub fn ingest_test_public_key() {
   let raw = match std::env::var("AEORDB_TEST_PUBLIC_KEY") {
     Ok(s) if !s.is_empty() => s,
-    _                      => return,
+    _ => return,
   };
   let (key_id, hex_part) = match raw.split_once(':') {
     Some(parts) => parts,
     None => {
-      tracing::warn!("AEORDB_TEST_PUBLIC_KEY: expected <key-id>:<hex32>, got {:?} — ignoring", raw);
+      tracing::warn!(
+        "AEORDB_TEST_PUBLIC_KEY: expected <key-id>:<hex32>, got {:?} — ignoring",
+        raw
+      );
       return;
     }
   };
   let bytes = match hex::decode(hex_part) {
     Ok(b) => b,
     Err(e) => {
-      tracing::warn!("AEORDB_TEST_PUBLIC_KEY: hex decode failed: {} — ignoring", e);
+      tracing::warn!(
+        "AEORDB_TEST_PUBLIC_KEY: hex decode failed: {} — ignoring",
+        e
+      );
       return;
     }
   };
   if bytes.len() != 32 {
-    tracing::warn!("AEORDB_TEST_PUBLIC_KEY: expected 32 bytes, got {} — ignoring", bytes.len());
+    tracing::warn!(
+      "AEORDB_TEST_PUBLIC_KEY: expected 32 bytes, got {} — ignoring",
+      bytes.len()
+    );
     return;
   }
   let mut arr = [0u8; 32];
   arr.copy_from_slice(&bytes);
   crate::security::sig::register_test_key(key_id, arr);
-  tracing::warn!("AEORDB_TEST_PUBLIC_KEY: registered loopback trust key {} — DO NOT USE IN PRODUCTION", key_id);
+  tracing::warn!(
+    "AEORDB_TEST_PUBLIC_KEY: registered loopback trust key {} — DO NOT USE IN PRODUCTION",
+    key_id
+  );
 }
 
 #[cfg(test)]
@@ -729,7 +813,12 @@ mod tests {
   fn verify_rejects_unknown_key_id() {
     let sk = SigningKey::from_bytes(&[7u8; 32]);
     let (envelope, _key_id, sig) = build_signed_envelope(&sk, "aeor-test-not-registered", "0.9.6");
-    let r = verify_manifest_signature(Some(&envelope), Some("aeor-test-not-registered"), Some(&sig), "0.9.6");
+    let r = verify_manifest_signature(
+      Some(&envelope),
+      Some("aeor-test-not-registered"),
+      Some(&sig),
+      "0.9.6",
+    );
     assert!(r.is_err(), "unknown key_id must fail");
     assert!(r.unwrap_err().to_string().contains("unknown key_id"));
   }
@@ -751,13 +840,18 @@ mod tests {
     let vk = sk.verifying_key().to_bytes();
     crate::security::sig::register_test_key("aeor-test-update-tamper", vk);
 
-    let (mut envelope, key_id, sig) = build_signed_envelope(&sk, "aeor-test-update-tamper", "0.9.6");
+    let (mut envelope, key_id, sig) =
+      build_signed_envelope(&sk, "aeor-test-update-tamper", "0.9.6");
     // Tamper: swap the linux sha256 (an attacker redirecting the binary).
     envelope["platforms"]["linux-x86_64"]["sha256"] = serde_json::json!("ff");
 
     let r = verify_manifest_signature(Some(&envelope), Some(&key_id), Some(&sig), "0.9.6");
     assert!(r.is_err(), "tampered envelope must fail signature check");
-    assert!(r.unwrap_err().to_string().contains("ed25519 verification failed"));
+    assert!(
+      r.unwrap_err()
+        .to_string()
+        .contains("ed25519 verification failed")
+    );
   }
 
   #[test]
@@ -768,7 +862,8 @@ mod tests {
 
     // Envelope claims version 0.9.6, but the announced version on the
     // outer response is 1.0.0 (a downgrade-substitution attempt).
-    let (envelope, key_id, sig) = build_signed_envelope(&sk, "aeor-test-update-vermismatch", "0.9.6");
+    let (envelope, key_id, sig) =
+      build_signed_envelope(&sk, "aeor-test-update-vermismatch", "0.9.6");
     let r = verify_manifest_signature(Some(&envelope), Some(&key_id), Some(&sig), "1.0.0");
     assert!(r.is_err(), "version mismatch must fail");
     assert!(r.unwrap_err().to_string().contains("envelope version"));

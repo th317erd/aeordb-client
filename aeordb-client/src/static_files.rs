@@ -72,15 +72,35 @@ async fn read_asset(path: &str) -> Option<Vec<u8>> {
 }
 
 fn mime_from_path(path: &str) -> &'static str {
-  if path.ends_with(".html")      { return "text/html; charset=utf-8"; }
-  if path.ends_with(".css")       { return "text/css; charset=utf-8"; }
-  if path.ends_with(".js")        { return "application/javascript; charset=utf-8"; }
-  if path.ends_with(".mjs")       { return "application/javascript; charset=utf-8"; }
-  if path.ends_with(".json")      { return "application/json"; }
-  if path.ends_with(".svg")       { return "image/svg+xml"; }
-  if path.ends_with(".png")       { return "image/png"; }
-  if path.ends_with(".ico")       { return "image/x-icon"; }
-  if path.ends_with(".woff2")     { return "font/woff2"; }
-  if path.ends_with(".woff")      { return "font/woff"; }
+  if path.ends_with(".html") {
+    return "text/html; charset=utf-8";
+  }
+  if path.ends_with(".css") {
+    return "text/css; charset=utf-8";
+  }
+  if path.ends_with(".js") {
+    return "application/javascript; charset=utf-8";
+  }
+  if path.ends_with(".mjs") {
+    return "application/javascript; charset=utf-8";
+  }
+  if path.ends_with(".json") {
+    return "application/json";
+  }
+  if path.ends_with(".svg") {
+    return "image/svg+xml";
+  }
+  if path.ends_with(".png") {
+    return "image/png";
+  }
+  if path.ends_with(".ico") {
+    return "image/x-icon";
+  }
+  if path.ends_with(".woff2") {
+    return "font/woff2";
+  }
+  if path.ends_with(".woff") {
+    return "font/woff";
+  }
   "application/octet-stream"
 }

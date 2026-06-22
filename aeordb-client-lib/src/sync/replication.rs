@@ -3,8 +3,8 @@ use serde::Deserialize;
 use crate::connections::RemoteConnection;
 use crate::error::Result;
 use crate::state::StateStore;
-use crate::sync::pull::{pull_sync, PullResult};
-use crate::sync::push::{push_sync, PushResult};
+use crate::sync::pull::{PullResult, pull_sync};
+use crate::sync::push::{PushProgressReporter, PushResult, PushScanMode, push_sync};
 use crate::sync::relationships::{SyncDirection, SyncRelationship};
 
 /// Combined result of a bidirectional sync operation.
@@ -22,19 +22,46 @@ pub async fn sync_relationship(
   all_relationships: &[SyncRelationship],
   http_client: &reqwest::Client,
   jwt_cache: &crate::jwt_cache::JwtCache,
+  push_scan_mode: PushScanMode,
+  push_progress: Option<&PushProgressReporter<'_>>,
 ) -> Result<SyncResult> {
   let direction = &relationship.direction;
-  let mut result = SyncResult { push: None, pull: None };
+  let mut result = SyncResult {
+    push: None,
+    pull: None,
+  };
 
   // Pull first (if direction allows) so we have the latest remote state
   // before pushing local changes.
   if *direction == SyncDirection::PullOnly || *direction == SyncDirection::Bidirectional {
-    result.pull = Some(pull_sync(state, connection, relationship, all_relationships, http_client, jwt_cache).await?);
+    result.pull = Some(
+      pull_sync(
+        state,
+        connection,
+        relationship,
+        all_relationships,
+        http_client,
+        jwt_cache,
+      )
+      .await?,
+    );
   }
 
   // Push if direction allows.
   if *direction == SyncDirection::PushOnly || *direction == SyncDirection::Bidirectional {
-    result.push = Some(push_sync(state, connection, relationship, all_relationships, http_client, jwt_cache).await?);
+    result.push = Some(
+      push_sync(
+        state,
+        connection,
+        relationship,
+        all_relationships,
+        http_client,
+        jwt_cache,
+        push_scan_mode,
+        push_progress,
+      )
+      .await?,
+    );
   }
 
   Ok(result)
@@ -48,32 +75,32 @@ pub async fn sync_relationship(
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteSyncDiffResponse {
   pub root_hash: String,
-  pub changes:   RemoteSyncChanges,
+  pub changes: RemoteSyncChanges,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteSyncChanges {
-  pub files_added:       Vec<RemoteSyncFileEntry>,
-  pub files_modified:    Vec<RemoteSyncFileEntry>,
-  pub files_deleted:     Vec<RemoteSyncDeletedEntry>,
-  pub symlinks_added:    Vec<RemoteSyncSymlinkEntry>,
+  pub files_added: Vec<RemoteSyncFileEntry>,
+  pub files_modified: Vec<RemoteSyncFileEntry>,
+  pub files_deleted: Vec<RemoteSyncDeletedEntry>,
+  pub symlinks_added: Vec<RemoteSyncSymlinkEntry>,
   pub symlinks_modified: Vec<RemoteSyncSymlinkEntry>,
-  pub symlinks_deleted:  Vec<RemoteSyncDeletedEntry>,
+  pub symlinks_deleted: Vec<RemoteSyncDeletedEntry>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteSyncFileEntry {
-  pub path:         String,
-  pub hash:         String,
-  pub size:         u64,
+  pub path: String,
+  pub hash: String,
+  pub size: u64,
   pub content_type: Option<String>,
   pub chunk_hashes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteSyncSymlinkEntry {
-  pub path:   String,
-  pub hash:   String,
+  pub path: String,
+  pub hash: String,
   pub target: String,
 }
 

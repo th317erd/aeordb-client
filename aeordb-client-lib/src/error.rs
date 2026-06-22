@@ -63,22 +63,48 @@ pub enum ClientError {
   Serialization(#[from] serde_json::Error),
 }
 
+impl ClientError {
+  pub fn is_transient_upstream(&self) -> bool {
+    match self {
+      ClientError::UpstreamUnreachable(_) => true,
+      ClientError::UpstreamServer { status, .. } => matches!(*status, 502 | 503 | 504),
+      // Older remote helpers still surface some upstream failures as generic
+      // server strings. Keep this fallback until every remote path is
+      // structured.
+      ClientError::Server(message) => {
+        let lower = message.to_ascii_lowercase();
+        lower.contains("http 502")
+          || lower.contains("http 503")
+          || lower.contains("http 504")
+          || lower.contains("bad gateway")
+          || lower.contains("service unavailable")
+          || lower.contains("gateway timeout")
+          || lower.contains("connection refused")
+          || lower.contains("connection reset")
+          || lower.contains("timed out")
+          || lower.contains("timeout")
+      }
+      _ => false,
+    }
+  }
+}
+
 /// Short category tag emitted in the JSON error body. UI branches on
 /// this rather than parsing the human-readable message — `category`
 /// is the stable contract; `error` is human prose that may change.
 fn category_for(err: &ClientError) -> &'static str {
   match err {
-    ClientError::NotFound(_)             => "not_found",
-    ClientError::BadRequest(_)           => "bad_request",
-    ClientError::Forbidden(_)            => "forbidden",
-    ClientError::BadGateway(_)           => "bad_gateway",
-    ClientError::Configuration(_)        => "configuration",
-    ClientError::Server(_)               => "server",
-    ClientError::Io(_)                   => "io",
-    ClientError::Serialization(_)        => "serialization",
-    ClientError::UpstreamUnreachable(_)  => "upstream_unreachable",
-    ClientError::UpstreamServer { .. }   => "upstream_server",
-    ClientError::UpstreamProtocol(_)     => "upstream_protocol",
+    ClientError::NotFound(_) => "not_found",
+    ClientError::BadRequest(_) => "bad_request",
+    ClientError::Forbidden(_) => "forbidden",
+    ClientError::BadGateway(_) => "bad_gateway",
+    ClientError::Configuration(_) => "configuration",
+    ClientError::Server(_) => "server",
+    ClientError::Io(_) => "io",
+    ClientError::Serialization(_) => "serialization",
+    ClientError::UpstreamUnreachable(_) => "upstream_unreachable",
+    ClientError::UpstreamServer { .. } => "upstream_server",
+    ClientError::UpstreamProtocol(_) => "upstream_protocol",
     ClientError::UpstreamRejected { .. } => "upstream_rejected",
   }
 }
@@ -86,17 +112,17 @@ fn category_for(err: &ClientError) -> &'static str {
 impl IntoResponse for ClientError {
   fn into_response(self) -> Response {
     let status = match &self {
-      ClientError::NotFound(_)             => StatusCode::NOT_FOUND,
-      ClientError::BadRequest(_)           => StatusCode::BAD_REQUEST,
-      ClientError::Forbidden(_)            => StatusCode::FORBIDDEN,
-      ClientError::BadGateway(_)           => StatusCode::BAD_GATEWAY,
-      ClientError::Configuration(_)        => StatusCode::BAD_REQUEST,
-      ClientError::Server(_)               => StatusCode::INTERNAL_SERVER_ERROR,
-      ClientError::Io(_)                   => StatusCode::INTERNAL_SERVER_ERROR,
-      ClientError::Serialization(_)        => StatusCode::INTERNAL_SERVER_ERROR,
-      ClientError::UpstreamUnreachable(_)  => StatusCode::BAD_GATEWAY,
-      ClientError::UpstreamServer { .. }   => StatusCode::BAD_GATEWAY,
-      ClientError::UpstreamProtocol(_)     => StatusCode::BAD_GATEWAY,
+      ClientError::NotFound(_) => StatusCode::NOT_FOUND,
+      ClientError::BadRequest(_) => StatusCode::BAD_REQUEST,
+      ClientError::Forbidden(_) => StatusCode::FORBIDDEN,
+      ClientError::BadGateway(_) => StatusCode::BAD_GATEWAY,
+      ClientError::Configuration(_) => StatusCode::BAD_REQUEST,
+      ClientError::Server(_) => StatusCode::INTERNAL_SERVER_ERROR,
+      ClientError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+      ClientError::Serialization(_) => StatusCode::INTERNAL_SERVER_ERROR,
+      ClientError::UpstreamUnreachable(_) => StatusCode::BAD_GATEWAY,
+      ClientError::UpstreamServer { .. } => StatusCode::BAD_GATEWAY,
+      ClientError::UpstreamProtocol(_) => StatusCode::BAD_GATEWAY,
       // Mirror the upstream status when it was a 4xx so the proxy
       // doesn't lie about what the engine said. Falls back to 502
       // if the upstream status doesn't map to a known StatusCode.

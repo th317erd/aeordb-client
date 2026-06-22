@@ -1,6 +1,6 @@
 'use strict';
 
-import { escapeHtml, formatSize, bindResizeHandle, formatRelativeTime } from './aeor-file-view-shared.js';
+import { escapeHtml, formatSize, bindResizeHandle } from './aeor-file-view-shared.js';
 import { showRemoteFolderPicker } from './aeor-remote-folder-picker.js';
 import { ReactiveState } from '../aeor/reactive-state.js';
 import { elements } from '../aeor/elements.js';
@@ -12,6 +12,44 @@ import '../aeor/components/aeor-select.js';
 const { div, h1, h2, h3, label, input, option, button, table, thead, tbody, tr, th, td, span, a, strong } = elements;
 const aeorCheckbox = elements['aeor-checkbox'];
 const aeorSelect   = elements['aeor-select'];
+const ACTIVE_PROGRESS_MAX_AGE_MS = 5 * 60 * 1000;
+const HEALTH_STALE_MS = 30 * 1000;
+
+function isProgressLikeEvent(type) {
+  return type === 'progress' || type === 'scan_heartbeat';
+}
+
+function formatLocalIsoTimestamp(timestamp) {
+  const date = new Date(Number(timestamp));
+  if (Number.isNaN(date.getTime())) return '';
+
+  const pad = (value, width = 2) => String(value).padStart(width, '0');
+  const offsetMinutes = -date.getTimezoneOffset();
+  const offsetSign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteOffset = Math.abs(offsetMinutes);
+  const offsetHours = Math.floor(absoluteOffset / 60);
+  const offsetRemainder = absoluteOffset % 60;
+
+  return [
+    date.getFullYear(),
+    '-',
+    pad(date.getMonth() + 1),
+    '-',
+    pad(date.getDate()),
+    'T',
+    pad(date.getHours()),
+    ':',
+    pad(date.getMinutes()),
+    ':',
+    pad(date.getSeconds()),
+    '.',
+    pad(date.getMilliseconds(), 3),
+    offsetSign,
+    pad(offsetHours),
+    ':',
+    pad(offsetRemainder),
+  ].join('');
+}
 
 class AeorSync extends HTMLElement {
   constructor() {
@@ -24,7 +62,14 @@ class AeorSync extends HTMLElement {
       editingId:     null,
       selectedId:    null,
       activity:      [],
+      syncProgress:  {},
+      syncRunning:   {},
+      syncExecuting: {},
+      manualSyncing: {},
+      connectionHealth: {},
     });
+
+    this._eventSource = null;
 
     this._onAddToggle       = this._onAddToggle.bind(this);
     this._onGoConnections   = this._onGoConnections.bind(this);
@@ -33,11 +78,21 @@ class AeorSync extends HTMLElement {
     this._onBrowseLocal     = this._onBrowseLocal.bind(this);
     this._onBrowseRemote    = this._onBrowseRemote.bind(this);
     this._onActivityClose   = this._onActivityClose.bind(this);
+    this._handleSyncActivity = this._handleSyncActivity.bind(this);
+    this._handleConnectionHealth = this._handleConnectionHealth.bind(this);
   }
 
   connectedCallback() {
     this._buildDOM();
     this._fetchData();
+    this._connectEvents();
+  }
+
+  disconnectedCallback() {
+    if (this._eventSource) {
+      this._eventSource.close();
+      this._eventSource = null;
+    }
   }
 
   refresh() {
@@ -123,6 +178,11 @@ class AeorSync extends HTMLElement {
     });
     this._state.on('selectedId', () => this._rebuildTableContainer());
     this._state.on('activity', () => this._rebuildActivityFeed());
+    this._state.on('syncProgress', () => this._rebuildTableContainer());
+    this._state.on('syncRunning', () => this._rebuildTableContainer());
+    this._state.on('syncExecuting', () => this._rebuildTableContainer());
+    this._state.on('manualSyncing', () => this._rebuildTableContainer());
+    this._state.on('connectionHealth', () => this._rebuildTableContainer());
   }
 
   // ---------------------------------------------------------------------------
@@ -294,6 +354,12 @@ class AeorSync extends HTMLElement {
 
     const rows = s.relationships.map((rel) => {
       const isSelected = (rel.id === s.selectedId);
+      const progress = s.syncProgress[rel.id];
+      const isSyncExecuting = s.syncExecuting[rel.id] === true;
+      const isManualSyncing = s.manualSyncing[rel.id] === true;
+      const syncButtonState = this._syncButtonState(rel, isSyncExecuting, isManualSyncing);
+      const isSyncing = syncButtonState.active;
+      const progressPercent = Math.max(0, Math.min(100, progress?.progress_percent || 0));
 
       const row = tr.class(isSelected ? 'sync-row selected' : 'sync-row')(
         td.class('mono muted')(`${rel.id.substring(0, 8)}...`),
@@ -306,9 +372,15 @@ class AeorSync extends HTMLElement {
           ),
         ),
         td.class('actions')(
-          button.class('success small')('Sync'),
-          button.class('secondary small')('Edit'),
+          elements['aeor-confirm-button']
+            .class('confirm-button-new confirm-button-progress sync-progress-button')
+            .label(syncButtonState.label)
+            .duration('0')
+            .disabled(syncButtonState.disabled)
+            .progress(isSyncing ? progressPercent : 0)
+            .dataId(rel.id)(),
           button.class('secondary small btn-toggle')(rel.enabled ? 'Pause' : 'Resume'),
+          button.class('secondary small')('Edit'),
           elements['aeor-confirm-button']
             .class('confirm-button-danger')
             .label('Delete')
@@ -333,13 +405,20 @@ class AeorSync extends HTMLElement {
       });
 
       // Button events
-      const buttons = row.querySelectorAll('button');
-      buttons[0].addEventListener('click', (e) => { e.stopPropagation(); this._triggerSync(rel.id); });
-      buttons[1].addEventListener('click', (e) => { e.stopPropagation(); this._state.editingId = rel.id; this._state.showAddForm = false; });
-      buttons[2].addEventListener('click', (e) => { e.stopPropagation(); this._toggleSync(rel.id, rel.enabled); });
+      const syncButton = row.querySelector('aeor-confirm-button.sync-progress-button');
+      if (syncButton)
+        syncButton.addEventListener('confirm', (e) => { e.stopPropagation(); this._triggerSync(rel.id); });
+
+      const editButton = row.querySelector('button.secondary:not(.btn-toggle)');
+      if (editButton)
+        editButton.addEventListener('click', (e) => { e.stopPropagation(); this._state.editingId = rel.id; this._state.showAddForm = false; });
+
+      const toggleButton = row.querySelector('button.btn-toggle');
+      if (toggleButton)
+        toggleButton.addEventListener('click', (e) => { e.stopPropagation(); this._toggleSync(rel.id, rel.enabled); });
 
       // Confirm-button fires 'confirm' after hold completes — delete directly
-      const confirmBtn = row.querySelector('aeor-confirm-button');
+      const confirmBtn = row.querySelector('aeor-confirm-button.confirm-button-danger');
       if (confirmBtn) {
         confirmBtn.addEventListener('confirm', (e) => { e.stopPropagation(); this._deleteSync(rel.id); });
       }
@@ -364,6 +443,55 @@ class AeorSync extends HTMLElement {
     container.appendChild(tbl);
   }
 
+  _syncButtonState(relationship, isSyncExecuting, isManualSyncing) {
+    if (relationship?.enabled !== true) {
+      return {
+        label: 'Sync',
+        disabled: true,
+        active: false,
+      };
+    }
+
+    const health = this._connectionHealthStatus(relationship);
+    const executing = isSyncExecuting || isManualSyncing;
+
+    if (health === 'down') {
+      return {
+        label: executing ? 'Waiting...' : 'Offline',
+        disabled: true,
+        active: false,
+      };
+    }
+
+    if (health !== 'up') {
+      return {
+        label: 'Checking...',
+        disabled: true,
+        active: false,
+      };
+    }
+
+    return {
+      label: executing ? 'Syncing...' : 'Sync',
+      disabled: executing,
+      active: executing,
+    };
+  }
+
+  _connectionHealthStatus(relationship) {
+    if (!relationship?.remote_connection_id) return 'unknown';
+    const snapshot = this._state.connectionHealth?.[relationship.remote_connection_id];
+    if (!snapshot?.status) return 'unknown';
+    if (snapshot.checked_at && Date.now() - Number(snapshot.checked_at) > HEALTH_STALE_MS) {
+      return 'unknown';
+    }
+    return snapshot.status;
+  }
+
+  _relationshipConnectionHealthy(relationship) {
+    return this._connectionHealthStatus(relationship) === 'up';
+  }
+
   // ---------------------------------------------------------------------------
   // Activity feed — rebuilt when activity state changes
   // ---------------------------------------------------------------------------
@@ -382,19 +510,22 @@ class AeorSync extends HTMLElement {
     }
 
     for (const event of activity) {
-      const time = formatRelativeTime(event.timestamp);
+      const time = formatLocalIsoTimestamp(event.timestamp);
       const icon = this._eventIcon(event.event_type);
       const hasErrors = event.errors && event.errors.length > 0;
 
-      let detail = escapeHtml(event.summary);
-      if (event.files_affected > 0) {
-        detail += ` \u00B7 ${event.files_affected} files`;
-      }
-      if (event.bytes_transferred > 0) {
-        detail += ` \u00B7 ${formatSize(event.bytes_transferred)}`;
-      }
-      if (event.duration_ms > 0) {
-        detail += ` \u00B7 ${event.duration_ms}ms`;
+      const summary = this._activitySummary(event);
+      let detail = escapeHtml(summary);
+      if (!summary.includes(' · ')) {
+        if (event.files_affected > 0) {
+          detail += ` \u00B7 ${event.files_affected} files`;
+        }
+        if (event.bytes_transferred > 0) {
+          detail += ` \u00B7 ${formatSize(event.bytes_transferred)}`;
+        }
+        if (event.duration_ms > 0) {
+          detail += ` \u00B7 ${this._formatDuration(event.duration_ms)}`;
+        }
       }
 
       const bodyChildren = [
@@ -504,9 +635,66 @@ class AeorSync extends HTMLElement {
       case 'pull':      return '\u2B07';
       case 'push':      return '\u2B06';
       case 'full_sync': return '\u21C4';
+      case 'progress':  return '\u21BB';
+      case 'scan_heartbeat': return '\u21BB';
       case 'error':     return '\u26A0';
       default:          return '\u2022';
     }
+  }
+
+  _activitySummary(event) {
+    const summary = event.summary || '';
+
+    const progressMatch = summary.match(/^push progress: processed=(\d+), pushed=(\d+), skipped=(\d+), failed=(\d+), deleted=(\d+)$/);
+    if (progressMatch) {
+      const [, processed, pushed, skipped, failed, deleted] = progressMatch.map(Number);
+      const parts = [`Uploading ${this._formatCount(processed)} entries`];
+      if (Number.isFinite(event.progress_percent)) {
+        parts[0] += ` (${Math.round(event.progress_percent)}%)`;
+      }
+      if (pushed > 0) {
+        parts.push(`${this._formatCount(pushed)} committed`);
+        if (event.bytes_transferred > 0) {
+          parts.push(`totaling ${formatSize(event.bytes_transferred)}`);
+        }
+      }
+      if (skipped > 0) parts.push(`${this._formatCount(skipped)} unchanged`);
+      if (deleted > 0) parts.push(`${this._formatCount(deleted)} deleted`);
+      if (failed > 0) parts.push(`${this._formatCount(failed)} failed`);
+      return parts.join(' · ');
+    }
+
+    const startedMatch = summary.match(/^push started: scanning (\d+) local entries under (.+)$/);
+    if (startedMatch) {
+      return `Scanning ${this._formatCount(Number(startedMatch[1]))} local entries in ${startedMatch[2]}`;
+    }
+
+    const uploadingMatch = summary.match(/^uploading (.+): (\d+)\/(\d+) chunks$/);
+    if (uploadingMatch) {
+      return `Uploading ${uploadingMatch[1]}: ${this._formatCount(Number(uploadingMatch[2]))} of ${this._formatCount(Number(uploadingMatch[3]))} chunks`;
+    }
+
+    const zeroByteUploadMatch = summary.match(/^Uploaded (.+) \(0 B\)(.*)$/);
+    if (zeroByteUploadMatch) {
+      return `Committed ${zeroByteUploadMatch[1].replace(/file(s)?$/, 'remote update$1')} (0 B sent)${zeroByteUploadMatch[2]}`;
+    }
+
+    return summary;
+  }
+
+  _formatCount(value) {
+    return new Intl.NumberFormat().format(value);
+  }
+
+  _formatDuration(durationMs) {
+    if (durationMs < 1000) return `${durationMs}ms`;
+    if (durationMs < 60000) return `${(durationMs / 1000).toFixed(1)}s`;
+    const totalSeconds = Math.floor(durationMs / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes < 60) return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${String(minutes % 60).padStart(2, '0')}m`;
   }
 
   // ---------------------------------------------------------------------------
@@ -515,24 +703,225 @@ class AeorSync extends HTMLElement {
 
   async _fetchData() {
     try {
-      const [syncResponse, connectionsResponse] = await Promise.all([
+      const [syncResponse, connectionsResponse, runnerStatusResponse, healthResponse] = await Promise.all([
         fetch('/api/v1/sync'),
         fetch('/api/v1/connections'),
+        fetch('/api/v1/sync/runner/status'),
+        fetch('/api/v1/health/connections'),
       ]);
 
       if (!syncResponse.ok) throw new Error(`Sync request failed: ${syncResponse.status}`);
       if (!connectionsResponse.ok) throw new Error(`Connections request failed: ${connectionsResponse.status}`);
+      if (!runnerStatusResponse.ok) throw new Error(`Runner status request failed: ${runnerStatusResponse.status}`);
+      if (!healthResponse.ok) throw new Error(`Health request failed: ${healthResponse.status}`);
 
-      const [relationships, connections] = await Promise.all([
+      const [relationships, connections, runnerStatus, healthSnapshots] = await Promise.all([
         syncResponse.json(),
         connectionsResponse.json(),
+        runnerStatusResponse.json(),
+        healthResponse.json(),
       ]);
+
+      const syncRunning = {};
+      const syncExecuting = {};
+      const connectionHealth = this._healthMapFromSnapshots(healthSnapshots);
+      if (Array.isArray(runnerStatus)) {
+        for (const status of runnerStatus) {
+          if (status?.relationship_id) {
+            syncRunning[status.relationship_id] = status.running === true;
+            syncExecuting[status.relationship_id] = status.executing === true;
+          }
+          if (status?.remote_connection_id && status.connection_health) {
+            connectionHealth[status.remote_connection_id] = {
+              connection_id: status.remote_connection_id,
+              status: status.connection_health,
+              checked_at: status.connection_checked_at,
+              message: status.connection_message,
+            };
+          }
+        }
+      }
 
       this._state.relationships = relationships;
       this._state.connections   = connections;
+      this._state.syncRunning   = syncRunning;
+      this._state.syncExecuting = syncExecuting;
+      this._state.connectionHealth = connectionHealth;
+      await this._hydrateSyncProgress(relationships, syncExecuting);
     } catch (error) {
       console.error('Failed to fetch data:', error);
     }
+  }
+
+  _healthMapFromSnapshots(snapshots) {
+    const health = {};
+    if (!Array.isArray(snapshots)) return health;
+    for (const snapshot of snapshots) {
+      if (!snapshot?.connection_id) continue;
+      health[snapshot.connection_id] = snapshot;
+    }
+    return health;
+  }
+
+  async _hydrateSyncProgress(relationships, syncExecuting = this._state.syncExecuting) {
+    if (!Array.isArray(relationships) || relationships.length === 0) {
+      this._state.syncProgress = {};
+      return;
+    }
+
+    const activeRelationships = relationships.filter((relationship) =>
+      relationship?.enabled === true &&
+      syncExecuting?.[relationship.id] === true &&
+      this._relationshipConnectionHealthy(relationship)
+    );
+
+    if (activeRelationships.length === 0) {
+      this._state.syncProgress = {};
+      return;
+    }
+
+    const responses = await Promise.all(activeRelationships.map(async (relationship) => {
+      try {
+        const response = await fetch(`/api/v1/sync/${relationship.id}/activity`);
+        if (!response.ok) return null;
+        const events = await response.json();
+        return {
+          id: relationship.id,
+          progress: this._progressFromActivityEvents(events),
+        };
+      } catch {
+        return null;
+      }
+    }));
+
+    if (!responses.some((item) => item !== null)) {
+      return;
+    }
+
+    const nextProgress = {};
+    for (const item of responses) {
+      if (item && item.progress) {
+        nextProgress[item.id] = item.progress;
+      }
+    }
+
+    this._state.syncProgress = nextProgress;
+  }
+
+  _progressFromActivityEvents(events) {
+    if (!Array.isArray(events) || events.length === 0) return null;
+
+    const latest = [...events]
+      .filter((event) => isProgressLikeEvent(event?.event_type))
+      .sort((a, b) => (b?.timestamp || 0) - (a?.timestamp || 0))[0];
+    if (!latest) return null;
+    if (Date.now() - latest.timestamp > ACTIVE_PROGRESS_MAX_AGE_MS) return null;
+
+    return {
+      progress_percent: latest.progress_percent || 0,
+      summary:          latest.summary || 'Syncing...',
+    };
+  }
+
+  _connectEvents() {
+    if (this._eventSource) return;
+
+    this._eventSource = new EventSource('/api/v1/events');
+    this._eventSource.addEventListener('sync_activity', this._handleSyncActivity);
+    this._eventSource.addEventListener('connection_health', this._handleConnectionHealth);
+  }
+
+  _handleConnectionHealth(event) {
+    let data;
+    try {
+      data = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+
+    if (!data?.connection_id) return;
+    this._state.connectionHealth = {
+      ...(this._state.connectionHealth || {}),
+      [data.connection_id]: data,
+    };
+  }
+
+  _handleSyncActivity(event) {
+    let data;
+    try {
+      data = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+
+    const relationshipId = data.relationship_id;
+    if (!relationshipId) return;
+
+    const progress = { ...this._state.syncProgress };
+    if (isProgressLikeEvent(data.event_type)) {
+      const relationship = this._state.relationships.find((item) => item.id === relationshipId);
+      const isKnownManualRun = this._state.manualSyncing[relationshipId] === true;
+      const isContinuousRun = relationship?.enabled === true && this._state.syncRunning[relationshipId] === true;
+      const isConnectionHealthy = this._relationshipConnectionHealthy(relationship);
+      if ((!isKnownManualRun && !isContinuousRun) || !isConnectionHealthy) {
+        delete progress[relationshipId];
+        this._state.syncProgress = progress;
+        return;
+      }
+
+      const age = Date.now() - data.timestamp;
+      if (age <= ACTIVE_PROGRESS_MAX_AGE_MS) {
+        progress[relationshipId] = {
+          progress_percent: data.progress_percent || 0,
+          summary:          data.summary || 'Syncing...',
+        };
+      } else {
+        delete progress[relationshipId];
+      }
+      this._setRelationshipSyncExecuting(relationshipId, true);
+    } else {
+      delete progress[relationshipId];
+      this._setRelationshipSyncExecuting(relationshipId, false);
+      this._setManualSyncing(relationshipId, false);
+    }
+    this._state.syncProgress = progress;
+
+    if (this._state.selectedId === relationshipId) {
+      const current = Array.isArray(this._state.activity) ? this._state.activity : [];
+      this._state.activity = this._mergeActivityEvent(data, current);
+    }
+  }
+
+  _mergeActivityEvent(event, current) {
+    const existing = Array.isArray(current) ? current : [];
+    if (event.event_type === 'progress') {
+      return [event, ...existing.filter((item) => item.event_type !== 'progress')].slice(0, 50);
+    }
+    if (event.event_type === 'scan_heartbeat') {
+      return [event, ...existing].slice(0, 50);
+    }
+
+    return [event, ...existing.filter((item) => item.event_type !== 'progress')].slice(0, 50);
+  }
+
+  _setRelationshipSyncExecuting(relationshipId, value) {
+    if (!relationshipId) return;
+    const current = this._state.syncExecuting || {};
+    if (current[relationshipId] === value) return;
+    this._state.syncExecuting = {
+      ...current,
+      [relationshipId]: value,
+    };
+  }
+
+  _setManualSyncing(relationshipId, value) {
+    if (!relationshipId) return;
+    const current = this._state.manualSyncing || {};
+    if (current[relationshipId] === value) return;
+    this._state.manualSyncing = {
+      ...current,
+      [relationshipId]: value,
+    };
   }
 
   async _fetchActivity(id) {
@@ -627,17 +1016,48 @@ class AeorSync extends HTMLElement {
   }
 
   async _triggerSync(id) {
+    const progress = { ...this._state.syncProgress };
+    progress[id] = { progress_percent: 0, summary: 'Sync requested...' };
+    this._state.syncProgress = progress;
+    this._state.manualSyncing = {
+      ...this._state.manualSyncing,
+      [id]: true,
+    };
+
     try {
       const response = await fetch(`/api/v1/sync/${id}/trigger`, { method: 'POST' });
-      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+      if (!response.ok) throw new Error(await this._responseErrorMessage(response));
       const result   = await response.json();
+      if (result.already_running) {
+        const progress = { ...this._state.syncProgress };
+        delete progress[id];
+        this._state.syncProgress = progress;
+        const manualSyncing = { ...this._state.manualSyncing };
+        delete manualSyncing[id];
+        this._state.manualSyncing = manualSyncing;
+        window.aeorToast(result.message || 'Sync already in progress', 'info');
+        await this._fetchData();
+        return;
+      }
       const pull     = result.pull || {};
       const push     = result.push || {};
+      const nextProgress = { ...this._state.syncProgress };
+      delete nextProgress[id];
+      this._state.syncProgress = nextProgress;
+      const manualSyncing = { ...this._state.manualSyncing };
+      delete manualSyncing[id];
+      this._state.manualSyncing = manualSyncing;
       window.aeorToast(`Sync complete: ${pull.files_pulled || 0} pulled, ${push.files_pushed || 0} pushed`, 'success');
       if (this._state.selectedId === id) {
         this._fetchActivity(id);
       }
     } catch (error) {
+      const nextProgress = { ...this._state.syncProgress };
+      delete nextProgress[id];
+      this._state.syncProgress = nextProgress;
+      const manualSyncing = { ...this._state.manualSyncing };
+      delete manualSyncing[id];
+      this._state.manualSyncing = manualSyncing;
       window.aeorToast(`Sync failed: ${error.message}`, 'error', 10000);
     }
   }
@@ -645,8 +1065,26 @@ class AeorSync extends HTMLElement {
   async _toggleSync(id, isEnabled) {
     const action = (isEnabled) ? 'disable' : 'enable';
     try {
+      if (isEnabled) {
+        const progress = { ...this._state.syncProgress };
+        delete progress[id];
+        this._state.syncProgress = progress;
+        const manualSyncing = { ...this._state.manualSyncing };
+        delete manualSyncing[id];
+        this._state.manualSyncing = manualSyncing;
+
+        this._state.syncRunning = {
+          ...this._state.syncRunning,
+          [id]: false,
+        };
+        this._state.syncExecuting = {
+          ...this._state.syncExecuting,
+          [id]: false,
+        };
+      }
+
       const response = await fetch(`/api/v1/sync/${id}/${action}`, { method: 'POST' });
-      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+      if (!response.ok) throw new Error(await this._responseErrorMessage(response));
       await this._fetchData();
     } catch (error) {
       window.aeorToast(`Failed to ${action} sync: ${error.message}`, 'error');
@@ -654,6 +1092,9 @@ class AeorSync extends HTMLElement {
   }
 
   async _deleteSync(id) {
+    const relationship = this._state.relationships.find((item) => item.id === id);
+    const name = relationship?.name || id;
+
     try {
       const response = await fetch(`/api/v1/sync/${id}`, { method: 'DELETE' });
       if (!response.ok) throw new Error(`Request failed: ${response.status}`);
@@ -661,9 +1102,21 @@ class AeorSync extends HTMLElement {
         this._state.selectedId = null;
       }
       await this._fetchData();
+      window.aeorToast?.(`Successfully deleted sync "${name}".`, 'success');
     } catch (error) {
       window.aeorToast(`Failed to delete sync: ${error.message}`, 'error');
     }
+  }
+
+  async _responseErrorMessage(response) {
+    try {
+      const body = await response.json();
+      if (body?.error) return body.error;
+      if (body?.message) return body.message;
+    } catch {
+      // Fall through to the generic response message.
+    }
+    return `Request failed: ${response.status}`;
   }
 }
 

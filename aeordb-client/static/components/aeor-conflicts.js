@@ -79,14 +79,16 @@ class AeorConflicts extends HTMLElement {
           div.class('preview-header')(
             h3.class('preview-title')(),
             div.class('preview-actions')(
-              button.class('success small')
-                .onClick(this._handlePreviewAccept)(
-                  'Accept Winner',
-                ),
-              button.class('primary small')
-                .onClick(this._handlePreviewPickLoser)(
-                  'Pick Loser',
-                ),
+              elements['aeor-confirm-button']
+                .class('confirm-button-new')
+                .label('Accept Winner')
+                .duration('1000')
+                .onConfirm(this._handlePreviewAccept)(),
+              elements['aeor-confirm-button']
+                .class('confirm-button-new')
+                .label('Pick Loser')
+                .duration('1000')
+                .onConfirm(this._handlePreviewPickLoser)(),
               button.class('secondary small conflict-close')
                 .onClick(this._handlePreviewClose)(
                   '\u2715',
@@ -165,17 +167,19 @@ class AeorConflicts extends HTMLElement {
               ),
               td.class('muted')(new Date(conflict.created_at).toLocaleString()),
               td.class('actions')(
-                button.class('success small dismiss-btn')
+                elements['aeor-confirm-button']
+                  .class('confirm-button-new dismiss-btn')
+                  .label('Accept')
+                  .duration('1000')
                   .dataPath(conflict.path)
-                  .onClick(this._handleDismiss)(
-                    'Accept',
-                  ),
-                button.class('primary small resolve-btn')
+                  .onConfirm(this._handleDismiss)(),
+                elements['aeor-confirm-button']
+                  .class('confirm-button-new resolve-btn')
+                  .label('Pick Loser')
+                  .duration('1000')
                   .dataPath(conflict.path)
                   .dataPick('loser')
-                  .onClick(this._handleResolve)(
-                    'Pick Loser',
-                  ),
+                  .onConfirm(this._handleResolve)(),
               ),
             );
         }),
@@ -250,7 +254,7 @@ class AeorConflicts extends HTMLElement {
   // -- Event handlers --
 
   _handleRowClick(event) {
-    if (event.target.closest('button')) return;
+    if (event.target.closest('button') || event.target.closest('aeor-confirm-button')) return;
 
     let row = event.target.closest('.conflict-row');
     if (!row) return;

@@ -2,13 +2,15 @@ use aeordb_client_lib::models::status::StatusResponse;
 use aeordb_client_lib::server::{ServerConfig, start_server_with_handle};
 
 fn test_config() -> ServerConfig {
-  let temp_dir = tempfile::tempdir().expect("failed to create temp dir").keep();
+  let temp_dir = tempfile::tempdir()
+    .expect("failed to create temp dir")
+    .keep();
   let data_path = temp_dir.join("test-state.aeordb");
   let config_path = temp_dir.join("config.yaml");
 
   ServerConfig {
-    host:        "127.0.0.1".to_string(),
-    port:        0, // OS assigns a free port
+    host: "127.0.0.1".to_string(),
+    port: 0, // OS assigns a free port
     config_path,
     data_path,
   }
@@ -22,10 +24,8 @@ async fn test_status_endpoint_returns_running() {
     .await
     .expect("failed to start server");
 
-  let url      = format!("http://{}/api/v1/status", address);
-  let response = reqwest::get(&url)
-    .await
-    .expect("failed to send request");
+  let url = format!("http://{}/api/v1/status", address);
+  let response = reqwest::get(&url).await.expect("failed to send request");
 
   assert_eq!(response.status(), 200);
 
@@ -46,10 +46,8 @@ async fn test_status_endpoint_includes_client_identity() {
     .await
     .expect("failed to start server");
 
-  let url      = format!("http://{}/api/v1/status", address);
-  let response = reqwest::get(&url)
-    .await
-    .expect("failed to send request");
+  let url = format!("http://{}/api/v1/status", address);
+  let response = reqwest::get(&url).await.expect("failed to send request");
 
   let body: StatusResponse = response
     .json()
@@ -74,10 +72,8 @@ async fn test_status_endpoint_uptime_is_non_negative() {
     .await
     .expect("failed to start server");
 
-  let url      = format!("http://{}/api/v1/status", address);
-  let response = reqwest::get(&url)
-    .await
-    .expect("failed to send request");
+  let url = format!("http://{}/api/v1/status", address);
+  let response = reqwest::get(&url).await.expect("failed to send request");
 
   let body: StatusResponse = response
     .json()
@@ -91,17 +87,25 @@ async fn test_status_endpoint_uptime_is_non_negative() {
 #[tokio::test]
 async fn test_status_endpoint_includes_directory_paths() {
   let config = test_config();
-  let expected_config_dir = config.config_path.parent().unwrap().to_string_lossy().to_string();
-  let expected_data_dir   = config.data_path.parent().unwrap().to_string_lossy().to_string();
+  let expected_config_dir = config
+    .config_path
+    .parent()
+    .unwrap()
+    .to_string_lossy()
+    .to_string();
+  let expected_data_dir = config
+    .data_path
+    .parent()
+    .unwrap()
+    .to_string_lossy()
+    .to_string();
 
   let (address, _handle) = start_server_with_handle(config)
     .await
     .expect("failed to start server");
 
-  let url      = format!("http://{}/api/v1/status", address);
-  let response = reqwest::get(&url)
-    .await
-    .expect("failed to send request");
+  let url = format!("http://{}/api/v1/status", address);
+  let response = reqwest::get(&url).await.expect("failed to send request");
 
   let body: StatusResponse = response
     .json()
@@ -122,10 +126,8 @@ async fn test_unknown_route_returns_404() {
     .await
     .expect("failed to start server");
 
-  let url      = format!("http://{}/api/v1/nonexistent", address);
-  let response = reqwest::get(&url)
-    .await
-    .expect("failed to send request");
+  let url = format!("http://{}/api/v1/nonexistent", address);
+  let response = reqwest::get(&url).await.expect("failed to send request");
 
   assert_eq!(response.status(), 404);
 }

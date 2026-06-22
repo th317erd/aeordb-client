@@ -22,7 +22,7 @@ class AeorToasts extends HTMLElement {
 
   connectedCallback() {
     // Expose global toast function using the shared toast system
-    window.aeorToast = (message, type = 'info', duration = 6000) => {
+    window.aeorToast = (message, type = 'info', duration = 12000) => {
       showToast(message, type, duration);
     };
 
@@ -88,6 +88,8 @@ class AeorToasts extends HTMLElement {
       const errors = [];
 
       for (const event of relEvents) {
+        if (event.event_type === 'progress') continue;
+
         if (event.event_type === 'error') {
           hasErrors = true;
           errors.push(event.summary);

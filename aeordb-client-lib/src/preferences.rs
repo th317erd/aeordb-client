@@ -64,19 +64,19 @@ pub struct FileBrowserPrefs {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileBrowserTab {
-  pub id:                String,
+  pub id: String,
   #[serde(default)]
-  pub name:              Option<String>,
+  pub name: Option<String>,
   #[serde(default)]
-  pub path:              Option<String>,
+  pub path: Option<String>,
   #[serde(default)]
-  pub view_mode:         Option<String>,
+  pub view_mode: Option<String>,
   #[serde(default)]
-  pub page_size:         Option<i64>,
+  pub page_size: Option<i64>,
   #[serde(default)]
-  pub preview_height:    Option<i64>,
+  pub preview_height: Option<i64>,
   #[serde(default)]
-  pub relationship_id:   Option<String>,
+  pub relationship_id: Option<String>,
   #[serde(default)]
   pub relationship_name: Option<String>,
 }
@@ -86,7 +86,7 @@ pub struct FileBrowserTab {
 // ---------------------------------------------------------------------------
 
 pub struct PreferencesStore {
-  path:        PathBuf,
+  path: PathBuf,
   preferences: RwLock<UserPreferences>,
 }
 
@@ -100,9 +100,10 @@ impl PreferencesStore {
 
     let preferences = if path.exists() {
       let contents = std::fs::read_to_string(&path).map_err(|error| {
-        ClientError::Configuration(
-          format!("failed to read preferences at {:?}: {}", path, error),
-        )
+        ClientError::Configuration(format!(
+          "failed to read preferences at {:?}: {}",
+          path, error
+        ))
       })?;
 
       // Empty file → defaults. serde_yaml chokes on an empty string.
@@ -110,9 +111,10 @@ impl PreferencesStore {
         UserPreferences::default()
       } else {
         serde_yaml::from_str(&contents).map_err(|error| {
-          ClientError::Configuration(
-            format!("failed to parse preferences at {:?}: {}", path, error),
-          )
+          ClientError::Configuration(format!(
+            "failed to parse preferences at {:?}: {}",
+            path, error
+          ))
         })?
       }
     } else {
@@ -150,7 +152,10 @@ impl PreferencesStore {
     //    (a string where a bool was expected). The current schema is
     //    permissive by design; if we want strict, add deny_unknown_fields.
     let merged: UserPreferences = serde_json::from_value(current).map_err(|error| {
-      ClientError::BadRequest(format!("preferences patch produced invalid state: {}", error))
+      ClientError::BadRequest(format!(
+        "preferences patch produced invalid state: {}",
+        error
+      ))
     })?;
 
     // 4. Persist + commit in-memory.
@@ -162,9 +167,10 @@ impl PreferencesStore {
   fn save_inner(&self, prefs: &UserPreferences) -> Result<()> {
     if let Some(parent) = self.path.parent() {
       std::fs::create_dir_all(parent).map_err(|error| {
-        ClientError::Configuration(
-          format!("failed to create preferences directory {:?}: {}", parent, error),
-        )
+        ClientError::Configuration(format!(
+          "failed to create preferences directory {:?}: {}",
+          parent, error
+        ))
       })?;
     }
 
@@ -173,9 +179,10 @@ impl PreferencesStore {
     })?;
 
     std::fs::write(&self.path, yaml).map_err(|error| {
-      ClientError::Configuration(
-        format!("failed to write preferences to {:?}: {}", self.path, error),
-      )
+      ClientError::Configuration(format!(
+        "failed to write preferences to {:?}: {}",
+        self.path, error
+      ))
     })?;
 
     #[cfg(unix)]
@@ -206,7 +213,9 @@ fn apply_merge_patch(target: &mut Value, patch: Value) {
       if !target.is_object() {
         *target = Value::Object(serde_json::Map::new());
       }
-      let target_map = target.as_object_mut().expect("just ensured target is object");
+      let target_map = target
+        .as_object_mut()
+        .expect("just ensured target is object");
       for (key, value) in patch_map {
         if value.is_null() {
           target_map.remove(&key);

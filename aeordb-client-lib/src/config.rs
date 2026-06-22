@@ -20,8 +20,12 @@ pub struct ClientSettings {
   pub client_name: Option<String>,
 }
 
-fn default_sync_interval() -> u64 { 60 }
-fn default_auto_start_sync() -> bool { true }
+fn default_sync_interval() -> u64 {
+  60
+}
+fn default_auto_start_sync() -> bool {
+  true
+}
 
 impl Default for ClientSettings {
   fn default() -> Self {
@@ -39,19 +43,19 @@ impl Default for ClientSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
   #[serde(default)]
-  pub connections:   Vec<RemoteConnection>,
+  pub connections: Vec<RemoteConnection>,
   #[serde(default)]
   pub relationships: Vec<SyncRelationship>,
   #[serde(default)]
-  pub settings:      ClientSettings,
+  pub settings: ClientSettings,
 }
 
 impl Default for ClientConfig {
   fn default() -> Self {
     Self {
-      connections:   Vec::new(),
+      connections: Vec::new(),
       relationships: Vec::new(),
-      settings:      ClientSettings::default(),
+      settings: ClientSettings::default(),
     }
   }
 }
@@ -59,7 +63,7 @@ impl Default for ClientConfig {
 /// Thread-safe config store that reads/writes YAML.
 pub struct ConfigStore {
   config_path: PathBuf,
-  config:      RwLock<ClientConfig>,
+  config: RwLock<ClientConfig>,
 }
 
 impl ConfigStore {
@@ -68,29 +72,32 @@ impl ConfigStore {
   pub fn load(config_path: &Path) -> Result<Self> {
     if let Some(parent) = config_path.parent() {
       std::fs::create_dir_all(parent).map_err(|error| {
-        ClientError::Configuration(
-          format!("failed to create config directory {:?}: {}", parent, error),
-        )
+        ClientError::Configuration(format!(
+          "failed to create config directory {:?}: {}",
+          parent, error
+        ))
       })?;
     }
 
     let config = if config_path.exists() {
       let contents = std::fs::read_to_string(config_path).map_err(|error| {
-        ClientError::Configuration(
-          format!("failed to read config at {:?}: {}", config_path, error),
-        )
+        ClientError::Configuration(format!(
+          "failed to read config at {:?}: {}",
+          config_path, error
+        ))
       })?;
 
       serde_yaml::from_str(&contents).map_err(|error| {
-        ClientError::Configuration(
-          format!("failed to parse config at {:?}: {}", config_path, error),
-        )
+        ClientError::Configuration(format!(
+          "failed to parse config at {:?}: {}",
+          config_path, error
+        ))
       })?
     } else {
       let default_config = ClientConfig::default();
       let store = Self {
         config_path: config_path.to_path_buf(),
-        config:      RwLock::new(default_config.clone()),
+        config: RwLock::new(default_config.clone()),
       };
       store.save_inner(&default_config)?;
       default_config
@@ -98,7 +105,7 @@ impl ConfigStore {
 
     Ok(Self {
       config_path: config_path.to_path_buf(),
-      config:      RwLock::new(config),
+      config: RwLock::new(config),
     })
   }
 
@@ -110,15 +117,14 @@ impl ConfigStore {
 
   fn save_inner(&self, config: &ClientConfig) -> Result<()> {
     let yaml = serde_yaml::to_string(config).map_err(|error| {
-      ClientError::Configuration(
-        format!("failed to serialize config: {}", error),
-      )
+      ClientError::Configuration(format!("failed to serialize config: {}", error))
     })?;
 
     std::fs::write(&self.config_path, yaml).map_err(|error| {
-      ClientError::Configuration(
-        format!("failed to write config to {:?}: {}", self.config_path, error),
-      )
+      ClientError::Configuration(format!(
+        "failed to write config to {:?}: {}",
+        self.config_path, error
+      ))
     })?;
 
     #[cfg(unix)]
@@ -126,9 +132,10 @@ impl ConfigStore {
       use std::os::unix::fs::PermissionsExt;
       let permissions = std::fs::Permissions::from_mode(0o600);
       std::fs::set_permissions(&self.config_path, permissions).map_err(|error| {
-        ClientError::Configuration(
-          format!("failed to set config permissions on {:?}: {}", self.config_path, error),
-        )
+        ClientError::Configuration(format!(
+          "failed to set config permissions on {:?}: {}",
+          self.config_path, error
+        ))
       })?;
     }
 

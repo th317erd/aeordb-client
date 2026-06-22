@@ -10,9 +10,7 @@ use crate::error::{ClientError, Result};
 use crate::remote::RemoteClient;
 use crate::state::StateStore;
 use crate::sync::filter::matches_filter;
-use crate::sync::metadata::{
-  FileSyncMeta, SyncCheckpoint, SyncMetadataStore, SyncStatus,
-};
+use crate::sync::metadata::{FileSyncMeta, SyncCheckpoint, SyncMetadataStore, SyncStatus};
 use crate::sync::relationships::SyncRelationship;
 use crate::sync::replication::{
   RemoteSyncDiffResponse, RemoteSyncFileEntry, RemoteSyncSymlinkEntry,
@@ -21,14 +19,14 @@ use crate::sync::replication::{
 /// Result of a pull sync operation.
 #[derive(Debug)]
 pub struct PullResult {
-  pub files_pulled:   u64,
-  pub files_skipped:  u64,
-  pub files_failed:   u64,
-  pub files_deleted:  u64,
+  pub files_pulled: u64,
+  pub files_skipped: u64,
+  pub files_failed: u64,
+  pub files_deleted: u64,
   pub symlinks_pulled: u64,
-  pub total_bytes:    u64,
-  pub duration_ms:    u64,
-  pub errors:         Vec<String>,
+  pub total_bytes: u64,
+  pub duration_ms: u64,
+  pub errors: Vec<String>,
 }
 
 /// Pull remote changes from an aeordb server to the local filesystem.
@@ -51,8 +49,7 @@ pub async fn pull_sync(
   let metadata_store = SyncMetadataStore::new(state);
 
   // Fetch the engine's chunk parameters once per pull cycle.
-  let blob_config = remote_client.blob_config().await
-    .map_err(|e| ClientError::Server(format!("blob_config failed: {}", e)))?;
+  let blob_config = remote_client.blob_config().await?;
 
   let local_base = Path::new(&relationship.local_path);
   if !local_base.exists() {
@@ -75,7 +72,13 @@ pub async fn pull_sync(
   // reuses the same JWT slot the rest of pull_sync uses, instead of
   // minting its own token via the (now-removed) inline /auth/token
   // dance that was creating a fresh refresh-token row on every cycle.
-  let diff = fetch_remote_diff(connection, since_root_hash.as_deref(), http_client, jwt_cache).await?;
+  let diff = fetch_remote_diff(
+    connection,
+    since_root_hash.as_deref(),
+    http_client,
+    jwt_cache,
+  )
+  .await?;
   let new_root_hash = diff.root_hash.clone();
 
   // Process added and modified files.
@@ -94,14 +97,17 @@ pub async fn pull_sync(
   // only one chunk in a 100MB file, we re-use the other ~399 chunks
   // straight from the existing on-disk copy and pull only the dirty
   // ~256KB from the engine.
-  let files_to_download: Vec<&RemoteSyncFileEntry> = diff.changes.files_added.iter()
+  let files_to_download: Vec<&RemoteSyncFileEntry> = diff
+    .changes
+    .files_added
+    .iter()
     .chain(diff.changes.files_modified.iter())
     .collect();
 
   // Per-file plan computed during phase 1.
   struct FilePlan<'a> {
-    entry:        &'a RemoteSyncFileEntry,
-    local_path:   PathBuf,
+    entry: &'a RemoteSyncFileEntry,
+    local_path: PathBuf,
     // hash -> (offset_in_local_file, chunk_len) for chunks already on disk.
     local_chunks: HashMap<String, (u64, usize)>,
   }
@@ -132,11 +138,8 @@ pub async fn pull_sync(
       continue;
     }
 
-    let local_file_path = compute_local_path(
-      &file_entry.path,
-      &relationship.remote_path,
-      local_base,
-    );
+    let local_file_path =
+      compute_local_path(&file_entry.path, &relationship.remote_path, local_base);
 
     if let Some(parent) = local_file_path.parent() {
       if let Err(error) = tokio::fs::create_dir_all(parent).await {
@@ -157,14 +160,17 @@ pub async fn pull_sync(
       &local_file_path,
       blob_config.chunk_size,
       &blob_config.chunk_hash_prefix,
-    ).await {
+    )
+    .await
+    {
       Ok(map) => map,
       Err(error) => {
         // Hashing failure isn't fatal — fall back to "treat all chunks
         // as needed" so we still pull the file end-to-end.
         tracing::warn!(
           "failed to hash existing local file {:?} (will refetch in full): {}",
-          local_file_path, error,
+          local_file_path,
+          error,
         );
         HashMap::new()
       }
@@ -176,7 +182,11 @@ pub async fn pull_sync(
       }
     }
 
-    plans.push(FilePlan { entry: file_entry, local_path: local_file_path, local_chunks });
+    plans.push(FilePlan {
+      entry: file_entry,
+      local_path: local_file_path,
+      local_chunks,
+    });
   }
 
   // Phase 2: batch-fetch unique needed chunks.
@@ -215,29 +225,43 @@ pub async fn pull_sync(
       continue;
     }
 
-    match assemble_file(&plan.entry.chunk_hashes, &plan.local_path, &plan.local_chunks, &fetched).await {
+    match assemble_file(
+      &plan.entry.chunk_hashes,
+      &plan.local_path,
+      &plan.local_chunks,
+      &fetched,
+    )
+    .await
+    {
       Ok((file_size, content_hash)) => {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let mtime = file_mtime_async(&plan.local_path).await.unwrap_or(now_ms);
 
         let file_meta = FileSyncMeta {
-          path:           plan.entry.path.clone(),
+          path: plan.entry.path.clone(),
           content_hash,
-          size:           file_size,
-          modified_at:    mtime,
-          sync_status:    SyncStatus::Synced,
+          size: file_size,
+          modified_at: mtime,
+          sync_status: SyncStatus::Synced,
           last_synced_at: now_ms,
         };
 
         if let Err(error) = metadata_store.set_file_meta(&relationship.id, &file_meta) {
-          let message = format!("failed to store metadata for {}: {}", plan.entry.path, error);
+          let message = format!(
+            "failed to store metadata for {}: {}",
+            plan.entry.path, error
+          );
           tracing::warn!("{}", message);
           errors.push(message);
         }
 
         files_pulled += 1;
         total_bytes += file_size;
-        tracing::debug!("pulled file: {} ({} bytes, chunked)", plan.entry.path, file_size);
+        tracing::debug!(
+          "pulled file: {} ({} bytes, chunked)",
+          plan.entry.path,
+          file_size
+        );
       }
       Err(error) => {
         let message = format!("failed to assemble {}: {}", plan.entry.path, error);
@@ -255,11 +279,8 @@ pub async fn pull_sync(
         continue;
       }
 
-      let local_file_path = compute_local_path(
-        &deleted_entry.path,
-        &relationship.remote_path,
-        local_base,
-      );
+      let local_file_path =
+        compute_local_path(&deleted_entry.path, &relationship.remote_path, local_base);
 
       if local_file_path.exists() {
         if let Err(error) = tokio::fs::remove_file(&local_file_path).await {
@@ -273,7 +294,10 @@ pub async fn pull_sync(
 
       // Remove the metadata entry regardless of whether the local file existed.
       if let Err(error) = metadata_store.delete_file_meta(&relationship.id, &deleted_entry.path) {
-        let message = format!("failed to delete metadata for {}: {}", deleted_entry.path, error);
+        let message = format!(
+          "failed to delete metadata for {}: {}",
+          deleted_entry.path, error
+        );
         tracing::warn!("{}", message);
         errors.push(message);
       }
@@ -284,7 +308,10 @@ pub async fn pull_sync(
   }
 
   // Process added and modified symlinks.
-  let symlinks_to_create: Vec<&RemoteSyncSymlinkEntry> = diff.changes.symlinks_added.iter()
+  let symlinks_to_create: Vec<&RemoteSyncSymlinkEntry> = diff
+    .changes
+    .symlinks_added
+    .iter()
     .chain(diff.changes.symlinks_modified.iter())
     .collect();
 
@@ -293,11 +320,8 @@ pub async fn pull_sync(
       continue;
     }
 
-    let local_symlink_path = compute_local_path(
-      &symlink_entry.path,
-      &relationship.remote_path,
-      local_base,
-    );
+    let local_symlink_path =
+      compute_local_path(&symlink_entry.path, &relationship.remote_path, local_base);
 
     // Create parent directories if needed.
     if let Some(parent) = local_symlink_path.parent() {
@@ -315,7 +339,9 @@ pub async fn pull_sync(
 
     // Remove existing file/symlink before creating new one.
     // Use symlink_metadata to detect symlinks (metadata follows symlinks).
-    let exists = tokio::fs::symlink_metadata(&local_symlink_path).await.is_ok();
+    let exists = tokio::fs::symlink_metadata(&local_symlink_path)
+      .await
+      .is_ok();
     if exists {
       let _ = tokio::fs::remove_file(&local_symlink_path).await;
     }
@@ -323,7 +349,10 @@ pub async fn pull_sync(
     #[cfg(unix)]
     {
       if let Err(error) = tokio::fs::symlink(&symlink_entry.target, &local_symlink_path).await {
-        let message = format!("failed to create symlink {:?}: {}", local_symlink_path, error);
+        let message = format!(
+          "failed to create symlink {:?}: {}",
+          local_symlink_path, error
+        );
         tracing::warn!("{}", message);
         errors.push(message);
         files_failed += 1;
@@ -333,7 +362,10 @@ pub async fn pull_sync(
 
     #[cfg(not(unix))]
     {
-      let message = format!("symlinks not supported on this platform: {}", symlink_entry.path);
+      let message = format!(
+        "symlinks not supported on this platform: {}",
+        symlink_entry.path
+      );
       tracing::warn!("{}", message);
       errors.push(message);
       files_failed += 1;
@@ -343,22 +375,29 @@ pub async fn pull_sync(
     // Store symlink metadata.
     let now_ms = chrono::Utc::now().timestamp_millis();
     let symlink_meta = FileSyncMeta {
-      path:           symlink_entry.path.clone(),
-      content_hash:   symlink_entry.hash.clone(),
-      size:           0,
-      modified_at:    now_ms,
-      sync_status:    SyncStatus::Synced,
+      path: symlink_entry.path.clone(),
+      content_hash: symlink_entry.hash.clone(),
+      size: 0,
+      modified_at: now_ms,
+      sync_status: SyncStatus::Synced,
       last_synced_at: now_ms,
     };
 
     if let Err(error) = metadata_store.set_file_meta(&relationship.id, &symlink_meta) {
-      let message = format!("failed to store symlink metadata for {}: {}", symlink_entry.path, error);
+      let message = format!(
+        "failed to store symlink metadata for {}: {}",
+        symlink_entry.path, error
+      );
       tracing::warn!("{}", message);
       errors.push(message);
     }
 
     symlinks_pulled += 1;
-    tracing::debug!("pulled symlink: {} -> {}", symlink_entry.path, symlink_entry.target);
+    tracing::debug!(
+      "pulled symlink: {} -> {}",
+      symlink_entry.path,
+      symlink_entry.target
+    );
   }
 
   // Process deleted symlinks.
@@ -368,16 +407,18 @@ pub async fn pull_sync(
         continue;
       }
 
-      let local_symlink_path = compute_local_path(
-        &deleted_entry.path,
-        &relationship.remote_path,
-        local_base,
-      );
+      let local_symlink_path =
+        compute_local_path(&deleted_entry.path, &relationship.remote_path, local_base);
 
-      let exists = tokio::fs::symlink_metadata(&local_symlink_path).await.is_ok();
+      let exists = tokio::fs::symlink_metadata(&local_symlink_path)
+        .await
+        .is_ok();
       if exists {
         if let Err(error) = tokio::fs::remove_file(&local_symlink_path).await {
-          let message = format!("failed to delete symlink {:?}: {}", local_symlink_path, error);
+          let message = format!(
+            "failed to delete symlink {:?}: {}",
+            local_symlink_path, error
+          );
           tracing::warn!("{}", message);
           errors.push(message);
           files_failed += 1;
@@ -386,7 +427,10 @@ pub async fn pull_sync(
       }
 
       if let Err(error) = metadata_store.delete_file_meta(&relationship.id, &deleted_entry.path) {
-        let message = format!("failed to delete symlink metadata for {}: {}", deleted_entry.path, error);
+        let message = format!(
+          "failed to delete symlink metadata for {}: {}",
+          deleted_entry.path, error
+        );
         tracing::warn!("{}", message);
         errors.push(message);
       }
@@ -399,9 +443,9 @@ pub async fn pull_sync(
   // Save the new checkpoint with the remote's root hash.
   let now_ms = chrono::Utc::now().timestamp_millis();
   let new_checkpoint = SyncCheckpoint {
-    relationship_id:  relationship.id.clone(),
+    relationship_id: relationship.id.clone(),
     remote_root_hash: new_root_hash,
-    last_sync_at:     now_ms,
+    last_sync_at: now_ms,
   };
 
   metadata_store.set_checkpoint(&new_checkpoint)?;
@@ -410,8 +454,13 @@ pub async fn pull_sync(
 
   tracing::info!(
     "pull sync complete for '{}': {} pulled, {} skipped, {} failed, {} deleted, {} symlinks ({}ms)",
-    relationship.name, files_pulled, files_skipped, files_failed,
-    files_deleted, symlinks_pulled, duration_ms,
+    relationship.name,
+    files_pulled,
+    files_skipped,
+    files_failed,
+    files_deleted,
+    symlinks_pulled,
+    duration_ms,
   );
 
   Ok(PullResult {
@@ -454,21 +503,24 @@ async fn fetch_remote_diff(
   let jwt_slot = jwt_cache.slot_for(&connection.id);
   let remote_client = RemoteClient::from_connection_cached(connection, http_client, jwt_slot);
 
-  let response = remote_client.authed_send(|| http_client.post(&url).json(&body)).await
+  let response = remote_client
+    .authed_send(|| http_client.post(&url).json(&body))
+    .await
     .map_err(|error| ClientError::Server(format!("sync/diff request failed: {}", error)))?;
 
   if !response.status().is_success() {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    return Err(ClientError::Server(
-      format!("sync/diff returned HTTP {}: {}", status, body),
-    ));
+    return Err(ClientError::Server(format!(
+      "sync/diff returned HTTP {}: {}",
+      status, body
+    )));
   }
 
-  response.json().await
-    .map_err(|error| ClientError::Server(
-      format!("failed to parse sync/diff response: {}", error),
-    ))
+  response
+    .json()
+    .await
+    .map_err(|error| ClientError::Server(format!("failed to parse sync/diff response: {}", error)))
 }
 
 /// Compute the local filesystem path from a remote path.
@@ -531,17 +583,26 @@ async fn hash_local_file_chunks(
     // (possibly partial) chunk is handled correctly.
     let mut filled = 0;
     while filled < chunk_size {
-      let n = file.read(&mut buf[filled..]).await.map_err(ClientError::Io)?;
-      if n == 0 { break; }
+      let n = file
+        .read(&mut buf[filled..])
+        .await
+        .map_err(ClientError::Io)?;
+      if n == 0 {
+        break;
+      }
       filled += n;
     }
-    if filled == 0 { break; }
+    if filled == 0 {
+      break;
+    }
 
     let h = crate::remote::chunk_hash(hash_prefix, &buf[..filled]);
     map.insert(h, (offset, filled));
     offset += filled as u64;
 
-    if filled < chunk_size { break; }
+    if filled < chunk_size {
+      break;
+    }
   }
 
   Ok(map)
@@ -557,10 +618,10 @@ async fn hash_local_file_chunks(
 /// chunk-prefixed) — this matches the engine's whole-file hash and is
 /// what we store in FileSyncMeta.
 async fn assemble_file(
-  chunk_hashes:    &[String],
-  local_path:      &Path,
-  local_chunks:    &HashMap<String, (u64, usize)>,
-  fetched:         &HashMap<String, Vec<u8>>,
+  chunk_hashes: &[String],
+  local_path: &Path,
+  local_chunks: &HashMap<String, (u64, usize)>,
+  fetched: &HashMap<String, Vec<u8>>,
 ) -> Result<(u64, String)> {
   // Hold the existing local file open across the whole assembly so the
   // local-reuse reads can still find the bytes we hashed earlier. The
@@ -583,7 +644,9 @@ async fn assemble_file(
     PathBuf::from(p)
   };
 
-  let mut tmp_file = tokio::fs::File::create(&tmp_path).await.map_err(ClientError::Io)?;
+  let mut tmp_file = tokio::fs::File::create(&tmp_path)
+    .await
+    .map_err(ClientError::Io)?;
   let mut hasher = blake3::Hasher::new();
   let mut total_size: u64 = 0;
 
@@ -591,18 +654,23 @@ async fn assemble_file(
   // leak partial artifacts on disk.
   let cleanup_tmp = |path: &Path| {
     let path = path.to_owned();
-    tokio::spawn(async move { let _ = tokio::fs::remove_file(&path).await; });
+    tokio::spawn(async move {
+      let _ = tokio::fs::remove_file(&path).await;
+    });
   };
 
   for hash in chunk_hashes {
     let bytes: Vec<u8> = if let Some(&(offset, len)) = local_chunks.get(hash) {
-      let reader = local_reader.as_mut().ok_or_else(|| ClientError::Server(
-        "internal: local_chunks non-empty but local file not open".to_string()
-      ))?;
-      reader.seek(std::io::SeekFrom::Start(offset)).await.map_err(|e| {
-        cleanup_tmp(&tmp_path);
-        ClientError::Io(e)
+      let reader = local_reader.as_mut().ok_or_else(|| {
+        ClientError::Server("internal: local_chunks non-empty but local file not open".to_string())
       })?;
+      reader
+        .seek(std::io::SeekFrom::Start(offset))
+        .await
+        .map_err(|e| {
+          cleanup_tmp(&tmp_path);
+          ClientError::Io(e)
+        })?;
       let mut buf = vec![0u8; len];
       if let Err(e) = reader.read_exact(&mut buf).await {
         cleanup_tmp(&tmp_path);
@@ -614,7 +682,8 @@ async fn assemble_file(
     } else {
       cleanup_tmp(&tmp_path);
       return Err(ClientError::Server(format!(
-        "chunk {} missing from both local and fetched sets", hash
+        "chunk {} missing from both local and fetched sets",
+        hash
       )));
     };
 
@@ -650,11 +719,7 @@ mod tests {
 
   #[test]
   fn test_compute_local_path_basic() {
-    let result = compute_local_path(
-      "/docs/readme.md",
-      "/docs/",
-      Path::new("/home/user/sync"),
-    );
+    let result = compute_local_path("/docs/readme.md", "/docs/", Path::new("/home/user/sync"));
     assert_eq!(result, Path::new("/home/user/sync/readme.md"));
   }
 
@@ -670,31 +735,19 @@ mod tests {
 
   #[test]
   fn test_compute_local_path_root_base() {
-    let result = compute_local_path(
-      "/file.txt",
-      "/",
-      Path::new("/tmp/sync"),
-    );
+    let result = compute_local_path("/file.txt", "/", Path::new("/tmp/sync"));
     assert_eq!(result, Path::new("/tmp/sync/file.txt"));
   }
 
   #[test]
   fn test_compute_local_path_no_trailing_slash() {
-    let result = compute_local_path(
-      "/docs/readme.md",
-      "/docs",
-      Path::new("/home/user/sync"),
-    );
+    let result = compute_local_path("/docs/readme.md", "/docs", Path::new("/home/user/sync"));
     assert_eq!(result, Path::new("/home/user/sync/readme.md"));
   }
 
   #[test]
   fn test_compute_local_path_deeply_nested() {
-    let result = compute_local_path(
-      "/data/a/b/c/file.txt",
-      "/data/",
-      Path::new("/mnt/sync"),
-    );
+    let result = compute_local_path("/data/a/b/c/file.txt", "/data/", Path::new("/mnt/sync"));
     assert_eq!(result, Path::new("/mnt/sync/a/b/c/file.txt"));
   }
 }

@@ -203,8 +203,30 @@ class AeorDashboard extends HTMLElement {
     for (const rel of relationships) {
       const runner  = runnerStatus.find((r) => r.relationship_id === rel.id);
       const running = runner && runner.running;
-      const dotClass = running ? 'synced' : (rel.enabled ? 'pending' : 'not-synced');
-      const statusText = running ? 'Running' : (rel.enabled ? 'Stopped' : 'Disabled');
+      const executing = runner && runner.executing;
+      const health = runner?.connection_health || 'unknown';
+      const healthy = health === 'up';
+      const waiting = executing && !healthy;
+      const dotClass = !rel.enabled
+        ? 'not-synced'
+        : health === 'down'
+          ? 'not-synced'
+          : health === 'unknown'
+            ? 'pending'
+            : running
+              ? 'synced'
+              : 'pending';
+      const statusText = !rel.enabled
+        ? 'Disabled'
+        : health === 'down'
+          ? (waiting ? 'Waiting for database' : 'Offline')
+          : health === 'unknown'
+            ? 'Checking database'
+            : executing
+              ? 'Syncing'
+              : running
+                ? 'Running'
+                : 'Stopped';
 
       // Force-Sync hold-to-confirm. Matches Xenocept's confirm-button
       // pattern (.onConfirm builder, event.currentTarget for the btn).
@@ -213,6 +235,13 @@ class AeorDashboard extends HTMLElement {
       // run for minutes — we manage label/disabled imperatively for
       // the lifetime of the fetch instead.
       const isInFlight = this._inFlightSyncs.has(rel.id);
+      const forceLabel = !rel.enabled
+        ? 'Force Sync'
+        : isInFlight
+        ? 'Syncing...'
+        : !healthy
+          ? (health === 'down' ? 'Offline' : 'Checking...')
+          : 'Force Sync';
 
       const card = div.class('sync-status-card')(
         div.class('sync-status-header')(
@@ -223,9 +252,9 @@ class AeorDashboard extends HTMLElement {
           div.class('sync-status-actions')(
             elements['aeor-confirm-button']
               .class('confirm-button-new force-sync-btn')
-              .label(isInFlight ? 'Syncing...' : 'Force Sync')
+              .label(forceLabel)
               .duration('1000')
-              .disabled(isInFlight)
+              .disabled(!rel.enabled || isInFlight || !healthy)
               .dataId(rel.id)
               .onConfirm((event) => this._triggerSync(event.currentTarget, rel.id))(),
           ),
@@ -233,7 +262,7 @@ class AeorDashboard extends HTMLElement {
         div.class('sync-status-details')(
           span.class('sync-status-detail')(directionLabel(rel.direction)),
           span.class('sync-status-detail')(escapeHtml(rel.remote_path)),
-          span.class('sync-status-detail sync-status-state' + (running ? ' success' : ''))(statusText),
+          span.class('sync-status-detail sync-status-state' + (healthy && running ? ' success' : ''))(statusText),
         ),
       ).build(document);
 
@@ -284,9 +313,10 @@ class AeorDashboard extends HTMLElement {
       // the closed-over button reference, which could be detached.
       const liveBtn = this.querySelector(`aeor-confirm-button.force-sync-btn[data-id="${id}"]`);
       if (liveBtn) {
-        liveBtn.label    = 'Force Sync';
-        liveBtn.disabled = false;
+        liveBtn.label    = 'Checking...';
+        liveBtn.disabled = true;
       }
+      await this._fetchData();
     }
   }
 }

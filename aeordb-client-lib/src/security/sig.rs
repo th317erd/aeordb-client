@@ -30,12 +30,10 @@ use std::sync::{Mutex, OnceLock};
 /// store; any manifest still signed under that key-id will fail with
 /// UnknownKeyId at verify time — the intended outcome, since those
 /// signatures no longer represent genuine authorization.
-pub static AEOR_PUBLIC_KEYS: &[(&str, &[u8])] = &[
-  (
-    "aeor-202605132323",
-    include_bytes!("aeor-202605132323-public-key.bin"),
-  ),
-];
+pub static AEOR_PUBLIC_KEYS: &[(&str, &[u8])] = &[(
+  "aeor-202605132323",
+  include_bytes!("aeor-202605132323-public-key.bin"),
+)];
 
 /// In-process test-only key registry. Tests register ephemeral
 /// verifying keys here so the real verify path can authenticate
@@ -62,9 +60,12 @@ pub fn register_test_key(key_id: &str, verifying_key: [u8; 32]) {
 /// Returns owned tuples so callers don't worry about lifetimes across
 /// the merge of static + dynamic.
 pub fn effective_trust_store() -> Vec<(String, [u8; 32])> {
-  let mut out: Vec<(String, [u8; 32])> = AEOR_PUBLIC_KEYS.iter()
+  let mut out: Vec<(String, [u8; 32])> = AEOR_PUBLIC_KEYS
+    .iter()
     .filter_map(|(id, bytes)| {
-      if bytes.len() != 32 { return None; }
+      if bytes.len() != 32 {
+        return None;
+      }
       let mut arr = [0u8; 32];
       arr.copy_from_slice(bytes);
       Some((id.to_string(), arr))
@@ -95,7 +96,9 @@ mod tests {
   #[test]
   fn rotated_old_key_no_longer_trusted() {
     assert!(
-      !AEOR_PUBLIC_KEYS.iter().any(|(id, _)| *id == "aeor-202605122015"),
+      !AEOR_PUBLIC_KEYS
+        .iter()
+        .any(|(id, _)| *id == "aeor-202605122015"),
       "aeor-202605122015 is COMPROMISED and must not be re-added to the trust store",
     );
   }

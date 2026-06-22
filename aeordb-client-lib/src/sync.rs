@@ -21,9 +21,12 @@ pub(crate) fn file_mtime(path: &Path) -> Result<i64> {
   let modified = metadata.modified()?;
   let duration = modified
     .duration_since(std::time::UNIX_EPOCH)
-    .map_err(|error| ClientError::Io(
-      std::io::Error::new(std::io::ErrorKind::Other, format!("system time error: {}", error)),
-    ))?;
+    .map_err(|error| {
+      ClientError::Io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!("system time error: {}", error),
+      ))
+    })?;
 
   Ok(duration.as_millis() as i64)
 }
@@ -34,9 +37,12 @@ pub(crate) async fn file_mtime_async(path: &Path) -> Result<i64> {
   let modified = metadata.modified()?;
   let duration = modified
     .duration_since(std::time::UNIX_EPOCH)
-    .map_err(|error| ClientError::Io(
-      std::io::Error::new(std::io::ErrorKind::Other, format!("system time error: {}", error)),
-    ))?;
+    .map_err(|error| {
+      ClientError::Io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!("system time error: {}", error),
+      ))
+    })?;
 
   Ok(duration.as_millis() as i64)
 }

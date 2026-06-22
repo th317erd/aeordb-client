@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Path, State as AxumState};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::Router;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
@@ -33,19 +33,27 @@ impl MockServerState {
   fn new() -> Self {
     Self {
       directories: Arc::new(std::sync::Mutex::new(HashMap::new())),
-      files:       Arc::new(std::sync::Mutex::new(HashMap::new())),
-      uploads:     Arc::new(Mutex::new(HashMap::new())),
-      deleted:     Arc::new(Mutex::new(Vec::new())),
+      files: Arc::new(std::sync::Mutex::new(HashMap::new())),
+      uploads: Arc::new(Mutex::new(HashMap::new())),
+      deleted: Arc::new(Mutex::new(Vec::new())),
     }
   }
 
   fn with_directory(self, path: &str, entries: serde_json::Value) -> Self {
-    self.directories.lock().unwrap().insert(path.to_string(), entries);
+    self
+      .directories
+      .lock()
+      .unwrap()
+      .insert(path.to_string(), entries);
     self
   }
 
   fn with_file(self, path: &str, content: &[u8]) -> Self {
-    self.files.lock().unwrap().insert(path.to_string(), content.to_vec());
+    self
+      .files
+      .lock()
+      .unwrap()
+      .insert(path.to_string(), content.to_vec());
     self
   }
 }
@@ -96,7 +104,11 @@ async fn handle_put_engine(
   body: Bytes,
 ) -> StatusCode {
   let remote_path = format!("/{}", path);
-  state.uploads.lock().await.insert(remote_path, body.to_vec());
+  state
+    .uploads
+    .lock()
+    .await
+    .insert(remote_path, body.to_vec());
   StatusCode::OK
 }
 
@@ -117,14 +129,23 @@ async fn handle_health() -> StatusCode {
 async fn start_mock_aeordb(state: MockServerState) -> (SocketAddr, MockServerState) {
   let app = Router::new()
     .route("/system/health", get(handle_health))
-    .route("/files/{*path}", get(handle_get_engine).put(handle_put_engine).delete(handle_delete_engine))
+    .route(
+      "/files/{*path}",
+      get(handle_get_engine)
+        .put(handle_put_engine)
+        .delete(handle_delete_engine),
+    )
     .with_state(state.clone());
 
-  let listener = TcpListener::bind("127.0.0.1:0").await.expect("failed to bind mock server");
+  let listener = TcpListener::bind("127.0.0.1:0")
+    .await
+    .expect("failed to bind mock server");
   let address = listener.local_addr().expect("failed to get address");
 
   tokio::spawn(async move {
-    axum::serve(listener, app).await.expect("mock server failed");
+    axum::serve(listener, app)
+      .await
+      .expect("mock server failed");
   });
 
   (address, state)
@@ -136,8 +157,8 @@ async fn start_mock_aeordb(state: MockServerState) -> (SocketAddr, MockServerSta
 
 struct TestEnv {
   client_base_url: String,
-  mock_state:      MockServerState,
-  local_dir:       tempfile::TempDir,
+  mock_state: MockServerState,
+  local_dir: tempfile::TempDir,
   relationship_id: String,
 }
 
@@ -190,8 +211,8 @@ relationships:
   std::fs::write(&config_path, &config_yaml).expect("failed to write config");
 
   let server_config = ServerConfig {
-    host:        "127.0.0.1".to_string(),
-    port:        0,
+    host: "127.0.0.1".to_string(),
+    port: 0,
     config_path,
     data_path,
   };
@@ -260,14 +281,16 @@ fn subdirectory_listing() -> serde_json::Value {
 
 #[tokio::test]
 async fn test_browse_root_lists_entries() {
-  let mock = MockServerState::new()
-    .with_directory("/docs/", sample_directory_listing());
+  let mock = MockServerState::new().with_directory("/docs/", sample_directory_listing());
 
   let env = setup_test_env(mock).await;
   let client = reqwest::Client::new();
 
   let response = client
-    .get(format!("{}/api/v1/browse/{}", env.client_base_url, env.relationship_id))
+    .get(format!(
+      "{}/api/v1/browse/{}",
+      env.client_base_url, env.relationship_id
+    ))
     .send()
     .await
     .expect("request failed");
@@ -297,8 +320,7 @@ async fn test_browse_root_lists_entries() {
 
 #[tokio::test]
 async fn test_browse_root_with_synced_file() {
-  let mock = MockServerState::new()
-    .with_directory("/docs/", sample_directory_listing());
+  let mock = MockServerState::new().with_directory("/docs/", sample_directory_listing());
 
   let env = setup_test_env(mock).await;
 
@@ -307,7 +329,10 @@ async fn test_browse_root_with_synced_file() {
 
   let client = reqwest::Client::new();
   let response = client
-    .get(format!("{}/api/v1/browse/{}", env.client_base_url, env.relationship_id))
+    .get(format!(
+      "{}/api/v1/browse/{}",
+      env.client_base_url, env.relationship_id
+    ))
     .send()
     .await
     .expect("request failed");
@@ -321,14 +346,16 @@ async fn test_browse_root_with_synced_file() {
 
 #[tokio::test]
 async fn test_browse_subdirectory() {
-  let mock = MockServerState::new()
-    .with_directory("/docs/images/", subdirectory_listing());
+  let mock = MockServerState::new().with_directory("/docs/images/", subdirectory_listing());
 
   let env = setup_test_env(mock).await;
   let client = reqwest::Client::new();
 
   let response = client
-    .get(format!("{}/api/v1/browse/{}/images/", env.client_base_url, env.relationship_id))
+    .get(format!(
+      "{}/api/v1/browse/{}/images/",
+      env.client_base_url, env.relationship_id
+    ))
     .send()
     .await
     .expect("request failed");
@@ -352,7 +379,10 @@ async fn test_browse_nonexistent_relationship() {
   let client = reqwest::Client::new();
 
   let response = client
-    .get(format!("{}/api/v1/browse/nonexistent-id", env.client_base_url))
+    .get(format!(
+      "{}/api/v1/browse/nonexistent-id",
+      env.client_base_url
+    ))
     .send()
     .await
     .expect("request failed");
@@ -362,8 +392,7 @@ async fn test_browse_nonexistent_relationship() {
 
 #[tokio::test]
 async fn test_serve_file_from_local() {
-  let mock = MockServerState::new()
-    .with_file("/docs/readme.md", b"REMOTE CONTENT");
+  let mock = MockServerState::new().with_file("/docs/readme.md", b"REMOTE CONTENT");
 
   let env = setup_test_env(mock).await;
 
@@ -372,7 +401,10 @@ async fn test_serve_file_from_local() {
 
   let client = reqwest::Client::new();
   let response = client
-    .get(format!("{}/api/v1/files/{}/readme.md", env.client_base_url, env.relationship_id))
+    .get(format!(
+      "{}/api/v1/files/{}/readme.md",
+      env.client_base_url, env.relationship_id
+    ))
     .send()
     .await
     .expect("request failed");
@@ -380,20 +412,99 @@ async fn test_serve_file_from_local() {
   assert_eq!(response.status(), 200);
 
   let body = response.bytes().await.expect("body failed");
-  assert_eq!(body.as_ref(), b"LOCAL CONTENT", "should serve local file, not remote");
+  assert_eq!(
+    body.as_ref(),
+    b"LOCAL CONTENT",
+    "should serve local file, not remote"
+  );
+}
+
+#[tokio::test]
+async fn test_serve_local_file_supports_byte_range() {
+  let mock = MockServerState::new();
+  let env = setup_test_env(mock).await;
+
+  std::fs::write(env.local_dir.path().join("video.mp4"), b"0123456789").expect("write failed");
+
+  let client = reqwest::Client::new();
+  let response = client
+    .get(format!(
+      "{}/api/v1/files/{}/video.mp4",
+      env.client_base_url, env.relationship_id
+    ))
+    .header("range", "bytes=2-5")
+    .send()
+    .await
+    .expect("request failed");
+
+  assert_eq!(response.status(), 206);
+  assert_eq!(
+    response
+      .headers()
+      .get("accept-ranges")
+      .and_then(|v| v.to_str().ok()),
+    Some("bytes")
+  );
+  assert_eq!(
+    response
+      .headers()
+      .get("content-range")
+      .and_then(|v| v.to_str().ok()),
+    Some("bytes 2-5/10")
+  );
+  assert_eq!(
+    response
+      .headers()
+      .get("content-length")
+      .and_then(|v| v.to_str().ok()),
+    Some("4")
+  );
+
+  let body = response.bytes().await.expect("body failed");
+  assert_eq!(body.as_ref(), b"2345");
+}
+
+#[tokio::test]
+async fn test_serve_local_file_rejects_unsatisfiable_byte_range() {
+  let mock = MockServerState::new();
+  let env = setup_test_env(mock).await;
+
+  std::fs::write(env.local_dir.path().join("video.mp4"), b"0123456789").expect("write failed");
+
+  let client = reqwest::Client::new();
+  let response = client
+    .get(format!(
+      "{}/api/v1/files/{}/video.mp4",
+      env.client_base_url, env.relationship_id
+    ))
+    .header("range", "bytes=99-100")
+    .send()
+    .await
+    .expect("request failed");
+
+  assert_eq!(response.status(), 416);
+  assert_eq!(
+    response
+      .headers()
+      .get("content-range")
+      .and_then(|v| v.to_str().ok()),
+    Some("bytes */10")
+  );
 }
 
 #[tokio::test]
 async fn test_serve_file_from_remote_fallback() {
-  let mock = MockServerState::new()
-    .with_file("/docs/readme.md", b"REMOTE CONTENT");
+  let mock = MockServerState::new().with_file("/docs/readme.md", b"REMOTE CONTENT");
 
   let env = setup_test_env(mock).await;
   // No local file exists — should fallback to remote
 
   let client = reqwest::Client::new();
   let response = client
-    .get(format!("{}/api/v1/files/{}/readme.md", env.client_base_url, env.relationship_id))
+    .get(format!(
+      "{}/api/v1/files/{}/readme.md",
+      env.client_base_url, env.relationship_id
+    ))
     .send()
     .await
     .expect("request failed");
@@ -401,13 +512,16 @@ async fn test_serve_file_from_remote_fallback() {
   assert_eq!(response.status(), 200);
 
   let body = response.bytes().await.expect("body failed");
-  assert_eq!(body.as_ref(), b"REMOTE CONTENT", "should fall back to remote");
+  assert_eq!(
+    body.as_ref(),
+    b"REMOTE CONTENT",
+    "should fall back to remote"
+  );
 }
 
 #[tokio::test]
 async fn test_serve_file_force_remote() {
-  let mock = MockServerState::new()
-    .with_file("/docs/readme.md", b"REMOTE CONTENT");
+  let mock = MockServerState::new().with_file("/docs/readme.md", b"REMOTE CONTENT");
 
   let env = setup_test_env(mock).await;
 
@@ -416,7 +530,10 @@ async fn test_serve_file_force_remote() {
 
   let client = reqwest::Client::new();
   let response = client
-    .get(format!("{}/api/v1/files/{}/readme.md?source=remote", env.client_base_url, env.relationship_id))
+    .get(format!(
+      "{}/api/v1/files/{}/readme.md?source=remote",
+      env.client_base_url, env.relationship_id
+    ))
     .send()
     .await
     .expect("request failed");
@@ -424,7 +541,11 @@ async fn test_serve_file_force_remote() {
   assert_eq!(response.status(), 200);
 
   let body = response.bytes().await.expect("body failed");
-  assert_eq!(body.as_ref(), b"REMOTE CONTENT", "should serve from remote when forced");
+  assert_eq!(
+    body.as_ref(),
+    b"REMOTE CONTENT",
+    "should serve from remote when forced"
+  );
 }
 
 #[tokio::test]
@@ -435,7 +556,10 @@ async fn test_serve_file_force_local_not_found() {
 
   let client = reqwest::Client::new();
   let response = client
-    .get(format!("{}/api/v1/files/{}/nonexistent.txt?source=local", env.client_base_url, env.relationship_id))
+    .get(format!(
+      "{}/api/v1/files/{}/nonexistent.txt?source=local",
+      env.client_base_url, env.relationship_id
+    ))
     .send()
     .await
     .expect("request failed");
@@ -452,14 +576,19 @@ async fn test_serve_file_content_type_header() {
 
   let client = reqwest::Client::new();
   let response = client
-    .get(format!("{}/api/v1/files/{}/styles.css", env.client_base_url, env.relationship_id))
+    .get(format!(
+      "{}/api/v1/files/{}/styles.css",
+      env.client_base_url, env.relationship_id
+    ))
     .send()
     .await
     .expect("request failed");
 
   assert_eq!(response.status(), 200);
 
-  let content_type = response.headers().get("content-type")
+  let content_type = response
+    .headers()
+    .get("content-type")
     .and_then(|v| v.to_str().ok())
     .unwrap_or("");
   assert_eq!(content_type, "text/css");
@@ -477,13 +606,20 @@ async fn test_path_traversal_rejected() {
   // Try path traversal via the open-locally endpoint where the path is in the JSON body
   // (not subject to URL normalization)
   let response = client
-    .post(format!("{}/api/v1/files/{}/open", env.client_base_url, env.relationship_id))
+    .post(format!(
+      "{}/api/v1/files/{}/open",
+      env.client_base_url, env.relationship_id
+    ))
     .json(&serde_json::json!({ "path": "../../etc/passwd" }))
     .send()
     .await
     .expect("request failed");
 
-  assert_eq!(response.status(), 403, "path traversal should be rejected with 403");
+  assert_eq!(
+    response.status(),
+    403,
+    "path traversal should be rejected with 403"
+  );
 }
 
 #[tokio::test]
@@ -493,7 +629,10 @@ async fn test_upload_proxied_to_remote() {
 
   let client = reqwest::Client::new();
   let response = client
-    .put(format!("{}/api/v1/files/{}/new-file.txt", env.client_base_url, env.relationship_id))
+    .put(format!(
+      "{}/api/v1/files/{}/new-file.txt",
+      env.client_base_url, env.relationship_id
+    ))
     .header("Content-Type", "text/plain")
     .body(b"uploaded content".to_vec())
     .send()
@@ -507,7 +646,9 @@ async fn test_upload_proxied_to_remote() {
 
   // Verify the mock received the upload
   let uploads = env.mock_state.uploads.lock().await;
-  let uploaded = uploads.get("/docs/new-file.txt").expect("upload should arrive at mock");
+  let uploaded = uploads
+    .get("/docs/new-file.txt")
+    .expect("upload should arrive at mock");
   assert_eq!(uploaded, b"uploaded content");
 }
 
@@ -518,7 +659,10 @@ async fn test_delete_proxied_to_remote() {
 
   let client = reqwest::Client::new();
   let response = client
-    .delete(format!("{}/api/v1/files/{}/old-file.txt", env.client_base_url, env.relationship_id))
+    .delete(format!(
+      "{}/api/v1/files/{}/old-file.txt",
+      env.client_base_url, env.relationship_id
+    ))
     .send()
     .await
     .expect("request failed");
@@ -540,7 +684,10 @@ async fn test_open_locally_nonexistent_file() {
 
   let client = reqwest::Client::new();
   let response = client
-    .post(format!("{}/api/v1/files/{}/open", env.client_base_url, env.relationship_id))
+    .post(format!(
+      "{}/api/v1/files/{}/open",
+      env.client_base_url, env.relationship_id
+    ))
     .json(&serde_json::json!({ "path": "does-not-exist.txt" }))
     .send()
     .await
@@ -549,7 +696,12 @@ async fn test_open_locally_nonexistent_file() {
   assert_eq!(response.status(), 404);
 
   let body: serde_json::Value = response.json().await.expect("parse failed");
-  assert!(body["error"].as_str().unwrap().contains("not found locally"));
+  assert!(
+    body["error"]
+      .as_str()
+      .unwrap()
+      .contains("not found locally")
+  );
 }
 
 #[tokio::test]
@@ -559,7 +711,10 @@ async fn test_upload_nonexistent_relationship() {
 
   let client = reqwest::Client::new();
   let response = client
-    .put(format!("{}/api/v1/files/nonexistent-rel/somefile.txt", env.client_base_url))
+    .put(format!(
+      "{}/api/v1/files/nonexistent-rel/somefile.txt",
+      env.client_base_url
+    ))
     .body(b"data".to_vec())
     .send()
     .await
@@ -575,7 +730,10 @@ async fn test_delete_nonexistent_relationship() {
 
   let client = reqwest::Client::new();
   let response = client
-    .delete(format!("{}/api/v1/files/nonexistent-rel/somefile.txt", env.client_base_url))
+    .delete(format!(
+      "{}/api/v1/files/nonexistent-rel/somefile.txt",
+      env.client_base_url
+    ))
     .send()
     .await
     .expect("request failed");
@@ -590,7 +748,10 @@ async fn test_serve_file_nonexistent_relationship() {
 
   let client = reqwest::Client::new();
   let response = client
-    .get(format!("{}/api/v1/files/nonexistent-rel/somefile.txt", env.client_base_url))
+    .get(format!(
+      "{}/api/v1/files/nonexistent-rel/somefile.txt",
+      env.client_base_url
+    ))
     .send()
     .await
     .expect("request failed");
@@ -605,7 +766,10 @@ async fn test_open_locally_path_traversal_rejected() {
 
   let client = reqwest::Client::new();
   let response = client
-    .post(format!("{}/api/v1/files/{}/open", env.client_base_url, env.relationship_id))
+    .post(format!(
+      "{}/api/v1/files/{}/open",
+      env.client_base_url, env.relationship_id
+    ))
     .json(&serde_json::json!({ "path": "../../etc/passwd" }))
     .send()
     .await
@@ -620,20 +784,26 @@ async fn test_open_locally_path_traversal_rejected() {
 }
 
 #[tokio::test]
-async fn test_browse_remote_error_returns_502() {
-  // No directory registered in mock — the remote returns 404, which our client maps to an error
+async fn test_browse_remote_error_preserves_upstream_4xx() {
+  // No directory registered in mock: the remote returns 404, and the client
+  // preserves upstream 4xx statuses with a stable error category.
   let mock = MockServerState::new();
   let env = setup_test_env(mock).await;
 
   let client = reqwest::Client::new();
   let response = client
-    .get(format!("{}/api/v1/browse/{}", env.client_base_url, env.relationship_id))
+    .get(format!(
+      "{}/api/v1/browse/{}",
+      env.client_base_url, env.relationship_id
+    ))
     .send()
     .await
     .expect("request failed");
 
-  // Remote returned 404 for directory listing — our browse should return 502 Bad Gateway
-  assert_eq!(response.status(), 502);
+  assert_eq!(response.status(), 404);
+
+  let body: serde_json::Value = response.json().await.expect("failed to parse error body");
+  assert_eq!(body["category"], "upstream_rejected");
 }
 
 #[tokio::test]
@@ -643,7 +813,10 @@ async fn test_serve_file_remote_and_local_both_missing() {
 
   let client = reqwest::Client::new();
   let response = client
-    .get(format!("{}/api/v1/files/{}/nonexistent.txt", env.client_base_url, env.relationship_id))
+    .get(format!(
+      "{}/api/v1/files/{}/nonexistent.txt",
+      env.client_base_url, env.relationship_id
+    ))
     .send()
     .await
     .expect("request failed");
