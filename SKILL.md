@@ -12,6 +12,7 @@ This is the release runbook for rebuilding AeorDB Client binaries, staging them 
 - Never paste or commit the private signing key contents. Passing the key path to the signing script is expected.
 - Check `git status --short` before editing, building, copying artifacts, committing, or deploying.
 - Do not broad-kill every process containing `aeordb-client`; use targeted process management.
+- `Cargo.lock` is part of the release snapshot. Remote builds should use `--locked` so all platform binaries use the same dependency resolution.
 
 ## Paths
 
@@ -85,8 +86,8 @@ ssh wyatt-mac '
   git fetch origin
   git checkout main
   git pull --ff-only
-  cargo build -j 2 --release --target aarch64-apple-darwin --bin aeordb-client
-  cargo build -j 2 --release --target x86_64-apple-darwin --bin aeordb-client
+  cargo build -j 2 --locked --release --target aarch64-apple-darwin --bin aeordb-client
+  cargo build -j 2 --locked --release --target x86_64-apple-darwin --bin aeordb-client
   lipo -create \
     target/aarch64-apple-darwin/release/aeordb-client \
     target/x86_64-apple-darwin/release/aeordb-client \
@@ -105,7 +106,7 @@ If the remote branch has local changes, stop and inspect instead of forcing it c
 The Windows checkout is currently at `C:\Users\wyatt\Projects\aeordb-client`. Build on `win11vm` using the Visual Studio MSVC environment, then copy the `.exe` back:
 
 ```bash
-ssh win11vm 'cmd /c "call \"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat\" && cd /d C:\Users\wyatt\Projects\aeordb-client && git fetch origin && git checkout main && git pull --ff-only && cargo build -j 2 --release --bin aeordb-client"'
+ssh win11vm 'cmd /c "call \"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat\" && cd /d C:\Users\wyatt\Projects\aeordb-client && git fetch origin && git checkout main && git pull --ff-only && cargo build -j 2 --locked --release --bin aeordb-client"'
 
 scp 'win11vm:C:/Users/wyatt/Projects/aeordb-client/target/release/aeordb-client.exe' \
   ~/Projects/aeordb-workspace/aeordb-www/downloads/aeordb-client-windows-x86_64.exe
