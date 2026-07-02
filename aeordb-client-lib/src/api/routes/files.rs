@@ -38,9 +38,20 @@ pub struct BrowseQuery {
   pub offset: Option<u64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SearchRequest {
+  pub query: String,
+  pub limit: Option<u64>,
+  pub offset: Option<u64>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct BrowseEntry {
   pub name: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub path: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub display_path: Option<String>,
   pub entry_type: u8,
   pub size: u64,
   pub content_type: Option<String>,
@@ -388,6 +399,14 @@ fn strip_remote_prefix(relationship: &SyncRelationship, abs_path: &str) -> Strin
   }
 }
 
+fn path_is_under_remote_root(relationship: &SyncRelationship, abs_path: &str) -> bool {
+  let base = relationship.remote_path.trim_end_matches('/');
+  if base.is_empty() {
+    return true;
+  }
+  abs_path == base || abs_path.starts_with(&format!("{}/", base))
+}
+
 /// Apply `strip_remote_prefix` to any string-valued `path` key, or to any
 /// string element of a `paths` array key, in a JSON value. Walks objects +
 /// arrays recursively. Used by the deleted/snapshot/version-history
@@ -440,6 +459,43 @@ fn compute_local_subpath(relationship: &SyncRelationship, relative_path: &str) -
   } else {
     format!("{}/{}", base, relative)
   }
+}
+
+fn path_name(path: &str) -> String {
+  path
+    .trim_end_matches('/')
+    .rsplit('/')
+    .next()
+    .filter(|name| !name.is_empty())
+    .unwrap_or("/")
+    .to_string()
+}
+
+fn parent_display_path(path: &str) -> String {
+  let trimmed = path.trim_end_matches('/');
+  let Some((parent, _)) = trimmed.rsplit_once('/') else {
+    return "/".to_string();
+  };
+  if parent.is_empty() {
+    "/".to_string()
+  } else {
+    format!("{}/", parent)
+  }
+}
+
+fn json_i64(value: &serde_json::Value, key: &str) -> i64 {
+  value.get(key).and_then(|value| value.as_i64()).unwrap_or(0)
+}
+
+fn json_u64(value: &serde_json::Value, key: &str) -> u64 {
+  value.get(key).and_then(|value| value.as_u64()).unwrap_or(0)
+}
+
+fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
+  value
+    .get(key)
+    .and_then(|value| value.as_str())
+    .map(ToOwned::to_owned)
 }
 
 /// Roll up a directory's sync state from the metadata of all files
@@ -626,6 +682,8 @@ pub async fn browse(
 
     entries.push(BrowseEntry {
       name: entry.name,
+      path: None,
+      display_path: None,
       entry_type: entry.entry_type,
       size: entry.size,
       content_type: entry.content_type,
@@ -654,6 +712,122 @@ pub async fn browse(
 pub struct BrowseParams {
   pub relationship_id: String,
   pub path: Option<String>,
+}
+
+/// POST /api/v1/search/{relationship_id}
+///
+/// Relationship-scoped proxy for the engine's `POST /files/search`.
+/// Search results carry the real relationship-relative `path` so the
+/// shared browser can preview/open hits while displaying them inside the
+/// virtual `/@search/` folder.
+pub async fn search(
+  State(state): State<AppState>,
+  AxumPath(relationship_id): AxumPath<String>,
+  Json(request): Json<SearchRequest>,
+) -> Result<Json<BrowseResponse>, ClientError> {
+  let query = request.query.trim();
+  let (relationship, remote_client) = load_relationship_client(&state, &relationship_id).await?;
+  let remote_root = compute_remote_path(&relationship, "/");
+
+  if query.is_empty() {
+    return Ok(Json(BrowseResponse {
+      relationship_id,
+      relationship_name: relationship.name,
+      remote_path: remote_root,
+      local_path: relationship.local_path,
+      entries: Vec::new(),
+      total: Some(0),
+      limit: request.limit,
+      offset: request.offset,
+    }));
+  }
+
+  let value = remote_client
+    .search_files(&remote_root, query, request.limit, request.offset)
+    .await?;
+
+  let items = value
+    .get("items")
+    .or_else(|| value.get("results"))
+    .and_then(|value| value.as_array())
+    .cloned()
+    .unwrap_or_default();
+
+  let metadata_store = SyncMetadataStore::new(&state.state_store);
+  let mut entries = Vec::with_capacity(items.len());
+  let mut filtered_out_of_scope = false;
+
+  for item in items {
+    let Some(abs_path) = json_string(&item, "path") else {
+      continue;
+    };
+    if !path_is_under_remote_root(&relationship, &abs_path) {
+      filtered_out_of_scope = true;
+      continue;
+    }
+    let relative_path = strip_remote_prefix(&relationship, &abs_path);
+    let name = path_name(&relative_path);
+    let entry_type = item
+      .get("entry_type")
+      .and_then(|value| value.as_u64())
+      .map(|value| value as u8)
+      .unwrap_or(2);
+
+    let has_local = safe_local_path(&relationship, &relative_path)
+      .map(|path| path.exists())
+      .unwrap_or(false);
+
+    let sync_status = match metadata_store.get_file_meta(&relationship_id, &abs_path) {
+      Ok(Some(meta)) => match meta.sync_status {
+        SyncStatus::Synced => "synced".to_string(),
+        SyncStatus::PendingPush => "pending_push".to_string(),
+        SyncStatus::PendingPull => "pending_pull".to_string(),
+        SyncStatus::Error => "error".to_string(),
+      },
+      _ => {
+        if has_local {
+          "synced".to_string()
+        } else {
+          "not_synced".to_string()
+        }
+      }
+    };
+
+    entries.push(BrowseEntry {
+      name,
+      path: Some(relative_path.clone()),
+      display_path: Some(parent_display_path(&relative_path)),
+      entry_type,
+      size: json_u64(&item, "size"),
+      content_type: json_string(&item, "content_type"),
+      created_at: json_i64(&item, "created_at"),
+      updated_at: json_i64(&item, "updated_at"),
+      sync_status,
+      has_local,
+      effective_permissions: json_string(&item, "effective_permissions"),
+    });
+  }
+
+  let total = if filtered_out_of_scope {
+    Some(entries.len() as u64)
+  } else {
+    value
+      .get("total_count")
+      .or_else(|| value.get("total"))
+      .and_then(|value| value.as_u64())
+      .or(Some(entries.len() as u64))
+  };
+
+  Ok(Json(BrowseResponse {
+    relationship_id,
+    relationship_name: relationship.name,
+    remote_path: remote_root,
+    local_path: relationship.local_path,
+    entries,
+    total,
+    limit: request.limit,
+    offset: request.offset,
+  }))
 }
 
 // ---------------------------------------------------------------------------

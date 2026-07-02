@@ -176,13 +176,13 @@ class AeorSync extends HTMLElement {
       this._rebuildTableContainer();
       this._rebuildFormContainer();
     });
-    this._state.on('selectedId', () => this._rebuildTableContainer());
+    this._state.on('selectedId', () => this._patchTableContainer());
     this._state.on('activity', () => this._rebuildActivityFeed());
-    this._state.on('syncProgress', () => this._rebuildTableContainer());
-    this._state.on('syncRunning', () => this._rebuildTableContainer());
-    this._state.on('syncExecuting', () => this._rebuildTableContainer());
-    this._state.on('manualSyncing', () => this._rebuildTableContainer());
-    this._state.on('connectionHealth', () => this._rebuildTableContainer());
+    this._state.on('syncProgress', () => this._patchTableContainer());
+    this._state.on('syncRunning', () => this._patchTableContainer());
+    this._state.on('syncExecuting', () => this._patchTableContainer());
+    this._state.on('manualSyncing', () => this._patchTableContainer());
+    this._state.on('connectionHealth', () => this._patchTableContainer());
   }
 
   // ---------------------------------------------------------------------------
@@ -441,6 +441,66 @@ class AeorSync extends HTMLElement {
     }
 
     container.appendChild(tbl);
+  }
+
+  _patchTableContainer() {
+    const container = this.querySelector('#table-container');
+    if (!container) return;
+
+    const rows = Array.from(container.querySelectorAll('tbody tr.sync-row'));
+    const relationships = this._state.relationships || [];
+    if (relationships.length === 0 || rows.length !== relationships.length) {
+      this._rebuildTableContainer();
+      return;
+    }
+
+    const rowsById = new Map(rows.map((row) => [row.dataset.id, row]));
+    for (const rel of relationships) {
+      const row = rowsById.get(rel.id);
+      if (!row) {
+        this._rebuildTableContainer();
+        return;
+      }
+      this._patchSyncRow(row, rel);
+    }
+  }
+
+  _patchSyncRow(row, rel) {
+    const isSelected = rel.id === this._state.selectedId;
+    row.classList.toggle('selected', isSelected);
+
+    const progress = this._state.syncProgress[rel.id];
+    const isSyncExecuting = this._state.syncExecuting[rel.id] === true;
+    const isManualSyncing = this._state.manualSyncing[rel.id] === true;
+    const syncButtonState = this._syncButtonState(rel, isSyncExecuting, isManualSyncing);
+    const isSyncing = syncButtonState.active;
+    const progressPercent = Math.max(0, Math.min(100, progress?.progress_percent || 0));
+
+    const syncButton = row.querySelector('aeor-confirm-button.sync-progress-button');
+    if (syncButton) {
+      this._setAttributeIfChanged(syncButton, 'label', syncButtonState.label);
+      syncButton.toggleAttribute('disabled', syncButtonState.disabled);
+      this._setAttributeIfChanged(syncButton, 'progress', String(isSyncing ? progressPercent : 0));
+    }
+
+    const statusBadge = row.querySelector('.badge');
+    if (statusBadge) {
+      statusBadge.textContent = rel.enabled ? 'enabled' : 'disabled';
+      statusBadge.classList.toggle('success', !!rel.enabled);
+      statusBadge.classList.toggle('warning', !rel.enabled);
+    }
+
+    const toggleButton = row.querySelector('button.btn-toggle');
+    if (toggleButton) {
+      toggleButton.textContent = rel.enabled ? 'Pause' : 'Resume';
+    }
+  }
+
+  _setAttributeIfChanged(element, name, value) {
+    const next = String(value);
+    if (element.getAttribute(name) !== next) {
+      element.setAttribute(name, next);
+    }
   }
 
   _syncButtonState(relationship, isSyncExecuting, isManualSyncing) {

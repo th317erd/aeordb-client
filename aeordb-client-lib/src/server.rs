@@ -138,7 +138,10 @@ pub fn build_router(state: AppState) -> Router {
     .route("/sync/{id}/enable", post(sync::enable_relationship))
     .route("/sync/{id}/disable", post(sync::disable_relationship))
     .route("/sync/{id}/activity", get(sync::get_sync_activity))
-    .route("/sync/{id}/file-events", get(events::relationship_file_events))
+    .route(
+      "/sync/{id}/file-events",
+      get(events::relationship_file_events),
+    )
     .route("/sync/{id}/trigger", post(sync::trigger_sync))
     .route("/sync/{id}/force-resync", post(sync::force_resync))
     .route("/sync/{id}/start", post(sync::start_sync))
@@ -161,6 +164,7 @@ pub fn build_router(state: AppState) -> Router {
     )
     .route("/browse/{relationship_id}", get(files::browse))
     .route("/browse/{relationship_id}/{*path}", get(files::browse))
+    .route("/search/{relationship_id}", post(files::search))
     .route(
       "/browse/{relationship_id}/deleted",
       get(files::list_deleted),

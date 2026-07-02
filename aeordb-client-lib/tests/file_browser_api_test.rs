@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Path, State as AxumState};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
@@ -23,6 +24,10 @@ struct MockServerState {
   directories: Arc<std::sync::Mutex<HashMap<String, serde_json::Value>>>,
   /// File contents: file path -> bytes
   files: Arc<std::sync::Mutex<HashMap<String, Vec<u8>>>>,
+  /// Search response returned by POST /files/search
+  search_results: Arc<std::sync::Mutex<serde_json::Value>>,
+  /// Captured search requests for assertions
+  search_requests: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
   /// Uploaded files: path -> bytes
   uploads: Arc<Mutex<HashMap<String, Vec<u8>>>>,
   /// Deleted paths
@@ -34,6 +39,11 @@ impl MockServerState {
     Self {
       directories: Arc::new(std::sync::Mutex::new(HashMap::new())),
       files: Arc::new(std::sync::Mutex::new(HashMap::new())),
+      search_results: Arc::new(std::sync::Mutex::new(serde_json::json!({
+        "items": [],
+        "total_count": 0
+      }))),
+      search_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
       uploads: Arc::new(Mutex::new(HashMap::new())),
       deleted: Arc::new(Mutex::new(Vec::new())),
     }
@@ -54,6 +64,11 @@ impl MockServerState {
       .lock()
       .unwrap()
       .insert(path.to_string(), content.to_vec());
+    self
+  }
+
+  fn with_search_results(self, results: serde_json::Value) -> Self {
+    *self.search_results.lock().unwrap() = results;
     self
   }
 }
@@ -126,9 +141,23 @@ async fn handle_health() -> StatusCode {
   StatusCode::OK
 }
 
+async fn handle_search_engine(
+  AxumState(state): AxumState<MockServerState>,
+  Json(request): Json<serde_json::Value>,
+) -> impl IntoResponse {
+  state.search_requests.lock().unwrap().push(request);
+  let body = state.search_results.lock().unwrap().clone();
+  axum::response::Response::builder()
+    .status(StatusCode::OK)
+    .header("content-type", "application/json")
+    .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+    .unwrap()
+}
+
 async fn start_mock_aeordb(state: MockServerState) -> (SocketAddr, MockServerState) {
   let app = Router::new()
     .route("/system/health", get(handle_health))
+    .route("/files/search", post(handle_search_engine))
     .route(
       "/files/{*path}",
       get(handle_get_engine)
@@ -275,6 +304,40 @@ fn subdirectory_listing() -> serde_json::Value {
   })
 }
 
+fn search_results_listing() -> serde_json::Value {
+  serde_json::json!({
+    "items": [
+      {
+        "path": "/docs/images/logo.png",
+        "entry_type": 2,
+        "size": 102400,
+        "created_at": 1776288276000i64,
+        "updated_at": 1776288276200i64,
+        "content_type": "image/png",
+        "effective_permissions": "crudsy"
+      },
+      {
+        "path": "/docs/reports/readme.md",
+        "entry_type": 2,
+        "size": 24576,
+        "created_at": 1776288276000i64,
+        "updated_at": 1776288276101i64,
+        "content_type": "text/markdown",
+        "effective_permissions": "r"
+      },
+      {
+        "path": "/outside/leaked.txt",
+        "entry_type": 2,
+        "size": 1,
+        "created_at": 1776288276000i64,
+        "updated_at": 1776288276000i64,
+        "content_type": "text/plain"
+      }
+    ],
+    "total_count": 3
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -370,6 +433,57 @@ async fn test_browse_subdirectory() {
   assert_eq!(entries[0]["name"], "logo.png");
   assert_eq!(entries[0]["entry_type"], 2);
   assert_eq!(entries[0]["size"], 102400);
+}
+
+#[tokio::test]
+async fn test_search_scopes_and_normalizes_results() {
+  let mock = MockServerState::new().with_search_results(search_results_listing());
+  let env = setup_test_env(mock).await;
+
+  let local_images = env.local_dir.path().join("images");
+  std::fs::create_dir_all(&local_images).expect("mkdir failed");
+  std::fs::write(local_images.join("logo.png"), b"local logo").expect("write failed");
+
+  let client = reqwest::Client::new();
+  let response = client
+    .post(format!(
+      "{}/api/v1/search/{}",
+      env.client_base_url, env.relationship_id
+    ))
+    .json(&serde_json::json!({
+      "query": "logo",
+      "limit": 25,
+      "offset": 5
+    }))
+    .send()
+    .await
+    .expect("request failed");
+
+  assert_eq!(response.status(), 200);
+
+  let requests = env.mock_state.search_requests.lock().unwrap();
+  assert_eq!(requests.len(), 1);
+  assert_eq!(requests[0]["path"], "/docs/");
+  assert_eq!(requests[0]["query"], "logo");
+  assert_eq!(requests[0]["limit"], 25);
+  assert_eq!(requests[0]["offset"], 5);
+  drop(requests);
+
+  let body: serde_json::Value = response.json().await.expect("parse failed");
+  assert_eq!(body["remote_path"], "/docs/");
+  assert_eq!(body["total"], 2);
+
+  let entries = body["entries"].as_array().expect("entries should be array");
+  assert_eq!(entries.len(), 2);
+  assert_eq!(entries[0]["name"], "logo.png");
+  assert_eq!(entries[0]["path"], "/images/logo.png");
+  assert_eq!(entries[0]["display_path"], "/images/");
+  assert_eq!(entries[0]["content_type"], "image/png");
+  assert_eq!(entries[0]["effective_permissions"], "crudsy");
+  assert_eq!(entries[0]["has_local"], true);
+  assert_eq!(entries[1]["name"], "readme.md");
+  assert_eq!(entries[1]["path"], "/reports/readme.md");
+  assert_eq!(entries[1]["display_path"], "/reports/");
 }
 
 #[tokio::test]

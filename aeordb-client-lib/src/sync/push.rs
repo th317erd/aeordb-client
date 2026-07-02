@@ -379,9 +379,19 @@ pub async fn push_sync(
         }
       };
 
+      let content_hash = symlink_identity_hash(&remote_path, &target);
+      let stored_meta = metadata_by_path.get(&remote_path).cloned();
+      if can_lite_fast_skip_symlink(scan_mode, stored_meta.as_ref(), &content_hash) {
+        files_skipped += 1;
+        complete_entry!();
+        continue;
+      }
+
       pending_symlinks.push(PendingSymlink {
         remote_path,
         target,
+        content_hash,
+        modified_at: metadata_mtime_or_now(&entry_metadata),
       });
       continue;
     }
@@ -779,22 +789,26 @@ pub async fn push_sync(
 
   push_pending_symlinks(
     &remote_client,
+    &metadata_store,
+    &relationship.id,
     relationship.name.as_str(),
     scan_mode_label,
+    scan_mode,
     pending_symlinks,
+    &mut metadata_by_path,
     queued_for_hashing,
     progress,
     &mut processed_entries,
     total_entries,
     &mut files_pushed,
-    files_skipped,
+    &mut files_skipped,
     &mut files_failed,
     files_deleted,
     total_bytes,
     &mut errors,
     start,
   )
-  .await;
+  .await?;
 
   emit_push_scan_progress(
     relationship.name.as_str(),
@@ -900,21 +914,25 @@ fn flush_pending_metadata_updates(
 
 async fn push_pending_symlinks(
   remote_client: &RemoteClient,
+  metadata_store: &SyncMetadataStore<'_>,
+  relationship_id: &str,
   relationship_name: &str,
   scan_mode_label: &str,
+  scan_mode: PushScanMode,
   pending_symlinks: Vec<PendingSymlink>,
+  metadata_by_path: &mut HashMap<String, FileSyncMeta>,
   queued_for_hashing: u64,
   progress: Option<&PushProgressReporter<'_>>,
   processed_entries: &mut u64,
   total_entries: u64,
   files_pushed: &mut u64,
-  files_skipped: u64,
+  files_skipped: &mut u64,
   files_failed: &mut u64,
   files_deleted: u64,
   total_bytes: u64,
   errors: &mut Vec<String>,
   start: Instant,
-) {
+) -> Result<()> {
   let symlinks_to_push = pending_symlinks.len() as u64;
   let symlink_concurrency = push_worker_count(pending_symlinks.len());
   if symlink_concurrency > 1 {
@@ -932,16 +950,36 @@ async fn push_pending_symlinks(
     async move {
       let remote_path = symlink.remote_path.clone();
       let target = symlink.target.clone();
+
+      if scan_mode == PushScanMode::Lite {
+        match client.remote_symlink_target(&remote_path).await {
+          Ok(Some(remote_target))
+            if symlink_identity_hash(&remote_path, &remote_target) == symlink.content_hash =>
+          {
+            return Ok(PendingSymlinkOutcome::AlreadyPresent(symlink));
+          }
+          Ok(_) => {}
+          Err(error) => {
+            tracing::debug!(
+              "failed to inspect remote symlink {} before push; falling back to create/update: {}",
+              remote_path,
+              error,
+            );
+          }
+        }
+      }
+
       client
         .create_symlink(&remote_path, &target)
         .await
-        .map(|_| symlink)
+        .map(|_| PendingSymlinkOutcome::Pushed(symlink))
         .map_err(|error| (remote_path, error))
     }
   }))
   .buffer_unordered(symlink_concurrency.max(1));
 
   let mut symlinks_processed = 0_u64;
+  let mut symlink_metadata_updates = Vec::new();
   let mut symlink_heartbeat = Box::pin(tokio::time::sleep(PUSH_SCAN_HEARTBEAT_INTERVAL));
   loop {
     let symlink_result = tokio::select! {
@@ -976,10 +1014,24 @@ async fn push_pending_symlinks(
     *processed_entries += 1;
 
     match symlink_result {
-      Ok(symlink) => {
+      Ok(PendingSymlinkOutcome::Pushed(symlink)) => {
+        let meta = synced_symlink_meta(&symlink);
+        metadata_by_path.insert(symlink.remote_path.clone(), meta.clone());
+        symlink_metadata_updates.push(meta);
         *files_pushed += 1;
         tracing::debug!(
           "pushed symlink: {} -> {}",
+          symlink.remote_path,
+          symlink.target
+        );
+      }
+      Ok(PendingSymlinkOutcome::AlreadyPresent(symlink)) => {
+        let meta = synced_symlink_meta(&symlink);
+        metadata_by_path.insert(symlink.remote_path.clone(), meta.clone());
+        symlink_metadata_updates.push(meta);
+        *files_skipped += 1;
+        tracing::debug!(
+          "remote symlink already current: {} -> {}",
           symlink.remote_path,
           symlink.target
         );
@@ -999,13 +1051,33 @@ async fn push_pending_symlinks(
         *processed_entries,
         total_entries,
         *files_pushed,
-        files_skipped,
+        *files_skipped,
         *files_failed,
         files_deleted,
         total_bytes,
         start.elapsed().as_millis() as u64,
       );
     }
+  }
+
+  flush_pending_metadata_updates(
+    metadata_store,
+    relationship_id,
+    &mut symlink_metadata_updates,
+  )?;
+
+  Ok(())
+}
+
+fn synced_symlink_meta(symlink: &PendingSymlink) -> FileSyncMeta {
+  let now_ms = chrono::Utc::now().timestamp_millis();
+  FileSyncMeta {
+    path: symlink.remote_path.clone(),
+    content_hash: symlink.content_hash.clone(),
+    size: 0,
+    modified_at: symlink.modified_at,
+    sync_status: SyncStatus::Synced,
+    last_synced_at: now_ms,
   }
 }
 
@@ -1150,10 +1222,71 @@ fn can_lite_fast_skip(
   )
 }
 
+fn can_lite_fast_skip_symlink(
+  scan_mode: PushScanMode,
+  stored_meta: Option<&FileSyncMeta>,
+  content_hash: &str,
+) -> bool {
+  if scan_mode != PushScanMode::Lite {
+    return false;
+  }
+
+  matches!(
+    stored_meta,
+    Some(meta)
+      if meta.sync_status == SyncStatus::Synced
+        && meta.content_hash == content_hash
+  )
+}
+
 fn needs_hash_skip_metadata_update(meta: &FileSyncMeta, file_size: u64, modified_at: i64) -> bool {
   meta.sync_status != SyncStatus::Synced
     || meta.size != file_size
     || meta.modified_at != modified_at
+}
+
+fn metadata_mtime_or_now(metadata: &std::fs::Metadata) -> i64 {
+  metadata
+    .modified()
+    .ok()
+    .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+    .map(|duration| duration.as_millis() as i64)
+    .unwrap_or_else(|| chrono::Utc::now().timestamp_millis())
+}
+
+fn symlink_identity_hash(remote_path: &str, target: &str) -> String {
+  let normalized_target = normalize_remote_path_like_engine(target);
+  let mut input = Vec::new();
+  input.extend_from_slice(b"symlinkid:");
+  input.extend_from_slice(remote_path.as_bytes());
+  input.push(0);
+  input.extend_from_slice(normalized_target.as_bytes());
+  blake3::hash(&input).to_hex().to_string()
+}
+
+fn normalize_remote_path_like_engine(path: &str) -> String {
+  let path = path.replace('\0', "");
+  let trimmed = path.trim();
+  if trimmed.is_empty() {
+    return "/".to_string();
+  }
+
+  let mut segments: Vec<&str> = Vec::new();
+  for segment in trimmed.split('/').filter(|segment| !segment.is_empty()) {
+    match segment {
+      "." => {}
+      ".." => {
+        segments.pop();
+      }
+      segment => segments.push(segment),
+    }
+  }
+
+  if segments.is_empty() {
+    "/".to_string()
+  } else {
+    format!("/{}", segments.join("/"))
+  }
 }
 
 fn is_unrecoverable_push_error(error: &ClientError) -> bool {
@@ -1518,6 +1651,71 @@ mod tests {
       Some(&meta),
       42,
       1000,
+    ));
+  }
+
+  #[test]
+  fn symlink_identity_hash_matches_engine_identity_shape() {
+    let mut input = Vec::new();
+    input.extend_from_slice(b"symlinkid:");
+    input.extend_from_slice(b"/docs/link");
+    input.push(0);
+    input.extend_from_slice(b"/target/file.txt");
+    let expected = blake3::hash(&input).to_hex().to_string();
+
+    assert_eq!(
+      super::symlink_identity_hash("/docs/link", "../target/file.txt"),
+      expected,
+    );
+  }
+
+  #[test]
+  fn lite_scan_fast_skips_synced_symlink_when_identity_hash_matches() {
+    let content_hash = super::symlink_identity_hash("/docs/link", "/target/file.txt");
+    let meta = FileSyncMeta {
+      path: "/docs/link".to_string(),
+      content_hash: content_hash.clone(),
+      size: 0,
+      modified_at: 1000,
+      sync_status: SyncStatus::Synced,
+      last_synced_at: 1,
+    };
+
+    assert!(super::can_lite_fast_skip_symlink(
+      super::PushScanMode::Lite,
+      Some(&meta),
+      &content_hash,
+    ));
+  }
+
+  #[test]
+  fn symlink_fast_skip_requires_lite_synced_and_matching_hash() {
+    let content_hash = super::symlink_identity_hash("/docs/link", "/target/file.txt");
+    let mut meta = FileSyncMeta {
+      path: "/docs/link".to_string(),
+      content_hash: content_hash.clone(),
+      size: 0,
+      modified_at: 1000,
+      sync_status: SyncStatus::Synced,
+      last_synced_at: 1,
+    };
+
+    assert!(!super::can_lite_fast_skip_symlink(
+      super::PushScanMode::Full,
+      Some(&meta),
+      &content_hash,
+    ));
+    assert!(!super::can_lite_fast_skip_symlink(
+      super::PushScanMode::Lite,
+      Some(&meta),
+      "different-hash",
+    ));
+
+    meta.sync_status = SyncStatus::PendingPush;
+    assert!(!super::can_lite_fast_skip_symlink(
+      super::PushScanMode::Lite,
+      Some(&meta),
+      &content_hash,
     ));
   }
 
@@ -1947,6 +2145,13 @@ struct PushFilePrepRequest {
 struct PendingSymlink {
   remote_path: String,
   target: String,
+  content_hash: String,
+  modified_at: i64,
+}
+
+enum PendingSymlinkOutcome {
+  Pushed(PendingSymlink),
+  AlreadyPresent(PendingSymlink),
 }
 
 struct PreparedPushFile {

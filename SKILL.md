@@ -40,12 +40,12 @@ Release artifact names expected by `scripts/emit-manifest.sh`:
 ```text
 aeordb-client-linux-x86_64
 aeordb-client-windows-x86_64.exe
-aeordb-client-macos
+aeordb-client-macos.app.zip
 manifest.json
 manifest.sig.json
 ```
 
-The macOS artifact is a universal binary. The manifest maps both `macos-aarch64` and `macos-x86_64` to `aeordb-client-macos`.
+The macOS update artifact is a zip containing the universal notarized `.app` bundle. The manifest maps both `macos-aarch64` and `macos-x86_64` to `aeordb-client-macos.app.zip`. The public website download should point at the user-facing DMG, `aeordb-client-macos.dmg`.
 
 ## 1. Bump Version
 
@@ -77,7 +77,7 @@ AEORDB_BUILD_JOBS=4 ./scripts/build.sh --release --bin aeordb-client
 
 ## 3. Build macOS
 
-Build on `wyatt-mac`, then copy the universal binary back:
+Build on `wyatt-mac`, sign and notarize the app, then copy the public DMG and update zip back. Raw universal binaries are not sufficient for the macOS self-update path; `aeordb-client-lib/src/update.rs` expects a zip containing a top-level `.app`.
 
 ```bash
 ssh wyatt-mac '
@@ -86,17 +86,28 @@ ssh wyatt-mac '
   git fetch origin
   git checkout main
   git pull --ff-only
-  cargo build -j 2 --locked --release --target aarch64-apple-darwin --bin aeordb-client
-  cargo build -j 2 --locked --release --target x86_64-apple-darwin --bin aeordb-client
-  lipo -create \
-    target/aarch64-apple-darwin/release/aeordb-client \
-    target/x86_64-apple-darwin/release/aeordb-client \
-    -output target/release/aeordb-client-macos
+  # Requires the Apple Developer ID certificate/keychain and App Store
+  # Connect API key env vars configured on wyatt-mac.
+  cargo tauri build --target universal-apple-darwin --bundles app,dmg --ci -- --locked
 '
 
-scp 'wyatt-mac:~/Projects/aeordb-workspace/aeordb-client/target/release/aeordb-client-macos' \
-  ~/Projects/aeordb-workspace/aeordb-www/downloads/aeordb-client-macos
-chmod 0644 ~/Projects/aeordb-workspace/aeordb-www/downloads/aeordb-client-macos
+# After the .app is stapled, create the update zip from the stapled app:
+ssh wyatt-mac '
+  set -e
+  APP="$HOME/Projects/aeordb-workspace/aeordb-client/target/universal-apple-darwin/release/bundle/macos/AeorDB Client.app"
+  ZIP="/tmp/AeorDB Client.app.zip"
+  xcrun stapler validate "$APP"
+  rm -f "$ZIP"
+  cd "$(dirname "$APP")"
+  ditto -c -k --keepParent "$(basename "$APP")" "$ZIP"
+'
+
+scp 'wyatt-mac:~/Projects/aeordb-workspace/aeordb-client/target/universal-apple-darwin/release/bundle/dmg/AeorDB Client_*.dmg' \
+  ~/Projects/aeordb-workspace/aeordb-www/downloads/aeordb-client-macos.dmg
+scp 'wyatt-mac:/tmp/AeorDB Client.app.zip' \
+  ~/Projects/aeordb-workspace/aeordb-www/downloads/aeordb-client-macos.app.zip
+chmod 0644 ~/Projects/aeordb-workspace/aeordb-www/downloads/aeordb-client-macos.dmg \
+           ~/Projects/aeordb-workspace/aeordb-www/downloads/aeordb-client-macos.app.zip
 ```
 
 If the remote branch has local changes, stop and inspect instead of forcing it clean.
@@ -160,7 +171,7 @@ Confirm:
 
 - The manifest version is the intended release version.
 - The platform filenames are the `aeordb-client-*` artifacts.
-- The manifest has both `macos-aarch64` and `macos-x86_64` mapped to `aeordb-client-macos`.
+- The manifest has both `macos-aarch64` and `macos-x86_64` mapped to `aeordb-client-macos.app.zip`.
 - The website repo status only contains intended release artifacts and manifest changes.
 
 ## 7. Deploy
@@ -188,7 +199,8 @@ Use `./deploy.sh --with-server --with-versions` only when the `aeordb-www` serve
 curl -fsS https://aeordb.com/api/version | head -c 1000
 curl -I https://aeordb.com/downloads/aeordb-client-linux-x86_64
 curl -I https://aeordb.com/downloads/aeordb-client-windows-x86_64.exe
-curl -I https://aeordb.com/downloads/aeordb-client-macos
+curl -I https://aeordb.com/downloads/aeordb-client-macos.dmg
+curl -I https://aeordb.com/downloads/aeordb-client-macos.app.zip
 ```
 
 ## 9. Commit And Push

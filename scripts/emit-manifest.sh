@@ -79,18 +79,15 @@ fi
 # that; they only attest "this file was what was signed," not "this is
 # the right kind of binary"). The prefix discipline is load-bearing.
 #
-# macOS ships as a single universal binary (lipo'd from
-# aarch64-apple-darwin + x86_64-apple-darwin release builds). Both
-# arch-specific platform keys in the manifest below point at the same
-# file, so an Apple Silicon client looking up "macos-aarch64" and an
-# Intel Mac looking up "macos-x86_64" both download the same URL and
-# both run it natively — the Mach-O fat binary header picks the right
-# slice at load time. Costs ~2x the on-disk size vs an arch-specific
-# build but matches Apple's recommended distribution model and avoids
-# any "download the wrong one" UX trap.
+# macOS self-update ships as a single universal .app.zip. The client
+# relauncher downloads this zip, extracts the top-level .app bundle, and
+# swaps it in place. Both arch-specific platform keys in the manifest
+# below point at the same file, so an Apple Silicon client looking up
+# "macos-aarch64" and an Intel Mac looking up "macos-x86_64" both
+# download the same URL and both run it natively.
 LINUX_FILE="aeordb-client-linux-x86_64"
 WINDOWS_FILE="aeordb-client-windows-x86_64.exe"
-MACOS_FILE="aeordb-client-macos"
+MACOS_FILE="aeordb-client-macos.app.zip"
 
 # Normalize perms on every release artifact to 0644 (readable by everyone,
 # writable by owner). Without this, an artifact that landed with locked-down

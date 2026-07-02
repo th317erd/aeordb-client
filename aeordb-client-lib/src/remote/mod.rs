@@ -8,6 +8,7 @@ use crate::error::{ClientError, Result};
 use crate::jwt_cache::JwtSlot;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const SEARCH_REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 const BLOB_COMMIT_REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 const FILE_UPLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 const FILE_DOWNLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
@@ -15,6 +16,8 @@ const BLOB_CHECK_MAX_HASHES_PER_REQUEST: usize = 512;
 
 static DEFAULT_NO_REDIRECT_HTTP_CLIENT: LazyLock<reqwest::Client> =
   LazyLock::new(|| build_no_redirect_http_client(DEFAULT_REQUEST_TIMEOUT));
+static SEARCH_NO_REDIRECT_HTTP_CLIENT: LazyLock<reqwest::Client> =
+  LazyLock::new(|| build_no_redirect_http_client(SEARCH_REQUEST_TIMEOUT));
 static BLOB_COMMIT_NO_REDIRECT_HTTP_CLIENT: LazyLock<reqwest::Client> =
   LazyLock::new(|| build_no_redirect_http_client(BLOB_COMMIT_REQUEST_TIMEOUT));
 static FILE_DOWNLOAD_NO_REDIRECT_HTTP_CLIENT: LazyLock<reqwest::Client> =
@@ -29,7 +32,9 @@ fn build_no_redirect_http_client(timeout: Duration) -> reqwest::Client {
 }
 
 fn no_redirect_http_client(timeout: Duration) -> &'static reqwest::Client {
-  if timeout == BLOB_COMMIT_REQUEST_TIMEOUT {
+  if timeout == SEARCH_REQUEST_TIMEOUT {
+    &SEARCH_NO_REDIRECT_HTTP_CLIENT
+  } else if timeout == BLOB_COMMIT_REQUEST_TIMEOUT {
     &BLOB_COMMIT_NO_REDIRECT_HTTP_CLIENT
   } else if timeout == FILE_DOWNLOAD_REQUEST_TIMEOUT {
     &FILE_DOWNLOAD_NO_REDIRECT_HTTP_CLIENT
@@ -869,6 +874,55 @@ impl RemoteClient {
     Ok(())
   }
 
+  /// Return the remote symlink target for `remote_path`, without following the
+  /// symlink. Returns `Ok(None)` when the path is absent or is not a symlink.
+  pub async fn remote_symlink_target(&self, remote_path: &str) -> Result<Option<String>> {
+    let url = format!("{}/files{}?nofollow=true", self.base_url, remote_path);
+
+    let response = self
+      .authed_send(|| self.http_client.head(&url))
+      .await
+      .map_err(|error| {
+        ClientError::Server(format!(
+          "failed to inspect remote symlink {}: {}",
+          remote_path, error
+        ))
+      })?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+      return Ok(None);
+    }
+
+    if !response.status().is_success() {
+      return Err(ClientError::Server(format!(
+        "remote returned HTTP {} while inspecting symlink {}",
+        response.status(),
+        remote_path
+      )));
+    }
+
+    let headers = response.headers();
+    let target = headers
+      .get("x-aeordb-symlink-target")
+      .or_else(|| headers.get("x-aeordb-link-target"))
+      .and_then(|value| value.to_str().ok())
+      .map(str::to_string);
+    if target.is_some() {
+      return Ok(target);
+    }
+
+    let entry_type = headers
+      .get("x-aeordb-entry-type")
+      .or_else(|| headers.get("x-aeordb-type"))
+      .and_then(|value| value.to_str().ok())
+      .unwrap_or_default();
+    if entry_type.eq_ignore_ascii_case("symlink") || entry_type == "8" {
+      return Ok(None);
+    }
+
+    Ok(None)
+  }
+
   /// Rename/move a file or directory on the remote.
   /// Uses PATCH /files/{from_path} with {"to": "..."} body.
   pub async fn rename_file(&self, from_path: &str, to_path: &str) -> Result<()> {
@@ -941,6 +995,41 @@ impl RemoteClient {
     })?;
 
     Ok(listing)
+  }
+
+  /// Search files under a remote subtree using the engine's global search
+  /// endpoint, scoped with the `path` field so the desktop client only sees
+  /// results inside the selected sync relationship.
+  pub async fn search_files(
+    &self,
+    remote_root: &str,
+    query: &str,
+    limit: Option<u64>,
+    offset: Option<u64>,
+  ) -> Result<serde_json::Value> {
+    let url = format!("{}/files/search", self.base_url);
+    let body = serde_json::json!({
+      "path": remote_root,
+      "query": query,
+      "limit": limit.unwrap_or(100).min(1000),
+      "offset": offset.unwrap_or(0),
+    });
+
+    let response = self
+      .authed_send_with_timeout(
+        || {
+          self
+            .http_client
+            .post(&url)
+            .json(&body)
+            .timeout(SEARCH_REQUEST_TIMEOUT)
+        },
+        SEARCH_REQUEST_TIMEOUT,
+      )
+      .await
+      .map_err(|error| classify_reqwest_send_error(&error, "/files/search"))?;
+
+    json_value_response(response, "/files/search").await
   }
 
   /// Get shares for a path. GET /files/shares?path=...
@@ -1495,6 +1584,14 @@ mod tests {
   use tokio::net::TcpListener;
 
   #[test]
+  fn search_timeout_is_longer_than_default_request_timeout() {
+    assert!(
+      SEARCH_REQUEST_TIMEOUT > DEFAULT_REQUEST_TIMEOUT,
+      "large indexed searches must not share the short interactive request budget",
+    );
+  }
+
+  #[test]
   fn blob_commit_timeout_is_longer_than_default_request_timeout() {
     assert!(
       BLOB_COMMIT_REQUEST_TIMEOUT > DEFAULT_REQUEST_TIMEOUT,
@@ -1506,6 +1603,8 @@ mod tests {
   fn manual_redirect_http_clients_are_reused() {
     let default_a: *const reqwest::Client = no_redirect_http_client(DEFAULT_REQUEST_TIMEOUT);
     let default_b: *const reqwest::Client = no_redirect_http_client(DEFAULT_REQUEST_TIMEOUT);
+    let search_a: *const reqwest::Client = no_redirect_http_client(SEARCH_REQUEST_TIMEOUT);
+    let search_b: *const reqwest::Client = no_redirect_http_client(SEARCH_REQUEST_TIMEOUT);
     let commit_a: *const reqwest::Client = no_redirect_http_client(BLOB_COMMIT_REQUEST_TIMEOUT);
     let commit_b: *const reqwest::Client = no_redirect_http_client(BLOB_COMMIT_REQUEST_TIMEOUT);
 
@@ -1514,8 +1613,16 @@ mod tests {
       "default manual-redirect requests must reuse the same HTTP client and connection pool",
     );
     assert_eq!(
+      search_a, search_b,
+      "search manual-redirect requests must reuse the same HTTP client and connection pool",
+    );
+    assert_eq!(
       commit_a, commit_b,
       "blob commit manual-redirect requests must reuse the same HTTP client and connection pool",
+    );
+    assert_ne!(
+      default_a, search_a,
+      "search keeps a separate longer-timeout pool",
     );
     assert_ne!(
       default_a, commit_a,

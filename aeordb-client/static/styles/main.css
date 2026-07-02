@@ -414,6 +414,7 @@ aeor-sync td.actions aeor-confirm-button.confirm-button-danger .aeor-confirm-btn
   justify-content: space-between;
   align-items: center;
   margin-bottom: 10px;
+  gap: 12px;
 }
 
 .sync-status-name {
@@ -421,6 +422,30 @@ aeor-sync td.actions aeor-confirm-button.confirm-button-danger .aeor-confirm-btn
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.sync-status-actions {
+  flex: 0 0 auto;
+}
+
+.sync-status-actions aeor-confirm-button.force-sync-btn,
+.sync-status-actions aeor-confirm-button.force-sync-btn .aeor-confirm-btn {
+  width: 7.25em;
+  min-width: 7.25em;
+}
+
+.sync-status-actions aeor-confirm-button.force-sync-btn .aeor-confirm-btn {
+  justify-content: center;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.sync-status-actions aeor-confirm-button.force-sync-btn .aeor-confirm-btn-label {
+  display: block;
+  width: 100%;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .sync-status-details {

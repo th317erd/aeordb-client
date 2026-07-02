@@ -9,8 +9,8 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::routing::{delete, get, patch, post, put};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::routing::{delete, get, head, patch, post, put};
 use chrono::Utc;
 use serde::Deserialize;
 use tokio::net::TcpListener;
@@ -139,6 +139,29 @@ async fn handle_create_symlink(
   state.symlinks.lock().await.insert(remote_path, target);
   state.active_symlink_requests.fetch_sub(1, Ordering::SeqCst);
   StatusCode::OK
+}
+
+async fn handle_head_file(
+  Path(path): Path<String>,
+  State(state): State<MockServerState>,
+) -> (StatusCode, HeaderMap) {
+  let remote_path = format!("/{}", path);
+  let mut headers = HeaderMap::new();
+
+  if let Some(target) = state.symlinks.lock().await.get(&remote_path).cloned() {
+    headers.insert("x-aeordb-entry-type", HeaderValue::from_static("symlink"));
+    if let Ok(value) = HeaderValue::from_str(&target) {
+      headers.insert("x-aeordb-symlink-target", value);
+    }
+    return (StatusCode::OK, headers);
+  }
+
+  if state.files.lock().await.contains_key(&remote_path) {
+    headers.insert("x-aeordb-entry-type", HeaderValue::from_static("file"));
+    return (StatusCode::OK, headers);
+  }
+
+  (StatusCode::NOT_FOUND, headers)
 }
 
 async fn handle_delete(
@@ -427,6 +450,7 @@ async fn start_mock_server() -> (SocketAddr, MockServerState) {
     .route("/files/query", post(handle_search))
     .route("/files/search", post(handle_search))
     .route("/files/{*path}", put(handle_upload))
+    .route("/files/{*path}", head(handle_head_file))
     .route("/files/{*path}", patch(handle_rename))
     .route("/files/{*path}", delete(handle_delete))
     .route("/links/{*path}", put(handle_create_symlink))
@@ -732,6 +756,51 @@ async fn test_push_handles_symlinks() {
     "symlink target should reference target.txt, got: {}",
     symlink_target,
   );
+}
+
+#[tokio::test]
+async fn test_push_bootstraps_existing_remote_symlink_metadata() {
+  let (address, mock_state) = start_mock_server().await;
+  let (state, _temp_db) = create_state_store();
+  let connection = make_connection(&address);
+
+  let local_dir = tempfile::tempdir().expect("failed to create local dir");
+  let local_path = local_dir.path();
+  std::os::unix::fs::symlink("target.txt", local_path.join("link.txt")).expect("symlink failed");
+
+  mock_state
+    .symlinks
+    .lock()
+    .await
+    .insert("/docs/link.txt".to_string(), "target.txt".to_string());
+
+  let relationship = make_relationship(&local_path.to_string_lossy());
+
+  let result = run_push_sync(&state, &connection, &relationship)
+    .await
+    .expect("push_sync failed");
+
+  assert_eq!(
+    result.files_pushed, 0,
+    "existing remote symlink should not be re-written"
+  );
+  assert_eq!(
+    result.files_skipped, 1,
+    "symlink should be recorded as unchanged"
+  );
+  assert_eq!(result.files_failed, 0, "no failures expected");
+  assert_eq!(
+    mock_state.max_symlink_requests.load(Ordering::SeqCst),
+    0,
+    "no PUT /links calls should be needed for an already-current remote symlink"
+  );
+
+  let metadata_store = SyncMetadataStore::new(&state);
+  let meta = metadata_store
+    .get_file_meta(&relationship.id, "/docs/link.txt")
+    .expect("metadata lookup failed")
+    .expect("symlink metadata should be stored");
+  assert_eq!(meta.sync_status, SyncStatus::Synced);
 }
 
 #[tokio::test]
