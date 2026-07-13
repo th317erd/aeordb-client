@@ -767,6 +767,36 @@ async fn test_upload_proxied_to_remote() {
 }
 
 #[tokio::test]
+async fn test_upload_normalizes_backslashes_to_remote_path_separators() {
+  let mock = MockServerState::new();
+  let env = setup_test_env(mock.clone()).await;
+
+  let client = reqwest::Client::new();
+  let response = client
+    .put(format!(
+      "{}/api/v1/files/{}/folder%5Cnew-file.txt",
+      env.client_base_url, env.relationship_id
+    ))
+    .header("Content-Type", "text/plain")
+    .body(b"uploaded content".to_vec())
+    .send()
+    .await
+    .expect("request failed");
+
+  assert_eq!(response.status(), 200);
+
+  let uploads = env.mock_state.uploads.lock().await;
+  assert!(
+    uploads.contains_key("/docs/folder/new-file.txt"),
+    "backslashes in client-provided paths should become AeorDB path separators",
+  );
+  assert!(
+    !uploads.contains_key(r"/docs/folder\new-file.txt"),
+    "backslashes must not be persisted as literal filename characters",
+  );
+}
+
+#[tokio::test]
 async fn test_delete_proxied_to_remote() {
   let mock = MockServerState::new();
   let env = setup_test_env(mock.clone()).await;

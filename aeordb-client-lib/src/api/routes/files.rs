@@ -357,7 +357,8 @@ async fn serve_local_file(
 /// Compute the full remote path for a relative path within a relationship.
 fn compute_remote_path(relationship: &SyncRelationship, relative_path: &str) -> String {
   let base = relationship.remote_path.trim_end_matches('/');
-  let relative = relative_path.trim_start_matches('/');
+  let normalized_relative = relative_path.replace('\\', "/");
+  let relative = normalized_relative.trim_start_matches('/');
   if relative.is_empty() {
     format!("{}/", base)
   } else {

@@ -287,7 +287,7 @@ impl<'a> RelationshipManager<'a> {
 }
 
 pub(crate) fn normalize_remote_path(path: &str) -> String {
-  let mut normalized = path.to_string();
+  let mut normalized = path.replace('\\', "/");
 
   if !normalized.starts_with('/') {
     normalized = format!("/{}", normalized);
@@ -310,6 +310,7 @@ mod tests {
     assert_eq!(normalize_remote_path("/docs"), "/docs/");
     assert_eq!(normalize_remote_path("/docs/"), "/docs/");
     assert_eq!(normalize_remote_path("docs/"), "/docs/");
+    assert_eq!(normalize_remote_path(r"\docs\photos"), "/docs/photos/");
     assert_eq!(normalize_remote_path("/"), "/");
   }
 }

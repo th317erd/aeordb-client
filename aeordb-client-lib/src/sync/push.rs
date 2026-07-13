@@ -359,6 +359,8 @@ pub async fn push_sync(
     };
 
     let remote_path = compute_remote_path(relative, &relationship.remote_path);
+    let legacy_separator_remote_path =
+      compute_legacy_separator_remote_path(relative, &relationship.remote_path);
     let migration_old_remote_path = path_migration
       .as_ref()
       .and_then(|migration| migration_old_remote_path_for_entry(&entry_path, migration));
@@ -452,6 +454,7 @@ pub async fn push_sync(
       content_type,
       stored_meta,
       migration_old_remote_path,
+      legacy_separator_remote_path,
     });
     queued_for_hashing += 1;
   }
@@ -559,6 +562,7 @@ pub async fn push_sync(
     let candidate = prepared.file;
     let stored_meta = prepared.stored_meta;
     let migration_old_remote_path = prepared.migration_old_remote_path;
+    let legacy_separator_remote_path = prepared.legacy_separator_remote_path;
     let remote_path = candidate.remote_path.clone();
     let content_hash = candidate.content_hash.clone();
     let file_size = candidate.file_size;
@@ -601,6 +605,68 @@ pub async fn push_sync(
     // root changed and the old remote path is derived from the recorded old
     // local base for this exact file.
     if stored_meta.is_none() {
+      if let Some(old_path) = legacy_separator_remote_path.as_deref() {
+        if let Some(source_meta) = metadata_by_path.get(old_path).cloned() {
+          if old_path != remote_path && source_meta.content_hash == content_hash {
+            match remote_client
+              .remote_path_has_content_hash(&relationship.remote_path, old_path, &content_hash)
+              .await
+            {
+              Ok(true) => match remote_client.rename_file(old_path, &remote_path).await {
+                Ok(()) => {
+                  let now_ms = chrono::Utc::now().timestamp_millis();
+                  metadata_store.delete_file_meta(&relationship.id, old_path)?;
+                  let new_meta = FileSyncMeta {
+                    path: remote_path.clone(),
+                    content_hash: content_hash.clone(),
+                    size: file_size,
+                    modified_at: mtime,
+                    sync_status: SyncStatus::Synced,
+                    last_synced_at: now_ms,
+                  };
+                  metadata_store.set_file_meta(&relationship.id, &new_meta)?;
+                  metadata_by_path.remove(old_path);
+                  metadata_by_path.insert(remote_path.clone(), new_meta);
+                  files_pushed += 1;
+                  tracing::info!(
+                    "normalized legacy remote path separators: {} -> {}",
+                    old_path,
+                    remote_path
+                  );
+                  complete_prepared_entry!();
+                  continue;
+                }
+                Err(error) => {
+                  tracing::warn!(
+                    "failed to normalize legacy remote path {} to {}; uploading {} normally instead: {}",
+                    old_path,
+                    remote_path,
+                    remote_path,
+                    error
+                  );
+                }
+              },
+              Ok(false) => {
+                tracing::debug!(
+                  "legacy remote path {} no longer matches recorded hash; uploading {} instead",
+                  old_path,
+                  remote_path,
+                );
+              }
+              Err(error) => {
+                tracing::warn!(
+                  "failed to verify legacy remote path {} before moving to {}; uploading {} normally instead: {}",
+                  old_path,
+                  remote_path,
+                  remote_path,
+                  error,
+                );
+              }
+            }
+          }
+        }
+      }
+
       if let Some(old_path) = migration_old_remote_path.as_deref() {
         if let Some(source_meta) = metadata_by_path.get(old_path).cloned() {
           if old_path != remote_path && source_meta.content_hash == content_hash {
@@ -1197,10 +1263,28 @@ fn walk_recursive(
 ///   remote_base: "/docs/"
 ///   result: "/docs/subdir/report.pdf"
 fn compute_remote_path(relative: &Path, remote_base: &str) -> String {
-  let relative_str = relative.to_string_lossy();
+  let relative_str = relative
+    .components()
+    .filter_map(|component| match component {
+      std::path::Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+      std::path::Component::ParentDir => Some("..".to_string()),
+      std::path::Component::CurDir
+      | std::path::Component::RootDir
+      | std::path::Component::Prefix(_) => None,
+    })
+    .collect::<Vec<_>>()
+    .join("/");
   let base = remote_base.trim_end_matches('/');
 
   format!("{}/{}", base, relative_str)
+}
+
+fn compute_legacy_separator_remote_path(relative: &Path, remote_base: &str) -> Option<String> {
+  let base = remote_base.trim_end_matches('/');
+  let legacy_path = format!("{}/{}", base, relative.to_string_lossy());
+  let normalized_path = compute_remote_path(relative, remote_base);
+
+  (legacy_path != normalized_path).then_some(legacy_path)
 }
 
 fn can_lite_fast_skip(
@@ -1621,6 +1705,48 @@ mod tests {
       42,
       1001,
     ));
+  }
+
+  #[test]
+  fn compute_remote_path_uses_aeordb_path_separators() {
+    let relative = std::path::Path::new("folder").join("file.txt");
+
+    assert_eq!(
+      super::compute_remote_path(&relative, "/remote/"),
+      "/remote/folder/file.txt",
+    );
+  }
+
+  #[test]
+  fn legacy_separator_remote_path_is_empty_when_path_is_already_normalized() {
+    let relative = std::path::Path::new("file.txt");
+
+    assert_eq!(
+      super::compute_legacy_separator_remote_path(&relative, "/remote/"),
+      None,
+    );
+  }
+
+  #[cfg(windows)]
+  #[test]
+  fn compute_remote_path_normalizes_windows_separators() {
+    let relative = std::path::Path::new(r"folder\file.txt");
+
+    assert_eq!(
+      super::compute_remote_path(relative, "/remote/"),
+      "/remote/folder/file.txt",
+    );
+  }
+
+  #[cfg(windows)]
+  #[test]
+  fn legacy_separator_remote_path_returns_previous_windows_form() {
+    let relative = std::path::Path::new("folder").join("file.txt");
+
+    assert_eq!(
+      super::compute_legacy_separator_remote_path(&relative, "/remote/").as_deref(),
+      Some(r"/remote/folder\file.txt"),
+    );
   }
 
   #[test]
@@ -2140,6 +2266,7 @@ struct PushFilePrepRequest {
   content_type: Option<String>,
   stored_meta: Option<FileSyncMeta>,
   migration_old_remote_path: Option<String>,
+  legacy_separator_remote_path: Option<String>,
 }
 
 struct PendingSymlink {
@@ -2158,6 +2285,7 @@ struct PreparedPushFile {
   file: PendingPushFile,
   stored_meta: Option<FileSyncMeta>,
   migration_old_remote_path: Option<String>,
+  legacy_separator_remote_path: Option<String>,
 }
 
 fn prepare_push_file(
@@ -2176,6 +2304,7 @@ fn prepare_push_file(
     },
     stored_meta: request.stored_meta,
     migration_old_remote_path: request.migration_old_remote_path,
+    legacy_separator_remote_path: request.legacy_separator_remote_path,
   })
 }
 
