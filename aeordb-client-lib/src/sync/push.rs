@@ -1374,13 +1374,12 @@ fn normalize_remote_path_like_engine(path: &str) -> String {
 }
 
 fn is_unrecoverable_push_error(error: &ClientError) -> bool {
-  matches!(
-    error,
-    ClientError::UpstreamRejected {
-      status: 401 | 429,
-      ..
-    }
-  ) || is_unrecoverable_push_error_message(&error.to_string())
+  if is_transient_push_error(error) {
+    return false;
+  }
+
+  matches!(error, ClientError::UpstreamRejected { status: 401, .. })
+    || is_unrecoverable_push_error_message(&error.to_string())
 }
 
 fn is_transient_push_error(error: &ClientError) -> bool {
@@ -1391,8 +1390,9 @@ fn is_unrecoverable_push_error_message(message: &str) -> bool {
   let lower = message.to_ascii_lowercase();
 
   lower.contains("401 unauthorized")
-    || lower.contains("429 too many requests")
     || lower.contains("invalid or expired token")
+    || (lower.contains("429 too many requests")
+      && (lower.contains("token exchange") || lower.contains("auth")))
 }
 
 fn emit_push_scan_progress(
@@ -1638,6 +1638,7 @@ impl PushScanMode {
 
 #[cfg(test)]
 mod tests {
+  use crate::error::ClientError;
   use crate::sync::metadata::{FileSyncMeta, SyncPathMigration, SyncStatus};
 
   fn pending_push_file(
@@ -2105,6 +2106,20 @@ mod tests {
     ));
     assert!(super::is_unrecoverable_push_error_message(
       "server error: blob_check returned HTTP 401 Unauthorized: {\"error\":\"Invalid or expired token\"}",
+    ));
+  }
+
+  #[test]
+  fn retryable_blob_commit_backpressure_does_not_abort_push_cycle() {
+    let error = ClientError::UpstreamRejected {
+      status: 429,
+      message: "engine refused /blobs/commit: Too many blob commits are already in progress; retry shortly (retryable)"
+        .to_string(),
+    };
+    assert!(super::is_transient_push_error(&error));
+    assert!(!super::is_unrecoverable_push_error(&error));
+    assert!(!super::is_unrecoverable_push_error_message(
+      "server error: upstream rejected (HTTP 429): engine refused /blobs/commit: Too many blob commits are already in progress; retry shortly"
     ));
   }
 

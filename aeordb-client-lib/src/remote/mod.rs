@@ -189,15 +189,23 @@ fn classify_upstream_status(status: u16, body: &str, remote_path: &str) -> Clien
 }
 
 fn upstream_body_message(body: &str) -> String {
-  serde_json::from_str::<serde_json::Value>(body)
-    .ok()
-    .and_then(|value| {
-      value
-        .get("error")
-        .and_then(|error| error.as_str())
-        .map(ToOwned::to_owned)
-    })
-    .unwrap_or_else(|| body.chars().take(200).collect::<String>())
+  let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+    return body.chars().take(200).collect::<String>();
+  };
+
+  let mut message = value
+    .get("error")
+    .and_then(|error| error.as_str())
+    .map(ToOwned::to_owned)
+    .unwrap_or_else(|| body.chars().take(200).collect::<String>());
+  if value
+    .get("retryable")
+    .and_then(|retryable| retryable.as_bool())
+    .unwrap_or(false)
+  {
+    message.push_str(" (retryable)");
+  }
+  message
 }
 
 fn response_excerpt(body: &str) -> String {

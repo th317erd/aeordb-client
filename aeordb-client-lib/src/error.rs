@@ -68,6 +68,16 @@ impl ClientError {
     match self {
       ClientError::UpstreamUnreachable(_) => true,
       ClientError::UpstreamServer { status, .. } => matches!(*status, 502 | 503 | 504),
+      ClientError::UpstreamRejected {
+        status: 429,
+        message,
+      } => {
+        let lower = message.to_ascii_lowercase();
+        lower.contains("retryable")
+          || lower.contains("retry shortly")
+          || lower.contains("already in progress")
+          || lower.contains("engine refused /blobs/commit")
+      }
       // Older remote helpers still surface some upstream failures as generic
       // server strings. Keep this fallback until every remote path is
       // structured.
