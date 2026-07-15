@@ -8,38 +8,63 @@ use crate::error::{ClientError, Result};
 use crate::jwt_cache::JwtSlot;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const SEARCH_REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
-const BLOB_COMMIT_REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
-const FILE_UPLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
-const FILE_DOWNLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
+const SEARCH_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const FILE_OPERATION_REQUEST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+const BLOB_CHECK_REQUEST_TIMEOUT: Duration = FILE_OPERATION_REQUEST_TIMEOUT;
+const BLOB_COMMIT_REQUEST_TIMEOUT: Duration = FILE_OPERATION_REQUEST_TIMEOUT;
+const FILE_UPLOAD_REQUEST_TIMEOUT: Duration = FILE_OPERATION_REQUEST_TIMEOUT;
+const FILE_DOWNLOAD_REQUEST_TIMEOUT: Duration = FILE_OPERATION_REQUEST_TIMEOUT;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const BLOB_CHECK_MAX_HASHES_PER_REQUEST: usize = 512;
 
 static DEFAULT_NO_REDIRECT_HTTP_CLIENT: LazyLock<reqwest::Client> =
-  LazyLock::new(|| build_no_redirect_http_client(DEFAULT_REQUEST_TIMEOUT));
+  LazyLock::new(|| build_no_redirect_http_client(NoRedirectHttpClientKind::Default.timeout()));
 static SEARCH_NO_REDIRECT_HTTP_CLIENT: LazyLock<reqwest::Client> =
-  LazyLock::new(|| build_no_redirect_http_client(SEARCH_REQUEST_TIMEOUT));
+  LazyLock::new(|| build_no_redirect_http_client(NoRedirectHttpClientKind::Search.timeout()));
+static BLOB_CHECK_NO_REDIRECT_HTTP_CLIENT: LazyLock<reqwest::Client> =
+  LazyLock::new(|| build_no_redirect_http_client(NoRedirectHttpClientKind::BlobCheck.timeout()));
 static BLOB_COMMIT_NO_REDIRECT_HTTP_CLIENT: LazyLock<reqwest::Client> =
-  LazyLock::new(|| build_no_redirect_http_client(BLOB_COMMIT_REQUEST_TIMEOUT));
-static FILE_DOWNLOAD_NO_REDIRECT_HTTP_CLIENT: LazyLock<reqwest::Client> =
-  LazyLock::new(|| build_no_redirect_http_client(FILE_DOWNLOAD_REQUEST_TIMEOUT));
+  LazyLock::new(|| build_no_redirect_http_client(NoRedirectHttpClientKind::BlobCommit.timeout()));
+static FILE_TRANSFER_NO_REDIRECT_HTTP_CLIENT: LazyLock<reqwest::Client> =
+  LazyLock::new(|| build_no_redirect_http_client(NoRedirectHttpClientKind::FileTransfer.timeout()));
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NoRedirectHttpClientKind {
+  Default,
+  Search,
+  BlobCheck,
+  BlobCommit,
+  FileTransfer,
+}
 
 fn build_no_redirect_http_client(timeout: Duration) -> reqwest::Client {
   reqwest::Client::builder()
     .timeout(timeout)
+    .connect_timeout(CONNECT_TIMEOUT)
     .redirect(reqwest::redirect::Policy::none())
     .build()
     .expect("manual-redirect HTTP client should build")
 }
 
-fn no_redirect_http_client(timeout: Duration) -> &'static reqwest::Client {
-  if timeout == SEARCH_REQUEST_TIMEOUT {
-    &SEARCH_NO_REDIRECT_HTTP_CLIENT
-  } else if timeout == BLOB_COMMIT_REQUEST_TIMEOUT {
-    &BLOB_COMMIT_NO_REDIRECT_HTTP_CLIENT
-  } else if timeout == FILE_DOWNLOAD_REQUEST_TIMEOUT {
-    &FILE_DOWNLOAD_NO_REDIRECT_HTTP_CLIENT
-  } else {
-    &DEFAULT_NO_REDIRECT_HTTP_CLIENT
+impl NoRedirectHttpClientKind {
+  fn timeout(self) -> Duration {
+    match self {
+      NoRedirectHttpClientKind::Default => DEFAULT_REQUEST_TIMEOUT,
+      NoRedirectHttpClientKind::Search => SEARCH_REQUEST_TIMEOUT,
+      NoRedirectHttpClientKind::BlobCheck => BLOB_CHECK_REQUEST_TIMEOUT,
+      NoRedirectHttpClientKind::BlobCommit => BLOB_COMMIT_REQUEST_TIMEOUT,
+      NoRedirectHttpClientKind::FileTransfer => FILE_DOWNLOAD_REQUEST_TIMEOUT,
+    }
+  }
+}
+
+fn no_redirect_http_client(kind: NoRedirectHttpClientKind) -> &'static reqwest::Client {
+  match kind {
+    NoRedirectHttpClientKind::Default => &DEFAULT_NO_REDIRECT_HTTP_CLIENT,
+    NoRedirectHttpClientKind::Search => &SEARCH_NO_REDIRECT_HTTP_CLIENT,
+    NoRedirectHttpClientKind::BlobCheck => &BLOB_CHECK_NO_REDIRECT_HTTP_CLIENT,
+    NoRedirectHttpClientKind::BlobCommit => &BLOB_COMMIT_NO_REDIRECT_HTTP_CLIENT,
+    NoRedirectHttpClientKind::FileTransfer => &FILE_TRANSFER_NO_REDIRECT_HTTP_CLIENT,
   }
 }
 
@@ -310,14 +335,14 @@ impl RemoteClient {
     F: Fn() -> reqwest::RequestBuilder,
   {
     self
-      .authed_send_with_timeout(build, DEFAULT_REQUEST_TIMEOUT)
+      .authed_send_with_client(build, NoRedirectHttpClientKind::Default)
       .await
   }
 
-  async fn authed_send_with_timeout<F>(
+  async fn authed_send_with_client<F>(
     &self,
     build: F,
-    timeout: Duration,
+    client_kind: NoRedirectHttpClientKind,
   ) -> reqwest::Result<reqwest::Response>
   where
     F: Fn() -> reqwest::RequestBuilder,
@@ -328,7 +353,7 @@ impl RemoteClient {
         req = req.header("Authorization", auth);
       }
       self
-        .send_following_auth_redirects_with_timeout(req, timeout)
+        .send_following_auth_redirects_with_client(req, client_kind)
         .await
     };
     let response = attempt().await?;
@@ -340,21 +365,12 @@ impl RemoteClient {
     Ok(response)
   }
 
-  async fn send_following_auth_redirects(
+  async fn send_following_auth_redirects_with_client(
     &self,
     request: reqwest::RequestBuilder,
+    client_kind: NoRedirectHttpClientKind,
   ) -> reqwest::Result<reqwest::Response> {
-    self
-      .send_following_auth_redirects_with_timeout(request, DEFAULT_REQUEST_TIMEOUT)
-      .await
-  }
-
-  async fn send_following_auth_redirects_with_timeout(
-    &self,
-    request: reqwest::RequestBuilder,
-    timeout: Duration,
-  ) -> reqwest::Result<reqwest::Response> {
-    let client = no_redirect_http_client(timeout);
+    let client = no_redirect_http_client(client_kind);
     let mut request = request.build()?;
 
     for _ in 0..5 {
@@ -591,7 +607,7 @@ impl RemoteClient {
     let url = format!("{}/files{}", self.base_url, remote_path);
 
     let response = self
-      .authed_send_with_timeout(
+      .authed_send_with_client(
         || {
           let request = self.http_client.get(&url);
           if let Some(range) = range {
@@ -602,7 +618,7 @@ impl RemoteClient {
             request.timeout(FILE_DOWNLOAD_REQUEST_TIMEOUT)
           }
         },
-        FILE_DOWNLOAD_REQUEST_TIMEOUT,
+        NoRedirectHttpClientKind::FileTransfer,
       )
       .await
       .map_err(|error| {
@@ -1016,7 +1032,7 @@ impl RemoteClient {
     });
 
     let response = self
-      .authed_send_with_timeout(
+      .authed_send_with_client(
         || {
           self
             .http_client
@@ -1024,7 +1040,7 @@ impl RemoteClient {
             .json(&body)
             .timeout(SEARCH_REQUEST_TIMEOUT)
         },
-        SEARCH_REQUEST_TIMEOUT,
+        NoRedirectHttpClientKind::Search,
       )
       .await
       .map_err(|error| classify_reqwest_send_error(&error, "/files/search"))?;
@@ -1318,7 +1334,16 @@ impl RemoteClient {
     let url = format!("{}/blobs/check", self.base_url);
     let body = serde_json::json!({ "hashes": hashes });
     let response = self
-      .authed_send(|| self.http_client.post(&url).json(&body))
+      .authed_send_with_client(
+        || {
+          self
+            .http_client
+            .post(&url)
+            .json(&body)
+            .timeout(BLOB_CHECK_REQUEST_TIMEOUT)
+        },
+        NoRedirectHttpClientKind::BlobCheck,
+      )
       .await
       .map_err(|e| classify_reqwest_send_error(&e, "/blobs/check"))?;
     if !response.status().is_success() {
@@ -1347,11 +1372,17 @@ impl RemoteClient {
   pub async fn upload_chunk(&self, hash_hex: &str, bytes: Vec<u8>) -> Result<()> {
     let url = format!("{}/blobs/chunks/{}", self.base_url, hash_hex);
     let send = |body: Vec<u8>| async {
-      let mut req = self.http_client.put(&url).body(body);
+      let mut req = self
+        .http_client
+        .put(&url)
+        .timeout(FILE_UPLOAD_REQUEST_TIMEOUT)
+        .body(body);
       if let Some(ref auth) = self.auth_header().await {
         req = req.header("Authorization", auth);
       }
-      self.send_following_auth_redirects(req).await
+      self
+        .send_following_auth_redirects_with_client(req, NoRedirectHttpClientKind::FileTransfer)
+        .await
     };
     let mut response = send(bytes.clone())
       .await
@@ -1381,7 +1412,7 @@ impl RemoteClient {
     let url = format!("{}/blobs/commit", self.base_url);
     let body = serde_json::json!({ "files": files });
     let response = self
-      .authed_send_with_timeout(
+      .authed_send_with_client(
         || {
           self
             .http_client
@@ -1389,7 +1420,7 @@ impl RemoteClient {
             .timeout(BLOB_COMMIT_REQUEST_TIMEOUT)
             .json(&body)
         },
-        BLOB_COMMIT_REQUEST_TIMEOUT,
+        NoRedirectHttpClientKind::BlobCommit,
       )
       .await
       .map_err(|e| classify_reqwest_send_error(&e, "/blobs/commit"))?;
@@ -1600,13 +1631,35 @@ mod tests {
   }
 
   #[test]
+  fn blob_check_timeout_is_file_operation_sized() {
+    assert_eq!(
+      BLOB_CHECK_REQUEST_TIMEOUT, FILE_OPERATION_REQUEST_TIMEOUT,
+      "blob check runs in the sync data path and should not use the short interactive request budget",
+    );
+  }
+
+  #[test]
   fn manual_redirect_http_clients_are_reused() {
-    let default_a: *const reqwest::Client = no_redirect_http_client(DEFAULT_REQUEST_TIMEOUT);
-    let default_b: *const reqwest::Client = no_redirect_http_client(DEFAULT_REQUEST_TIMEOUT);
-    let search_a: *const reqwest::Client = no_redirect_http_client(SEARCH_REQUEST_TIMEOUT);
-    let search_b: *const reqwest::Client = no_redirect_http_client(SEARCH_REQUEST_TIMEOUT);
-    let commit_a: *const reqwest::Client = no_redirect_http_client(BLOB_COMMIT_REQUEST_TIMEOUT);
-    let commit_b: *const reqwest::Client = no_redirect_http_client(BLOB_COMMIT_REQUEST_TIMEOUT);
+    let default_a: *const reqwest::Client =
+      no_redirect_http_client(NoRedirectHttpClientKind::Default);
+    let default_b: *const reqwest::Client =
+      no_redirect_http_client(NoRedirectHttpClientKind::Default);
+    let search_a: *const reqwest::Client =
+      no_redirect_http_client(NoRedirectHttpClientKind::Search);
+    let search_b: *const reqwest::Client =
+      no_redirect_http_client(NoRedirectHttpClientKind::Search);
+    let check_a: *const reqwest::Client =
+      no_redirect_http_client(NoRedirectHttpClientKind::BlobCheck);
+    let check_b: *const reqwest::Client =
+      no_redirect_http_client(NoRedirectHttpClientKind::BlobCheck);
+    let commit_a: *const reqwest::Client =
+      no_redirect_http_client(NoRedirectHttpClientKind::BlobCommit);
+    let commit_b: *const reqwest::Client =
+      no_redirect_http_client(NoRedirectHttpClientKind::BlobCommit);
+    let transfer_a: *const reqwest::Client =
+      no_redirect_http_client(NoRedirectHttpClientKind::FileTransfer);
+    let transfer_b: *const reqwest::Client =
+      no_redirect_http_client(NoRedirectHttpClientKind::FileTransfer);
 
     assert_eq!(
       default_a, default_b,
@@ -1617,16 +1670,32 @@ mod tests {
       "search manual-redirect requests must reuse the same HTTP client and connection pool",
     );
     assert_eq!(
+      check_a, check_b,
+      "blob check manual-redirect requests must reuse the same HTTP client and connection pool",
+    );
+    assert_eq!(
       commit_a, commit_b,
       "blob commit manual-redirect requests must reuse the same HTTP client and connection pool",
+    );
+    assert_eq!(
+      transfer_a, transfer_b,
+      "file transfer manual-redirect requests must reuse the same HTTP client and connection pool",
     );
     assert_ne!(
       default_a, search_a,
       "search keeps a separate longer-timeout pool",
     );
     assert_ne!(
+      default_a, check_a,
+      "blob check keeps a separate long-timeout pool",
+    );
+    assert_ne!(
       default_a, commit_a,
       "blob commit keeps a separate longer-timeout pool",
+    );
+    assert_ne!(
+      commit_a, transfer_a,
+      "blob commit and file transfer use separate pools even when their request budgets match",
     );
   }
 
